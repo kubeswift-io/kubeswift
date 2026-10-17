@@ -342,7 +342,8 @@ app-cache   runtime   3          3       Prepared   2m
 `failures`), `status.artifacts` each artifact's digest and how many nodes
 hold it. The `Prepared` condition is True when every node holds every
 artifact; else its reason is `Preparing`, `PrepareFailed`,
-`VerificationFailed`, `ArtifactRefused`, `PoolNotFound` or `NoTargetNodes`.
+`VerificationFailed`, `ClaimMismatch`, `ArtifactRefused`, `PolicyDenied`,
+`PoolNotFound` or `NoTargetNodes`.
 A node that fails is retried after 30 seconds, doubling to 10 minutes; the
 others are not held back. A registry refusal of the placement's credentials
 prepares nothing.
@@ -353,6 +354,17 @@ preparing (its prepare pods go with it); entries already cached stay. A
 changed digest is prepared afresh. Two placements, or a placement and a
 checkout, that fetch one digest on one node at once download it once (the
 materializer locks the digest on the node).
+
+Under a platform [artifact verification policy](artifact-verification-policy.md),
+a placement verifies exactly as a checkout in its namespace would: a refused
+artifact is never prepared (artifact reason `PolicyDenied`), and a node is
+Prepared only once every governing policy has passed there.
+`status.nodes[].requirements` identifies what it was prepared under; a policy
+change that alters it (a removed key, other claims, a namespace newly bound)
+makes the node unprepared and prepares it again, and checkouts stop
+preferring it at once. A key added to a policy reuses what is already
+recorded, without verifying again. A node whose policy key signed without
+the claims fails as `ClaimMismatch`.
 
 The pool's warm-slot readiness is unaffected: a slot is warm when its guest
 agent answers, whether or not a placement has prepared its node.

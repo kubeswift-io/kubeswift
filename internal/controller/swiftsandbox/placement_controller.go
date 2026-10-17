@@ -31,6 +31,7 @@ import (
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/sandbox/artifactpolicy"
 )
 
 // A SwiftArtifactPlacement prepares its artifacts on each node that runs a
@@ -71,6 +72,9 @@ type ArtifactPlacementReconciler struct {
 	resolver *registryResolver
 	resolved chan event.GenericEvent
 	now      func() time.Time
+	// policies evaluates SwiftArtifactVerificationPolicies, exactly as a
+	// checkout in the placement's namespace would (artifact_policy.go).
+	policies artifactPolicies
 }
 
 func (r *ArtifactPlacementReconciler) clock() time.Time {
@@ -93,6 +97,7 @@ func placementView(p *sandboxv1alpha1.SwiftArtifactPlacement, now time.Time) *sa
 		v.Spec.Artifacts = append(v.Spec.Artifacts, sandboxv1alpha1.SandboxArtifact{
 			Name: a.Name, Ref: a.Ref, Layout: a.ArtifactLayout(), MountPath: "/" + a.Name,
 			PullSecretRef: a.PullSecretRef, VerifyKeySecretRef: a.VerifyKeySecretRef,
+			Claims: a.Claims, RequirePlatformVerification: a.RequirePlatformVerification,
 			Optional: true, FetchTimeout: &metav1.Duration{Duration: placementPrepareTimeout},
 		})
 	}
@@ -113,7 +118,7 @@ func (r *ArtifactPlacementReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	var pool sandboxv1alpha1.SwiftSandboxPool
 	err := r.Get(ctx, types.NamespacedName{Namespace: p.Namespace, Name: p.Spec.PoolRef.Name}, &pool)
 	if apierrors.IsNotFound(err) {
-		if err := r.deletePreparePods(ctx, &p, nil); err != nil {
+		if err := r.deletePreparePods(ctx, &p, nil, ""); err != nil {
 			return ctrl.Result{}, err
 		}
 		p.Status.Nodes = nil
@@ -128,16 +133,25 @@ func (r *ArtifactPlacementReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	authorized, refused := r.authorize(ctx, &p, now)
+	// The platform's policies, as a checkout here would see them: a refused
+	// artifact is never prepared, and the others are prepared under what the
+	// policies require now.
+	decisions, err := r.policies.decide(ctx, r.Client, p.Namespace, placementArtifactInputs(&p))
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	authorized, refused := r.authorize(ctx, &p, now, decisions)
+	reqs := placementRequirements(&p, decisions, authorized)
 
-	// Nodes that left the pool stop counting; their prepare pods go.
-	if err := r.deletePreparePods(ctx, &p, targets); err != nil {
+	// Nodes that left the pool stop counting; their prepare pods go, and so
+	// do pods preparing under requirements that no longer apply.
+	if err := r.deletePreparePods(ctx, &p, targets, reqs); err != nil {
 		return ctrl.Result{}, err
 	}
 	var nodes []sandboxv1alpha1.PlacementNodeStatus
 	requeue := placementResync
 	for _, name := range sortedKeys(targets) {
-		ns, after, err := r.reconcileNode(ctx, &p, name, targets[name], authorized, now)
+		ns, after, err := r.reconcileNode(ctx, &p, name, targets[name], authorized, decisions, reqs, now)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -150,6 +164,8 @@ func (r *ArtifactPlacementReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	reason, msg := sandboxv1alpha1.PlacementReasonPreparing, ""
 	switch {
+	case refused != "" && deniedAny(decisions):
+		reason, msg = sandboxv1alpha1.PlacementReasonPolicyDenied, refused
 	case refused != "":
 		reason, msg = sandboxv1alpha1.PlacementReasonArtifactRefused, refused
 	case len(targets) == 0:
@@ -185,7 +201,7 @@ func (r *ArtifactPlacementReconciler) targetNodes(ctx context.Context, p *sandbo
 // and the lookup keeps that authorization fresh for checkouts that use the
 // same credentials. It returns the artifacts authorized at their digest, and
 // a message when any was refused.
-func (r *ArtifactPlacementReconciler) authorize(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement, now time.Time) (map[string]bool, string) {
+func (r *ArtifactPlacementReconciler) authorize(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement, now time.Time, decisions []artifactpolicy.Decision) (map[string]bool, string) {
 	view := placementView(p, now)
 	prev := map[string]sandboxv1alpha1.PlacementArtifactStatus{}
 	for _, a := range p.Status.Artifacts {
@@ -204,9 +220,27 @@ func (r *ArtifactPlacementReconciler) authorize(ctx context.Context, p *sandboxv
 		return authorized, truncateMessage(err.Error())
 	}
 	lookup := r.lookup(p)
-	prime(lookup, reqs...)
+	for i, req := range reqs {
+		if i >= len(decisions) || decisions[i].Denied == "" {
+			prime(lookup, req)
+		}
+	}
 	for i, a := range p.Spec.Artifacts {
 		st := sandboxv1alpha1.PlacementArtifactStatus{Name: a.Name, PreparedNodes: prev[a.Name].PreparedNodes}
+		if i < len(decisions) {
+			st.Policies = decisions[i].Policies
+			if d := decisions[i]; d.Denied != "" {
+				// Refused by a policy: never asked of the registry.
+				st.Reason, st.Message = sandboxv1alpha1.PlacementReasonPolicyDenied, truncateMessage(d.Denied+": "+d.Message)
+				if prev[a.Name].Reason != sandboxv1alpha1.PlacementReasonPolicyDenied {
+					recordPlacementPolicyDenial(d.Denied)
+					r.Recorder.Eventf(p, corev1.EventTypeWarning, "ArtifactPolicyDenied", "artifact %s: %s", a.Name, st.Message)
+				}
+				refused = append(refused, a.Name+": "+st.Message)
+				status[i] = st
+				continue
+			}
+		}
 		res, done := lookup(reqs[i])
 		switch {
 		case !done:
@@ -269,10 +303,12 @@ func (r *ArtifactPlacementReconciler) lookup(p *sandboxv1alpha1.SwiftArtifactPla
 
 // reconcileNode moves one node toward holding every authorized artifact and
 // returns its status, and when the placement should look at it again.
-func (r *ArtifactPlacementReconciler) reconcileNode(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement, node string, slot *corev1.Pod, authorized map[string]bool, now time.Time) (sandboxv1alpha1.PlacementNodeStatus, time.Duration, error) {
+func (r *ArtifactPlacementReconciler) reconcileNode(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement, node string, slot *corev1.Pod, authorized map[string]bool, decisions []artifactpolicy.Decision, reqs string, now time.Time) (sandboxv1alpha1.PlacementNodeStatus, time.Duration, error) {
 	prev := nodeStatus(p, node)
-	st := sandboxv1alpha1.PlacementNodeStatus{Name: node, ObservedGeneration: p.Generation}
-	if prev != nil && prev.ObservedGeneration == p.Generation {
+	st := sandboxv1alpha1.PlacementNodeStatus{Name: node, ObservedGeneration: p.Generation, Requirements: reqs}
+	// A node prepared under other platform requirements (a policy changed
+	// its keys or claims, or now governs an artifact) is prepared again.
+	if prev != nil && prev.ObservedGeneration == p.Generation && prev.Requirements == reqs {
 		st.PreparedAt, st.LastFailureTime = prev.PreparedAt, prev.LastFailureTime
 		st.Prepared, st.Reason, st.Message = prev.Prepared, prev.Reason, prev.Message
 		st.Failures = prev.Failures
@@ -280,7 +316,7 @@ func (r *ArtifactPlacementReconciler) reconcileNode(ctx context.Context, p *sand
 	want := wantedArtifacts(p, authorized)
 
 	var pod corev1.Pod
-	podName := preparePodName(p, node)
+	podName := preparePodName(p, node, reqs)
 	err := r.Get(ctx, types.NamespacedName{Namespace: p.Namespace, Name: podName}, &pod)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return st, 0, err
@@ -321,7 +357,10 @@ func (r *ArtifactPlacementReconciler) reconcileNode(ctx context.Context, p *sand
 			return st, wait, nil
 		}
 	}
-	pp := preparePod(p, node, slot, want, now)
+	pp := preparePod(p, node, slot, want, reqs, now)
+	if err := addArtifactRequirements(pp, decisionsByName(placementView(p, now), decisions)); err != nil {
+		return st, 0, err
+	}
 	if err := controllerutil.SetControllerReference(p, pp, r.Scheme); err != nil {
 		return st, 0, err
 	}
@@ -353,8 +392,13 @@ func (r *ArtifactPlacementReconciler) readPrepareResult(p *sandboxv1alpha1.Swift
 				failed[name] = "no result"
 			} else if res.Skipped != nil {
 				failed[name] = res.Skipped.Reason + ": " + res.Skipped.Message
-				if res.Skipped.Reason == "VerificationFailed" {
+				switch res.Skipped.Reason {
+				case "VerificationFailed":
 					reason = sandboxv1alpha1.PlacementReasonVerificationFailed
+				case "ClaimMismatch":
+					if reason != sandboxv1alpha1.PlacementReasonVerificationFailed {
+						reason = sandboxv1alpha1.PlacementReasonClaimMismatch
+					}
 				}
 			}
 			if t := cs.State.Terminated.FinishedAt.Time; t.After(latest) {
@@ -373,6 +417,9 @@ func (r *ArtifactPlacementReconciler) readPrepareResult(p *sandboxv1alpha1.Swift
 		st.Prepared, st.PreparedAt, st.LastFailureTime, st.Failures = true, &at, nil, 0
 		st.Reason, st.Message = sandboxv1alpha1.PlacementReasonPrepared, ""
 		metrics.ArtifactPreparesTotal.WithLabelValues("prepared").Inc()
+		if st.Requirements != "" {
+			metrics.ArtifactPolicyDecisionsTotal.WithLabelValues("placement", "verified").Inc()
+		}
 		return
 	}
 	var parts []string
@@ -386,9 +433,16 @@ func (r *ArtifactPlacementReconciler) readPrepareResult(p *sandboxv1alpha1.Swift
 	st.Prepared, st.LastFailureTime = false, &at
 	st.Failures++
 	st.Reason, st.Message = reason, truncateMessage(strings.Join(parts, "; "))
-	if reason == sandboxv1alpha1.PlacementReasonVerificationFailed {
+	switch reason {
+	case sandboxv1alpha1.PlacementReasonVerificationFailed:
 		metrics.ArtifactPreparesTotal.WithLabelValues("verification_failed").Inc()
-	} else {
+		if st.Requirements != "" {
+			metrics.ArtifactPolicyDecisionsTotal.WithLabelValues("placement", "verification_failed").Inc()
+		}
+	case sandboxv1alpha1.PlacementReasonClaimMismatch:
+		metrics.ArtifactPreparesTotal.WithLabelValues("claim_mismatch").Inc()
+		metrics.ArtifactPolicyDecisionsTotal.WithLabelValues("placement", "claim_mismatch").Inc()
+	default:
 		metrics.ArtifactPreparesTotal.WithLabelValues("failed").Inc()
 	}
 }
@@ -417,7 +471,7 @@ func wantedArtifacts(p *sandboxv1alpha1.SwiftArtifactPlacement, authorized map[s
 
 // preparePod builds the pod that prepares want on node: the checkout fetch
 // pod's containers, one per artifact, pinned to the node.
-func preparePod(p *sandboxv1alpha1.SwiftArtifactPlacement, node string, slot *corev1.Pod, want []string, now time.Time) *corev1.Pod {
+func preparePod(p *sandboxv1alpha1.SwiftArtifactPlacement, node string, slot *corev1.Pod, want []string, reqs string, now time.Time) *corev1.Pod {
 	view := placementView(p, now)
 	only := view.DeepCopy()
 	only.Spec.Artifacts = nil
@@ -431,7 +485,7 @@ func preparePod(p *sandboxv1alpha1.SwiftArtifactPlacement, node string, slot *co
 	containers, volumes := artifactInits(only, false)
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        preparePodName(p, node),
+			Name:        preparePodName(p, node, reqs),
 			Namespace:   p.Namespace,
 			Labels:      map[string]string{placementLabel: p.Name},
 			Annotations: map[string]string{placementNodeAnnotation: node},
@@ -451,11 +505,15 @@ func preparePod(p *sandboxv1alpha1.SwiftArtifactPlacement, node string, slot *co
 	}
 }
 
-// preparePodName is unique to the placement (its UID), the node and the
-// spec generation: a changed spec gets a new pod, an unchanged one finds its
-// own.
-func preparePodName(p *sandboxv1alpha1.SwiftArtifactPlacement, node string) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s/%s/%d", p.UID, node, p.Generation)))
+// preparePodName is unique to the placement (its UID), the node, the spec
+// generation and the platform requirements (reqs): a changed spec or policy
+// gets a new pod, an unchanged one finds its own.
+func preparePodName(p *sandboxv1alpha1.SwiftArtifactPlacement, node, reqs string) string {
+	key := fmt.Sprintf("%s/%s/%d", p.UID, node, p.Generation)
+	if reqs != "" {
+		key += "/" + reqs
+	}
+	sum := sha256.Sum256([]byte(key))
 	suffix := "-prep-" + hex.EncodeToString(sum[:])[:10]
 	base := p.Name
 	if max := 63 - len(suffix); len(base) > max {
@@ -466,7 +524,7 @@ func preparePodName(p *sandboxv1alpha1.SwiftArtifactPlacement, node string) stri
 
 // deletePreparePods deletes p's prepare pods for nodes not in keep, and
 // those of an older spec generation. keep nil deletes every one.
-func (r *ArtifactPlacementReconciler) deletePreparePods(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement, keep map[string]*corev1.Pod) error {
+func (r *ArtifactPlacementReconciler) deletePreparePods(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement, keep map[string]*corev1.Pod, reqs string) error {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(p.Namespace), client.MatchingLabels{placementLabel: p.Name}); err != nil {
 		return err
@@ -477,7 +535,7 @@ func (r *ArtifactPlacementReconciler) deletePreparePods(ctx context.Context, p *
 			continue
 		}
 		node := pod.Annotations[placementNodeAnnotation]
-		if _, ok := keep[node]; ok && pod.Name == preparePodName(p, node) {
+		if _, ok := keep[node]; ok && pod.Name == preparePodName(p, node, reqs) {
 			continue
 		}
 		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
@@ -501,7 +559,8 @@ func (r *ArtifactPlacementReconciler) summarize(p *sandboxv1alpha1.SwiftArtifact
 			for _, a := range p.Spec.Artifacts {
 				count[a.Name]++
 			}
-		} else if n.Reason == sandboxv1alpha1.PlacementReasonPrepareFailed || n.Reason == sandboxv1alpha1.PlacementReasonVerificationFailed {
+		} else if n.Reason == sandboxv1alpha1.PlacementReasonPrepareFailed || n.Reason == sandboxv1alpha1.PlacementReasonVerificationFailed ||
+			n.Reason == sandboxv1alpha1.PlacementReasonClaimMismatch {
 			failing = append(failing, n.Name+": "+n.Message)
 			if reason == sandboxv1alpha1.PlacementReasonPreparing {
 				reason = n.Reason
@@ -605,14 +664,106 @@ func (r *ArtifactPlacementReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			return r.placementsForPool(ctx, obj.GetNamespace(), obj.GetName())
 		})).
 		WatchesRawSource(source.Channel(r.resolved, &handler.EnqueueRequestForObject{})).
+		// A policy or a namespace's labels change what placements must verify.
+		Watches(&sandboxv1alpha1.SwiftArtifactVerificationPolicy{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, _ client.Object) []reconcile.Request {
+			return r.placementsIn(ctx, "")
+		})).
+		Watches(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+			return r.placementsIn(ctx, obj.GetName())
+		})).
 		Complete(r)
+}
+
+// placementsIn lists the placements in namespace ("" for every namespace).
+func (r *ArtifactPlacementReconciler) placementsIn(ctx context.Context, namespace string) []reconcile.Request {
+	var list sandboxv1alpha1.SwiftArtifactPlacementList
+	var opts []client.ListOption
+	if namespace != "" {
+		opts = append(opts, client.InNamespace(namespace))
+	}
+	if err := r.List(ctx, &list, opts...); err != nil {
+		return nil
+	}
+	out := make([]reconcile.Request, 0, len(list.Items))
+	for i := range list.Items {
+		out = append(out, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])})
+	}
+	return out
+}
+
+// placementArtifactInputs are p's artifacts as the policy decision reads them.
+func placementArtifactInputs(p *sandboxv1alpha1.SwiftArtifactPlacement) []artifactpolicy.Artifact {
+	out := make([]artifactpolicy.Artifact, len(p.Spec.Artifacts))
+	for i, a := range p.Spec.Artifacts {
+		out[i] = artifactpolicy.Artifact{Ref: a.Ref, Claims: a.Claims, RequirePlatformVerification: a.RequirePlatformVerification}
+	}
+	return out
+}
+
+func deniedAny(decisions []artifactpolicy.Decision) bool {
+	for i := range decisions {
+		if decisions[i].Denied != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// placementRequirements identifies the platform verification p's authorized
+// artifacts are prepared under: a hash of each governed artifact's acceptable
+// records, or "" when no policy governs any of them.
+func placementRequirements(p *sandboxv1alpha1.SwiftArtifactPlacement, decisions []artifactpolicy.Decision, authorized map[string]bool) string {
+	h := sha256.New()
+	governed := false
+	for i, a := range p.Spec.Artifacts {
+		if !authorized[a.Name] || i >= len(decisions) || !decisions[i].Governed() {
+			continue
+		}
+		recs, err := decisions[i].AcceptableRecords(digestOf(a.Ref))
+		if err != nil {
+			continue
+		}
+		governed = true
+		fmt.Fprintf(h, "%s\x00", a.Name)
+		for _, g := range recs {
+			fmt.Fprintf(h, "%s\x00", strings.Join(g, ","))
+		}
+		fmt.Fprint(h, "\x01")
+	}
+	if !governed {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// recordPlacementPolicyDenial counts a placement artifact a policy refused.
+func recordPlacementPolicyDenial(why string) {
+	result := "denied"
+	if why == artifactpolicy.DeniedNoMatchingPolicy {
+		result = "no_policy"
+	}
+	metrics.ArtifactPolicyDecisionsTotal.WithLabelValues("placement", result).Inc()
 }
 
 // placedKey identifies a prepared cache entry the way a checkout needs it:
 // read from this repository at this digest, in this layout, verified with
-// the key in this Secret (none when empty).
+// the key in this Secret (none when empty), under the platform requirements
+// these claims resolve to.
 type placedKey struct {
-	repository, digest, layout, key string
+	repository, digest, layout, key, claims string
+}
+
+// claimsKey is an artifact's claims and requirePlatformVerification, which
+// together with the namespace decide its platform requirements.
+func claimsKey(claims map[string]string, requirePlatform bool) string {
+	var b strings.Builder
+	for _, k := range sortedKeys(claims) {
+		b.WriteString(k + "=" + claims[k] + "\x00")
+	}
+	if requirePlatform {
+		b.WriteString("!")
+	}
+	return b.String()
 }
 
 // preparedNodes are the nodes where the placements of sb's pool have
@@ -640,8 +791,14 @@ func (r *SwiftSandboxReconciler) preparedNodes(ctx context.Context, sb *sandboxv
 				authorized[a.Name] = true
 			}
 		}
+		// Only a node prepared under the requirements that apply now counts.
+		decisions, err := r.policies.decide(ctx, r.Client, p.Namespace, placementArtifactInputs(p))
+		if err != nil {
+			continue
+		}
+		reqs := placementRequirements(p, decisions, authorized)
 		for _, n := range p.Status.Nodes {
-			if !n.Prepared || n.ObservedGeneration != p.Generation {
+			if !n.Prepared || n.ObservedGeneration != p.Generation || n.Requirements != reqs {
 				continue
 			}
 			for _, a := range p.Spec.Artifacts {
@@ -651,7 +808,8 @@ func (r *SwiftSandboxReconciler) preparedNodes(ctx context.Context, sb *sandboxv
 				if byNode[n.Name] == nil {
 					byNode[n.Name] = map[placedKey]bool{}
 				}
-				byNode[n.Name][placedKey{repoOf(a.Ref), digestOf(a.Ref), a.ArtifactLayout(), secretRefName(a.VerifyKeySecretRef)}] = true
+				byNode[n.Name][placedKey{repoOf(a.Ref), digestOf(a.Ref), a.ArtifactLayout(), secretRefName(a.VerifyKeySecretRef),
+					claimsKey(a.Claims, a.RequirePlatformVerification)}] = true
 			}
 		}
 	}
@@ -659,7 +817,8 @@ func (r *SwiftSandboxReconciler) preparedNodes(ctx context.Context, sb *sandboxv
 	for node, have := range byNode {
 		all := true
 		for _, ra := range arts {
-			if !have[placedKey{repoOf(ra.spec.Ref), ra.digest, ra.spec.ArtifactLayout(), secretRefName(ra.spec.VerifyKeySecretRef)}] {
+			if !have[placedKey{repoOf(ra.spec.Ref), ra.digest, ra.spec.ArtifactLayout(), secretRefName(ra.spec.VerifyKeySecretRef),
+				claimsKey(ra.spec.Claims, ra.spec.RequirePlatformVerification)}] {
 				all = false
 				break
 			}
