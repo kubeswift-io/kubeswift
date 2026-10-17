@@ -621,6 +621,12 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		pod.Spec.Containers[0].VolumeMounts = append(pod.Spec.Containers[0].VolumeMounts,
 			corev1.VolumeMount{Name: artifactCacheVolume, MountPath: artifactCacheDir, ReadOnly: true})
 	}
+	if len(resolvedArtifacts(sb)) > 0 {
+		// The launcher holds a use lock on every entry it serves, so the
+		// node cache never evicts it (use_locks.rs).
+		pod.Spec.Containers[0].VolumeMounts = append(pod.Spec.Containers[0].VolumeMounts,
+			corev1.VolumeMount{Name: artifactUseVolume, MountPath: artifactUseDir})
+	}
 	if hasOptionalArtifact(sb) {
 		// The ok tokens of optional artifacts: swiftletd shares only those.
 		pod.Spec.Containers[0].VolumeMounts = append(pod.Spec.Containers[0].VolumeMounts,

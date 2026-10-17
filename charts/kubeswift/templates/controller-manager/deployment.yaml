@@ -64,6 +64,16 @@ spec:
               value: {{ .Values.migrationStunnel.image.registry }}/migration-stunnel:{{ include "kubeswift.imageTag" (dict "tag" .Values.migrationStunnel.image.tag "appVersion" .Chart.AppVersion) }}
             - name: KUBESWIFT_SANDBOX_MATERIALIZE_IMAGE
               value: {{ .Values.sandboxMaterialize.image.registry }}/sandbox-materialize:{{ include "kubeswift.imageTag" (dict "tag" .Values.sandboxMaterialize.image.tag "appVersion" .Chart.AppVersion) }}
+            {{- with .Values.sandboxMaterialize.artifactCache }}
+            - name: KUBESWIFT_ARTIFACT_CACHE_MAX_BYTES
+              value: {{ .maxBytes | default "0" | quote }}
+            - name: KUBESWIFT_ARTIFACT_CACHE_MAX_PERCENT
+              value: {{ .maxPercent | default 0 | quote }}
+            - name: KUBESWIFT_ARTIFACT_CACHE_MIN_AGE
+              value: {{ .minAge | default "10m" | quote }}
+            - name: KUBESWIFT_ARTIFACT_CACHE_EVICT_LEGACY
+              value: {{ .evictLegacy | default false | quote }}
+            {{- end }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

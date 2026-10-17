@@ -57,7 +57,17 @@
     "sandboxMaterialize": {
       "additionalProperties": false,
       "properties": {
-        "image": { "$ref": "#/definitions/image" }
+        "image": { "$ref": "#/definitions/image" },
+        "artifactCache": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxBytes": { "type": ["string", "integer"] },
+            "maxPercent": { "type": "integer", "minimum": 0, "maximum": 100 },
+            "minAge": { "type": "string" },
+            "evictLegacy": { "type": "boolean" }
+          }
+        }
       }
     },
     "snapshotORAS": {

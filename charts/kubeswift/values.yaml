@@ -78,6 +78,20 @@ sandboxMaterialize:
   image:
     registry: ghcr.io/kubeswift-io/kubeswift
     tag: latest
+  # Node artifact cache (/var/lib/kubeswift/sandbox-artifacts) limits. Off by
+  # default. When set, the least recently used entries no running sandbox
+  # holds are evicted after an artifact is written, and a new artifact is
+  # refused while the cache stays over the limit. Enable only once every
+  # sandbox launcher on the cluster is v0.17 or later: older launchers take no
+  # use locks. Entries written before v0.17 are never evicted.
+  artifactCache:
+    maxBytes: "0"      # e.g. 20Gi; 0 is none
+    maxPercent: 0      # of the cache filesystem; 0 is none; the smaller limit applies
+    minAge: 10m        # an entry used more recently is never evicted
+    # Entries written before v0.17 are counted but never evicted (older
+    # launchers take no use locks), so a node already over the limit refuses
+    # new artifacts. Set true once no pre-v0.17 sandbox launcher is running.
+    evictLegacy: false
 
 # snapshot-oras: the uploader/downloader image for the oci (OCI registry / ORAS)
 # snapshot backend. The controller passes this to the per-snapshot push Job (and

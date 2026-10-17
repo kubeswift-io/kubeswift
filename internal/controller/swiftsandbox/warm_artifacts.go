@@ -97,6 +97,9 @@ func addWarmStage(pod *corev1.Pod) {
 	if !mounted {
 		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: artifactCacheVolume, MountPath: artifactCacheDir, ReadOnly: true})
 	}
+	// The use locks of the entries a checkout projects (use_locks.rs).
+	pod.Spec.Volumes = append(pod.Spec.Volumes, artifactUseVolumeSource())
+	c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: artifactUseVolume, MountPath: artifactUseDir})
 }
 
 // warmArtifactArg is one artifact in the exec action (swiftletd's WarmArtifact).
@@ -253,7 +256,11 @@ func (r *SwiftSandboxReconciler) ensureArtifactFetch(ctx context.Context, sb *sa
 		skipped := map[string]*materialize.Skip{}
 		for i := range pod.Status.ContainerStatuses {
 			cs := &pod.Status.ContainerStatuses[i]
-			if res, ok := artifactResult(cs); ok && res.Skipped != nil {
+			res, ok := artifactResult(cs)
+			if ok {
+				recordCacheReport(pod.Spec.NodeName, res)
+			}
+			if ok && res.Skipped != nil {
 				skipped[strings.TrimPrefix(cs.Name, artifactInitPrefix)] = res.Skipped
 			}
 		}

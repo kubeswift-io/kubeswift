@@ -8,6 +8,7 @@ import (
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
 )
 
 // recordArtifactStatuses sets sb's status.artifacts to statuses (one per
@@ -117,6 +118,7 @@ func (r *SwiftSandboxReconciler) recordColdArtifacts(sb *sandboxv1alpha1.SwiftSa
 		if !ok {
 			continue
 		}
+		recordCacheReport(pod.Spec.NodeName, res)
 		if res.Skipped != nil {
 			r.setArtifactState(sb, name, sandboxv1alpha1.SandboxArtifactSkipped, res.Skipped.Reason, res.Skipped.Message, "cold")
 			continue
@@ -127,4 +129,23 @@ func (r *SwiftSandboxReconciler) recordColdArtifacts(sb *sandboxv1alpha1.SwiftSa
 		}
 		r.setArtifactState(sb, name, sandboxv1alpha1.SandboxArtifactMounted, reason, "", "cold")
 	}
+}
+
+// recordCacheReport exports a node artifact cache's state from a
+// materializer result (only runs with limits set report one).
+func recordCacheReport(node string, res materialize.Result) {
+	c := res.Cache
+	if c == nil || node == "" {
+		return
+	}
+	metrics.SandboxArtifactCacheBytes.WithLabelValues(node, "used").Set(float64(c.Bytes))
+	metrics.SandboxArtifactCacheBytes.WithLabelValues(node, "limit").Set(float64(c.LimitBytes))
+	if c.Evicted > 0 {
+		metrics.SandboxArtifactCacheEvictionsTotal.WithLabelValues(node).Add(float64(c.Evicted))
+	}
+	over := 0.0
+	if c.OverLimit {
+		over = 1
+	}
+	metrics.SandboxArtifactCacheOverLimit.WithLabelValues(node).Set(over)
 }

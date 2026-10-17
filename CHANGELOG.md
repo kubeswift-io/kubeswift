@@ -11,7 +11,13 @@ All notable changes to KubeSwift are documented here.
 - CRDs changed: `swiftsandboxes` (optional artifacts, artifact status),
   `swiftsandboxpools` (status), and a new `swiftartifactplacements`. Apply
   `crds/` before the upgrade. The controller's ClusterRole gains
-  `swiftartifactplacements`. No chart values changed.
+  `swiftartifactplacements`.
+- New chart values `sandboxMaterialize.artifactCache.{maxBytes,maxPercent,
+  minAge,evictLegacy}`; the defaults set no limit, so the node artifact cache
+  behaves as in v0.16. Materializer containers and sandbox launchers gain a
+  `sandbox-artifacts-use` hostPath beside the cache; running launchers are
+  not restarted. Turn limits on only once no pre-v0.17 sandbox launcher runs
+  (they take no use locks).
 - Existing artifacts stay required and behave as in v0.16; nothing becomes
   optional unless its spec says so.
 
@@ -41,6 +47,20 @@ All notable changes to KubeSwift are documented here.
   `kubeswift_sandbox_artifacts_total{path,optional,result,reason}`, and a
   pool condition `CheckoutArtifacts` (how many ready slots can mount
   artifacts at checkout).
+- **Node artifact cache limits** (#797, off by default):
+  `sandboxMaterialize.artifactCache.maxBytes` / `maxPercent` bound the node
+  artifact cache, and the materializer evicts least recently used entries
+  after it writes one. An entry a launcher is serving (it holds a use lock in
+  the new `sandbox-artifacts-use` hostPath) or used within `minAge` (default
+  10m) is never evicted. When entries in use keep the cache over the limit,
+  the new entry is refused: a required artifact fails
+  `ArtifactMaterializeFailed`, an optional one is skipped. Entries from
+  before this release are counted but kept unless `evictLegacy: true`; older
+  launchers take no use locks, so enable limits, and `evictLegacy`, only once
+  no pre-v0.17 sandbox launcher runs. Metrics
+  `kubeswift_sandbox_artifact_cache_bytes{node,kind}`,
+  `kubeswift_sandbox_artifact_cache_evictions_total{node}`,
+  `kubeswift_sandbox_artifact_cache_over_limit{node}`.
 
 ### Changed
 

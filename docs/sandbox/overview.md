@@ -452,7 +452,23 @@ spec:
 - Every cached file is readable by any guest user and writable by none
   (files 0444, executables in an unpacked tree 0555, directories 0555).
 - An artifact is capped at 10 GiB (an unpacked tree extracted, an OCI layout's
-  blobs); a larger one fails with `ArtifactMaterializeFailed`.
+  blobs); a larger one fails with `ArtifactMaterializeFailed`. An unpacked
+  artifact with a sparse member is refused.
+- **Node cache limits** (chart `sandboxMaterialize.artifactCache`, off by
+  default): `maxBytes` and/or `maxPercent` of the cache filesystem (the
+  smaller applies). After an artifact is written, the least recently used
+  entries that no running sandbox holds, and that were not used within
+  `minAge` (default 10m), are evicted until the cache fits; a sandbox using an
+  evicted digest later has it fetched again. If entries in use keep the cache
+  over the limit, the new artifact is refused (`ArtifactMaterializeFailed`;
+  an optional one is skipped). Enable limits only once every sandbox launcher
+  on the cluster runs v0.17 or later: older launchers do not hold use locks.
+  Entries written before v0.17 are counted but never evicted, so a node whose
+  cache is already over the limit refuses new artifacts until
+  `artifactCache.evictLegacy: true` (set it once no pre-v0.17 launcher runs). Metrics:
+  `kubeswift_sandbox_artifact_cache_bytes{node,kind}`,
+  `kubeswift_sandbox_artifact_cache_evictions_total{node}`,
+  `kubeswift_sandbox_artifact_cache_over_limit{node}`.
 - **Needs a newer sandbox kernel**: `kernels/sandbox:6.6.14` or
   `kernels/gpu-sandbox:6.6.3` and later, whose bridge mounts the shares. On an
   older kernel the sandbox fails with `KernelUnsupported` before it boots.

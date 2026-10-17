@@ -335,6 +335,38 @@ var (
 		[]string{"result"},
 	)
 
+	// SandboxArtifactCacheBytes is a node artifact cache's size and its limit,
+	// as the last artifact materialized on the node reported them (limits
+	// set). Label kind: used or limit.
+	SandboxArtifactCacheBytes = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "kubeswift_sandbox_artifact_cache_bytes",
+			Help: "Node artifact cache size (kind=used) and limit (kind=limit), as last reported on the node",
+		},
+		[]string{"node", "kind"},
+	)
+
+	// SandboxArtifactCacheEvictionsTotal counts entries evicted from node
+	// artifact caches.
+	SandboxArtifactCacheEvictionsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_sandbox_artifact_cache_evictions_total",
+			Help: "Entries evicted from a node's artifact cache",
+		},
+		[]string{"node"},
+	)
+
+	// SandboxArtifactCacheOverLimit is 1 while a node's artifact cache stays
+	// over its limit after eviction (every entry in use or used recently):
+	// new artifacts are refused there until entries free up.
+	SandboxArtifactCacheOverLimit = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "kubeswift_sandbox_artifact_cache_over_limit",
+			Help: "1 while a node's artifact cache is over its limit after eviction",
+		},
+		[]string{"node"},
+	)
+
 	// RegistryLookupsTotal counts the controllers' registry lookups (sandbox
 	// and pool image, model and artifact resolves) by how they were answered:
 	// "hit" from a finished request still valid, "refresh" from a valid entry
@@ -402,6 +434,9 @@ func init() {
 	metrics.Registry.MustRegister(
 		SandboxArtifactsTotal,
 		ArtifactPreparesTotal,
+		SandboxArtifactCacheBytes,
+		SandboxArtifactCacheEvictionsTotal,
+		SandboxArtifactCacheOverLimit,
 		RegistryLookupsTotal,
 		RegistryRequestsTotal,
 		RegistryRequestSeconds,

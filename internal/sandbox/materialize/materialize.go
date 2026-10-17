@@ -75,6 +75,8 @@ type Result struct {
 	// Skipped is set, and nothing else is, when an optional artifact's run
 	// failed: the workload starts without it.
 	Skipped *Skip `json:"skipped,omitempty"`
+	// Cache is the node artifact cache after this run, when limits are set.
+	Cache *CacheReport `json:"cache,omitempty"`
 }
 
 // Skip says why an optional artifact was not materialized.
@@ -534,6 +536,8 @@ func extractToTree(img v1.Image, destDir string, maxBytes int64, maxEntries int)
 		return 0, fmt.Errorf("%w: more than %d bytes unpacked", ErrTooLarge, maxBytes)
 	case counted != nil && counted.exceeded.Load():
 		return 0, fmt.Errorf("%w: more than %d", ErrTooManyEntries, maxEntries)
+	case counted != nil && counted.sparse.Load():
+		return 0, ErrSparseEntry
 	case err != nil:
 		return 0, fmt.Errorf("tar extract: %w", err)
 	}

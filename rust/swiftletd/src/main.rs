@@ -13,6 +13,7 @@ mod probe;
 mod report;
 mod secrets;
 mod shutdown;
+mod use_locks;
 mod warm_artifacts;
 
 use std::env;
@@ -226,6 +227,17 @@ fn main() {
                 optional_shares::drop_unready(&mut intent, Path::new(optional_shares::RESULTS_DIR));
             if !dropped.is_empty() {
                 log::info!("optional_artifacts_not_shared shares={}", dropped.join(","));
+            }
+            // Every cache entry this VM will be served from is held for the
+            // launcher's life: the node cache never evicts it (use_locks.rs).
+            for fs in intent.filesystems.iter().flatten() {
+                if let Some(entry) = Path::new(&fs.source_path)
+                    .strip_prefix(warm_artifacts::CACHE_DIR)
+                    .ok()
+                    .and_then(|p| p.to_str())
+                {
+                    use_locks::hold_if_available(Path::new(use_locks::USE_DIR), entry);
+                }
             }
 
             // What this kernel's bridge can be asked for (files, mounts).
