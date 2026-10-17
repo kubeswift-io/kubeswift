@@ -69,7 +69,8 @@ func isLauncherPolicy(np *networkingv1.NetworkPolicy) bool {
 	return false
 }
 
-func (r *IsolationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *IsolationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
+	defer requeueOnConflict(ctx, &res, &err)
 	var np networkingv1.NetworkPolicy
 	if err := r.Get(ctx, req.NamespacedName, &np); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)

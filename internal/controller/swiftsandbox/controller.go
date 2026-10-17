@@ -68,7 +68,8 @@ func isTerminal(p sandboxv1alpha1.SwiftSandboxPhase) bool {
 	return p == sandboxv1alpha1.SwiftSandboxCompleted || p == sandboxv1alpha1.SwiftSandboxFailed
 }
 
-func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
+	defer requeueOnConflict(ctx, &res, &err)
 	var sb sandboxv1alpha1.SwiftSandbox
 	if err := r.Get(ctx, req.NamespacedName, &sb); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -168,7 +169,7 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	var pod corev1.Pod
-	err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: sb.Name}, &pod)
+	err = r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: sb.Name}, &pod)
 	switch {
 	case apierrors.IsNotFound(err):
 		return r.createLaunch(ctx, &sb, kernelName)

@@ -104,7 +104,8 @@ func placementView(p *sandboxv1alpha1.SwiftArtifactPlacement, now time.Time) *sa
 	return v
 }
 
-func (r *ArtifactPlacementReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *ArtifactPlacementReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
+	defer requeueOnConflict(ctx, &res, &err)
 	var p sandboxv1alpha1.SwiftArtifactPlacement
 	if err := r.Get(ctx, req.NamespacedName, &p); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -116,7 +117,7 @@ func (r *ArtifactPlacementReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	now := r.clock()
 
 	var pool sandboxv1alpha1.SwiftSandboxPool
-	err := r.Get(ctx, types.NamespacedName{Namespace: p.Namespace, Name: p.Spec.PoolRef.Name}, &pool)
+	err = r.Get(ctx, types.NamespacedName{Namespace: p.Namespace, Name: p.Spec.PoolRef.Name}, &pool)
 	if apierrors.IsNotFound(err) {
 		if err := r.deletePreparePods(ctx, &p, nil, ""); err != nil {
 			return ctrl.Result{}, err
@@ -599,10 +600,16 @@ func (r *ArtifactPlacementReconciler) summarize(p *sandboxv1alpha1.SwiftArtifact
 	apimeta.SetStatusCondition(&p.Status.Conditions, cond)
 }
 
-// finish writes the status when it changed and requeues after.
+// finish writes the status when it changed and requeues after. A merge
+// patch of what changed: this controller is the status's only writer, and
+// it reconciles on every slot pod event, often from a cached copy older
+// than its own last write, which a full update turned into a conflict
+// (#758).
 func (r *ArtifactPlacementReconciler) finish(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement, orig *sandboxv1alpha1.SwiftArtifactPlacementStatus, after time.Duration) (ctrl.Result, error) {
 	if !apiequality.Semantic.DeepEqual(orig, &p.Status) {
-		if err := r.Status().Update(ctx, p); err != nil {
+		base := p.DeepCopy()
+		base.Status = *orig
+		if err := r.Status().Patch(ctx, p, client.MergeFrom(base)); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
