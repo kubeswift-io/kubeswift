@@ -14,8 +14,11 @@ import (
 // spec.network, written back as {}) then gets its CRD defaults applied. The
 // webhook sees a spec change and refuses it, so the sandbox never got past
 // its first finalizer (#768).
+//
+// An object already gone needs no finalizer change: not found is not an
+// error (removing the last finalizer deletes it).
 func patchFinalizers(ctx context.Context, c client.Client, obj client.Object, edit func()) error {
 	base := obj.DeepCopyObject().(client.Object)
 	edit()
-	return c.Patch(ctx, obj, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+	return client.IgnoreNotFound(c.Patch(ctx, obj, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})))
 }
