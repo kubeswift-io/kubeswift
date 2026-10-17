@@ -6,6 +6,50 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Upgrade
+
+- CRDs changed: the new cluster-scoped `swiftartifactverificationpolicies`;
+  `swiftsandboxes` and `swiftartifactplacements` (artifact `claims` and
+  `requirePlatformVerification`, policy references in status, a node's
+  `requirements` in placement status). Apply `crds/` before `helm upgrade`.
+  The controller's ClusterRole gains read access to the policies and write
+  access to their status only. No chart values changed.
+- Nothing changes until an administrator creates a policy: with none, every
+  artifact behaves as in v0.17.
+- Warm slots started before the upgrade cannot check policy records, so a
+  checkout of an artifact a policy governs never goes to one: a required
+  artifact boots cold, an optional one starts without it
+  (`LauncherUnsupported`), until the pool has replaced those slots.
+
+### Added
+
+- **SwiftArtifactVerificationPolicy** (#790; new cluster-scoped CRD, `savp`):
+  an administrator's rule that, in the namespaces its selector matches,
+  artifacts from the repositories it governs must carry a signature by one
+  of its public keys with its signed claims (cosign annotations, read from
+  the payload that key verified) before they are materialized. Which
+  policies apply depends only on namespace labels and the artifact's
+  repository; no workload field can choose, skip or weaken one, and every
+  governing policy and the artifact's own `verifyKeySecretRef` must pass.
+  `otherRepositories: Deny` refuses artifacts no policy governs;
+  `digestPinning: Required` (default) refuses tags. Claim values are fixed,
+  one of a set, the consumer's namespace, or supplied by the artifact
+  (`claims`, `fromArtifact`). Verification is recorded per policy, key,
+  claims, repository and digest, so a record never satisfies another policy
+  and adding a key re-verifies nothing; warm checkouts check records on the
+  node with no network or cryptography. An optional artifact that fails is
+  skipped, never mounted. Placements verify under the same policies and
+  prepare a node again when a policy change alters what it needs. Reasons
+  `ArtifactPolicyDenied`, `ArtifactVerificationFailed`,
+  `ArtifactClaimMismatch` (and `PolicyDenied`, `ClaimMismatch` for skipped
+  artifacts and placements) with Warning Events; metric
+  `kubeswift_artifact_policy_decisions_total{path,result}`.
+  See `docs/sandbox/artifact-verification-policy.md`.
+- `spec.artifacts[].requirePlatformVerification` refuses an artifact no
+  policy governs.
+
+---
+
 ## [v0.17.0] — 2026-10-17
 
 Trusted checkout artifacts for warm SwiftSandbox slots: a sandbox can mark an

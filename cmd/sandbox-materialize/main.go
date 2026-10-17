@@ -240,6 +240,14 @@ func run(ctx context.Context, opts materialize.Options, verifyKey string, reqs [
 				return oci.VerifyPayloads(ctx, repo, digest, pinned)
 			}
 			for _, req := range reqs {
+				// Already recorded for a key the policy trusts now: the same
+				// check passed before, on this node.
+				if fp, err := materialize.RecordedRequirement(opts.CacheDir, canon, digest, req); err != nil {
+					return nil, stageVerify, err
+				} else if fp != "" {
+					fmt.Fprintf(os.Stderr, "sandbox-materialize: %s@%s met policy %s before (recorded)\n", repo, digest, req.Policy)
+					continue
+				}
 				fp, err := materialize.CheckRequirement(req, canon, digest, verify)
 				if err != nil {
 					return nil, stageVerify, err

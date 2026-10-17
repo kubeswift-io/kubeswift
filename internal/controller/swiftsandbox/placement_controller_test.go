@@ -340,7 +340,7 @@ func TestPlacement_PoolNotFoundAndNoNodes(t *testing.T) {
 // read for a result.
 func TestPlacement_ForeignPodIsNotTrusted(t *testing.T) {
 	pl := testPlacement(plDigestA)
-	fakePod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: preparePodName(pl, "node-a"), Namespace: "default",
+	fakePod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: preparePodName(pl, "node-a", ""), Namespace: "default",
 		Labels: map[string]string{placementLabel: "cache"}, Annotations: map[string]string{placementNodeAnnotation: "node-a"}},
 		Spec:   corev1.PodSpec{NodeName: "node-a", Containers: []corev1.Container{{Name: artifactInitPrefix + "a"}}},
 		Status: corev1.PodStatus{Phase: corev1.PodSucceeded}}

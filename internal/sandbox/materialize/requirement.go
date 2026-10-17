@@ -222,3 +222,21 @@ func RecordRequirement(cacheDir, digest, fingerprint string) error {
 	}
 	return nil
 }
+
+// RecordedRequirement returns the fingerprint of an existing record that
+// digest from repository met req through one of the keys it trusts now, or
+// "". Such a record was written after the same check (same policy, key,
+// claims, repository and digest), so it is not checked again: adding a key
+// to a policy, or preparing a node again, costs no signature verification.
+func RecordedRequirement(cacheDir, repository, digest string, req Requirement) (string, error) {
+	fps, err := req.AcceptableFingerprints(repository, digest)
+	if err != nil {
+		return "", err
+	}
+	for _, fp := range fps {
+		if exists(RequirementMarkerPath(cacheDir, digest, fp)) {
+			return fp, nil
+		}
+	}
+	return "", nil
+}

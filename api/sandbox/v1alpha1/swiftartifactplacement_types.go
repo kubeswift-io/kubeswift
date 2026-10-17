@@ -168,6 +168,8 @@ const (
 	PlacementReasonPreparing          = "Preparing"
 	PlacementReasonPrepareFailed      = "PrepareFailed"
 	PlacementReasonVerificationFailed = "VerificationFailed"
+	PlacementReasonClaimMismatch      = "ClaimMismatch"
+	PlacementReasonPolicyDenied       = "PolicyDenied"
 	PlacementReasonArtifactRefused    = "ArtifactRefused"
 	PlacementReasonPoolNotFound       = "PoolNotFound"
 	PlacementReasonNoTargetNodes      = "NoTargetNodes"
