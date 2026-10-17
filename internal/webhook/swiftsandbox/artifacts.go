@@ -55,6 +55,9 @@ func ValidateArtifacts(s *sandboxv1alpha1.SwiftSandboxSpec) error {
 				return fmt.Errorf("%s.fetchTimeout %s: between 0s and %s", at, t.Duration, sandboxv1alpha1.MaxArtifactFetchTimeout)
 			}
 		}
+		if err := sandboxv1alpha1.ValidateArtifactClaims(at+".claims", a.Claims); err != nil {
+			return err
+		}
 		p := a.MountPath
 		if !mountPathRE.MatchString(p) || path.Clean(p) != p || strings.Contains(p, "/./") {
 			return fmt.Errorf("%s.mountPath %q: a clean absolute path of letters, digits and . _ - /", at, p)

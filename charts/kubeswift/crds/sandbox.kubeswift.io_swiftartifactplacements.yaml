@@ -73,6 +73,15 @@ spec:
                     entry when its own spec.artifacts names the same repository and digest,
                     layout and verification key.
                   properties:
+                    claims:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Claims and RequirePlatformVerification are as in a SwiftSandbox
+                        artifact: a checkout uses the prepared entry only when its own
+                        artifact asks for the same claims.
+                      maxProperties: 8
+                      type: object
                     layout:
                       default: oci
                       description: |-
@@ -112,6 +121,8 @@ spec:
                       maxLength: 512
                       pattern: ^[^@\s]+@sha256:[a-f0-9]{64}$
                       type: string
+                    requirePlatformVerification:
+                      type: boolean
                     verifyKeySecretRef:
                       description: |-
                         VerifyKeySecretRef names a Secret holding a cosign public key
@@ -169,17 +180,39 @@ spec:
                         has authorized it.
                       type: string
                     message:
-                      description: Message says why the registry refused it.
+                      description: Message says why the registry or a policy refused
+                        it.
                       type: string
                     name:
                       description: Name is the artifact's name in spec.artifacts.
                       type: string
+                    policies:
+                      description: Policies are the SwiftArtifactVerificationPolicies
+                        that govern it.
+                      items:
+                        description: |-
+                          ArtifactPolicyReference names a SwiftArtifactVerificationPolicy at a
+                          generation.
+                        properties:
+                          generation:
+                            format: int64
+                            type: integer
+                          name:
+                            type: string
+                        required:
+                        - name
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - name
+                      x-kubernetes-list-type: map
                     preparedNodes:
                       description: PreparedNodes is how many target nodes hold it.
                       format: int32
                       type: integer
                     reason:
-                      description: Reason is Authorized, Resolving or ArtifactRefused.
+                      description: Reason is Authorized, Resolving, ArtifactRefused
+                        or PolicyDenied.
                       type: string
                   required:
                   - name
@@ -290,8 +323,15 @@ spec:
                       format: date-time
                       type: string
                     reason:
-                      description: Reason is Prepared, Preparing, VerificationFailed
-                        or PrepareFailed.
+                      description: |-
+                        Reason is Prepared, Preparing, VerificationFailed, ClaimMismatch or
+                        PrepareFailed.
+                      type: string
+                    requirements:
+                      description: |-
+                        Requirements identifies the platform verification the node was
+                        prepared under (a hash of every artifact's governing policies, keys and
+                        claims). When a policy change alters it, the node is prepared again.
                       type: string
                   required:
                   - name

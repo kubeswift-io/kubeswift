@@ -172,6 +172,15 @@ rules:
   - apiGroups: ["sandbox.kubeswift.io"]
     resources: ["swiftsandboxes", "swiftsandboxes/status", "swiftsandboxpools", "swiftsandboxpools/status", "swiftartifactplacements", "swiftartifactplacements/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # SwiftArtifactVerificationPolicy (cluster-scoped, administrator-owned
+  # trust rules): the controller reads policies and writes their status, and
+  # can never change a policy's spec.
+  - apiGroups: ["sandbox.kubeswift.io"]
+    resources: ["swiftartifactverificationpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["sandbox.kubeswift.io"]
+    resources: ["swiftartifactverificationpolicies/status"]
+    verbs: ["get", "update", "patch"]
   # SwiftSandbox restricted-mode NetworkPolicy (deny-ingress) on the launcher pod.
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]

@@ -1,6 +1,6 @@
 # CRD Reference
 
-All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **18 CRDs across 10 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, sandbox, fleet, and storage-location CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
+All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **19 CRDs across 10 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, sandbox, fleet, and storage-location CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
 
 | CRD | Short | API group | Scope | Reference |
 |-----|-------|-----------|-------|-----------|
@@ -19,6 +19,7 @@ All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **18 CRDs across 10 API group
 | SwiftSandbox | `sbox` | `sandbox.kubeswift.io` | Namespaced | [below](#swiftsandbox) |
 | SwiftSandboxPool | `sboxpool` | `sandbox.kubeswift.io` | Namespaced | [below](#swiftsandboxpool) |
 | SwiftArtifactPlacement | `sap` | `sandbox.kubeswift.io` | Namespaced | [below](#swiftartifactplacement) |
+| SwiftArtifactVerificationPolicy | `savp` | `sandbox.kubeswift.io` | Cluster | [below](#swiftartifactverificationpolicy) |
 | Cluster | `ksc` | `fleet.kubeswift.io` | Namespaced | [below](#cluster) |
 | SwiftClusterStorageLocation | `csloc` | `storage.kubeswift.io` | Cluster | [below](#swiftclusterstoragelocation-and-swiftstoragelocation) |
 | SwiftStorageLocation | `sloc` | `storage.kubeswift.io` | Namespaced | [below](#swiftclusterstoragelocation-and-swiftstoragelocation) |
@@ -560,7 +561,7 @@ and PVC-free.
 | `cpu` / `memory` | int32 / Quantity | vCPUs (default `1`) and RAM (default `512Mi`). |
 | `command` / `args` / `env` / `workingDir` | []string / []string / []EnvVar / string | Override or extend the image's entrypoint, environment, and working directory. |
 | `network.mode` | enum | `restricted` (default, deny-ingress + hardened egress), `open` (deny-ingress, allow-all egress), or `none`. |
-| `artifacts[]` | list | OCI artifacts mounted read-only (`name`, `ref`, `mountPath`, `layout` oci/unpacked, `pullSecretRef`, `verifyKeySecretRef`, `optional`, `fetchTimeout`), pulled and cached on the node by digest. An `optional` one the workload starts without when it cannot be had in time (never without verification). Needs `kernels/sandbox:6.6.14` / `gpu-sandbox:6.6.3` or later; with `poolRef`, taken at checkout by a slot on `6.6.15` / `6.6.4` or later, else cold. See [OCI artifacts](sandbox/overview.md#oci-artifacts). |
+| `artifacts[]` | list | OCI artifacts mounted read-only (`name`, `ref`, `mountPath`, `layout` oci/unpacked, `pullSecretRef`, `verifyKeySecretRef`, `optional`, `fetchTimeout`, `claims`, `requirePlatformVerification`), pulled and cached on the node by digest. An `optional` one the workload starts without when it cannot be had in time (never without verification). Needs `kernels/sandbox:6.6.14` / `gpu-sandbox:6.6.3` or later; with `poolRef`, taken at checkout by a slot on `6.6.15` / `6.6.4` or later, else cold. See [OCI artifacts](sandbox/overview.md#oci-artifacts). |
 | `secretFiles[]` | list | Secret keys written into the guest as files (`secretName`, `items[{key, path, mode}]`, `mode`, `optional`), read by the launcher's own ServiceAccount and kept in guest memory. Needs `kernels/sandbox:6.6.14` / `gpu-sandbox:6.6.3` or later (else `KernelUnsupported`). See [Secret files](sandbox/overview.md#secret-files). |
 | `env[].valueFrom.secretKeyRef` | object | A variable read from a Secret in the namespace by the launcher's own ServiceAccount; never written to an object, log or the node's disk. Other `valueFrom` sources are refused; a missing Secret or key keeps the sandbox `Pending` unless `optional`. See [Secrets](sandbox/overview.md#secrets). |
 | `network.ports[]` | list | Guest ports exposed on the launcher pod (`name`, `port`; TCP), each forwarded to the same guest port and admitted by the sandbox's NetworkPolicy. Not with `mode: none`. |
@@ -630,12 +631,43 @@ nothing in the pool or its slots.
 | Key field | Type | Description |
 |-----------|------|--------------|
 | `poolRef` | LocalObjectReference | The pool, in this namespace, whose slots' nodes receive the artifacts. Required. |
-| `artifacts[]` | list (1-16) | `name`, `ref` (a digest reference, required), `layout` (`oci` default or `unpacked`), `pullSecretRef`, `verifyKeySecretRef`: as on a SwiftSandbox artifact. |
+| `artifacts[]` | list (1-16) | `name`, `ref` (a digest reference, required), `layout` (`oci` default or `unpacked`), `pullSecretRef`, `verifyKeySecretRef`, `claims`, `requirePlatformVerification`: as on a SwiftSandbox artifact. |
 | `status.targetNodes` / `status.preparedNodes` | int32 | Nodes running a slot of the pool, and how many hold every artifact. |
 | `status.nodes[]` / `status.artifacts[]` | list | Per node: `prepared`, `preparedAt`, `reason`, `message`, `failures`. Per artifact: `digest`, `preparedNodes`, `reason`. |
 | `status.conditions[Prepared]` | Condition | True when every node holds every artifact. |
 
 Full reference: [Warm pools › Preparing artifacts before checkout](sandbox/warm-pool.md#preparing-artifacts-before-checkout).
+
+---
+
+## SwiftArtifactVerificationPolicy
+
+**Group:** `sandbox.kubeswift.io/v1alpha1`
+**Scope:** Cluster
+**Short name:** `savp`
+**Subresource:** status
+
+An administrator's rule for the OCI artifacts that sandboxes and placements
+mount: in the namespaces it selects, an artifact from a repository it governs
+must carry a signature by one of its keys, with its signed claims, before it
+is materialized. Which policies apply is decided by namespace labels and the
+artifact's repository; no workload field can choose or skip one.
+
+| Key field | Type | Description |
+|-----------|------|--------------|
+| `namespaceSelector` | LabelSelector | Namespaces it applies in; `{}` is all. Required. Use labels only administrators set. |
+| `repositories[]` | list (1-32) | Globs over the canonical repository (`*` one segment, `**` any). |
+| `otherRepositories` | string | `Allow` (default) or `Deny`: whether, in the selected namespaces, an artifact no policy governs may mount. |
+| `digestPinning` | string | `Required` (default): governed artifacts must be referenced by digest. `Optional` allows tags. |
+| `authorities[]` | list (1-8) | `name` + `key.publicKey` (PEM). Any one key's signature satisfies the policy. |
+| `claims[]` | list (0-16) | Signed annotations the same signature must carry: `key` plus one of `value`, `values`, `fromNamespace`, `fromArtifact`. |
+| `status.authorities[]` | list | Each key's `keyID` (sha256 of the SubjectPublicKeyInfo) and `algorithm`. |
+| `status.conditions[Ready]` | Condition | False while the policy is invalid; governed artifacts are then refused. |
+
+SwiftSandbox and SwiftArtifactPlacement artifacts gain `claims` (expected
+values for `fromArtifact` claims) and `requirePlatformVerification`.
+
+Full reference: [Artifact verification policy](sandbox/artifact-verification-policy.md).
 
 ---
 

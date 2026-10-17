@@ -86,3 +86,37 @@ func TestValidateArtifacts_FetchTimeout(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// Claims are plain strings in a restricted alphabet: no separators a claim
+// could be split on, at most eight per artifact.
+func TestValidateArtifacts_Claims(t *testing.T) {
+	with := func(c map[string]string) *sandboxv1alpha1.SwiftSandboxSpec {
+		a := art("app", "/a")
+		a.Claims = c
+		return arts(a)
+	}
+	if err := ValidateArtifacts(with(map[string]string{"example.com/source": "sha256:" + strings.Repeat("b", 64), "scope": "team-a"})); err != nil {
+		t.Errorf("unexpected error %v", err)
+	}
+	many := map[string]string{}
+	for i := 0; i < 9; i++ {
+		many[string(rune('a'+i))] = "v"
+	}
+	for _, tc := range []struct {
+		name, want string
+		c          map[string]string
+	}{
+		{"too many", "at most 8", many},
+		{"comma in value", "letters, digits", map[string]string{"k": "a,b"}},
+		{"equals in value", "letters, digits", map[string]string{"k": "a=b"}},
+		{"empty value", "letters, digits", map[string]string{"k": ""}},
+		{"space in key", "letters, digits", map[string]string{"a b": "v"}},
+		{"key starts with a dot", "letters, digits", map[string]string{".k": "v"}},
+		{"long value", "letters, digits", map[string]string{"k": strings.Repeat("v", 257)}},
+	} {
+		err := ValidateArtifacts(with(tc.c))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want it to mention %q", tc.name, err, tc.want)
+		}
+	}
+}
