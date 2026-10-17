@@ -93,6 +93,14 @@ type SwiftSandboxPoolReconciler struct {
 	// resolver and resolved: as on SwiftSandboxReconciler.
 	resolver *registryResolver
 	resolved chan event.GenericEvent
+
+	// SlotReadyTimeout replaces a warm slot whose guest agent has not
+	// answered this long after its launcher started (slot_not_ready.go);
+	// 0 never does. notReadyStreak counts a pool's consecutive replacements,
+	// for the backoff. In memory: a retry rhythm.
+	SlotReadyTimeout time.Duration
+	notReadyStreak   sync.Map
+	now              func() time.Time
 }
 
 // lookup asks the registry resolver on pool's behalf.
@@ -232,6 +240,11 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	var ready, warmLive, claimed, mountCapable int
 	var warmPods []*corev1.Pod
 	profile := poolSlotProfile(&pool)
+	notReadyTimeout := r.slotReadyTimeout(req.NamespacedName)
+	now := time.Now()
+	if r.now != nil {
+		now = r.now()
+	}
 	for i := range pods.Items {
 		p := &pods.Items[i]
 		// Terminating slots don't count; warming below replaces them.
@@ -284,9 +297,22 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			continue
 		}
 		if p.Labels[SlotStateLabelKey] == slotStateWarm {
+			if waited, never := slotNeverReady(p, notReadyTimeout, now); never {
+				if err := deleteWarmSlot(ctx, r.Client, p); err != nil {
+					return ctrl.Result{}, err
+				}
+				r.recordNotReady(req.NamespacedName, now)
+				r.Recorder.Eventf(&pool, corev1.EventTypeWarning, "SlotNotReady",
+					"warm slot %s: its guest agent had not answered %s after the launcher started (timeout %s); deleted it, the next timeout is %s",
+					p.Name, waited.Round(time.Second), notReadyTimeout, r.slotReadyTimeout(req.NamespacedName))
+				continue
+			}
+		}
+		if p.Labels[SlotStateLabelKey] == slotStateWarm {
 			warmLive++
 			warmPods = append(warmPods, p)
 			if slotReady(p) {
+				r.slotGotReady(req.NamespacedName, p)
 				ready++
 				if slotSupportsWarmMounts(p) {
 					mountCapable++
