@@ -3,6 +3,9 @@ package swiftsandbox
 import (
 	"strings"
 	"testing"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 )
@@ -49,5 +52,37 @@ func TestValidateArtifacts(t *testing.T) {
 	s.SecretFiles = []sandboxv1alpha1.SandboxSecretFile{{SecretName: "x", Items: []sandboxv1alpha1.SandboxSecretFileItem{{Key: "k", Path: "/run/artifacts/app/token"}}}}
 	if err := ValidateSecretFiles(s); err == nil {
 		t.Error("a secret file inside a read-only artifact mount must be refused")
+	}
+}
+
+// fetchTimeout belongs to optional artifacts only, between 0s and 5m.
+func TestValidateArtifacts_FetchTimeout(t *testing.T) {
+	ft := func(d time.Duration, optional bool) sandboxv1alpha1.SandboxArtifact {
+		a := art("app", "/a")
+		a.Optional, a.FetchTimeout = optional, &metav1.Duration{Duration: d}
+		return a
+	}
+	for _, ok := range []sandboxv1alpha1.SandboxArtifact{ft(0, true), ft(10*time.Second, true), ft(5*time.Minute, true)} {
+		if err := ValidateArtifacts(arts(ok)); err != nil {
+			t.Errorf("%v refused: %v", ok.FetchTimeout.Duration, err)
+		}
+	}
+	for _, tc := range []struct {
+		a    sandboxv1alpha1.SandboxArtifact
+		want string
+	}{
+		{ft(time.Second, false), "only for an optional"},
+		{ft(-time.Second, true), "between"},
+		{ft(6*time.Minute, true), "between"},
+	} {
+		if err := ValidateArtifacts(arts(tc.a)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%+v: err = %v", tc.a.FetchTimeout, err)
+		}
+	}
+	// optional alone is fine; a required artifact keeps no fetchTimeout.
+	o := art("app", "/a")
+	o.Optional = true
+	if err := ValidateArtifacts(arts(o)); err != nil {
+		t.Error(err)
 	}
 }

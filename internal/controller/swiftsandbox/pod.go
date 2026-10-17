@@ -422,7 +422,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 	}
 	// spec.artifacts: one materialize init per resolved artifact (after the
 	// rootfs and model, before gpu-init), into the node artifact cache.
-	artInits, artVolumes := artifactInits(sb)
+	artInits, artVolumes := artifactInits(sb, true)
 	initContainers = append(initContainers, artInits...)
 	if networked(sb) {
 		// network-init (br0/tap0/dnsmasq) runs first; it mounts the same
@@ -620,6 +620,11 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		// sandbox must not change what every other on the node mounts.
 		pod.Spec.Containers[0].VolumeMounts = append(pod.Spec.Containers[0].VolumeMounts,
 			corev1.VolumeMount{Name: artifactCacheVolume, MountPath: artifactCacheDir, ReadOnly: true})
+	}
+	if hasOptionalArtifact(sb) {
+		// The ok tokens of optional artifacts: swiftletd shares only those.
+		pod.Spec.Containers[0].VolumeMounts = append(pod.Spec.Containers[0].VolumeMounts,
+			corev1.VolumeMount{Name: artifactResultsVolume, MountPath: artifactResultsDir, ReadOnly: true})
 	}
 	if workloadGated(sb) {
 		for _, p := range sb.Spec.Network.Ports {

@@ -382,6 +382,10 @@ pub struct FilesystemIntent {
     /// virtiofsd runs with `--readonly`.
     #[serde(default)]
     pub read_only: bool,
+    /// An optional artifact's ok token: the share is made only when this file
+    /// exists (optional_shares.rs).
+    #[serde(default)]
+    pub optional_token: String,
 }
 
 /// An operator-backed vhost-user device (blk or generic). swiftletd hands the

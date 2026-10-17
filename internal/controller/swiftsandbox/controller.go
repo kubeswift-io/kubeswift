@@ -273,12 +273,15 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		}
 		rm, modelReady, modelErr = resolveModel(sb.Spec.Model, modelAuth, lookup)
 	}
-	var arts []sandboxv1alpha1.SandboxArtifactStatus
+	var arts artifactResolution
 	if len(sb.Spec.Artifacts) > 0 {
 		if artReqErr != nil {
 			artifactsErr = artReqErr
 		} else {
-			arts, artifactsReady, artifactsErr = resolveArtifactRequests(sb, artReqs, lookup)
+			// A cold start waits for an optional artifact's registry until
+			// its deadline, then starts without it.
+			arts = resolveArtifactRequests(sb, artReqs, lookup, waitUnresolvedOptional, time.Now())
+			artifactsReady, artifactsErr = arts.ready, arts.err
 		}
 	}
 	for _, f := range []struct {
@@ -290,12 +293,21 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		}
 		if registryRefused(f.err) {
 			r.registryFailures.Delete(client.ObjectKeyFromObject(sb))
+			if f.reason == "ArtifactResolveFailed" {
+				r.recordFailedResolve(sb, arts, "cold")
+			}
 			return r.fail(ctx, sb, f.reason, f.err.Error())
 		}
 		return r.registryUnavailable(ctx, sb, f.err)
 	}
 	if !imageReady || !modelReady || !artifactsReady {
-		return r.waitForRegistry(ctx, sb)
+		res, err := r.waitForRegistry(ctx, sb)
+		// An optional artifact stops being waited for at its deadline, which
+		// no registry answer announces.
+		if d := time.Until(arts.wakeAt); err == nil && !arts.wakeAt.IsZero() && d < res.RequeueAfter {
+			res.RequeueAfter = max(d, 100*time.Millisecond)
+		}
+		return res, err
 	}
 	r.registryFailures.Delete(client.ObjectKeyFromObject(sb))
 	var modelPath string
@@ -306,7 +318,7 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		}
 	}
 	if len(sb.Spec.Artifacts) > 0 {
-		sb.Status.Artifacts = arts
+		r.recordArtifactStatuses(sb, arts.statuses, "cold")
 	}
 	intent := buildIntent(sb, kernelName, ri.RootfsPath, modelPath, ri.Exec, false)
 	intentJSON, err := runtimeintent.Serialize(intent)
@@ -392,10 +404,12 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 		}
 	}
 	if msg, failed := artifactInitFailure(pod); failed {
+		r.failArtifacts(sb, nil, "ArtifactMaterializeFailed", msg, "cold")
 		return r.fail(ctx, sb, "ArtifactMaterializeFailed", msg)
 	}
 
 	if launcherReady(pod) {
+		r.recordColdArtifacts(sb, pod)
 		if sb.Status.StartedAt == nil {
 			now := metav1.Now()
 			sb.Status.StartedAt = &now

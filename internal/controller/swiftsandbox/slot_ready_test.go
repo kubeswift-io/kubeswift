@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -318,5 +319,20 @@ func TestTryClaimWarmSlot_RetriesASlotItsLauncherJustWrote(t *testing.T) {
 	}
 	if got.Labels[SlotStateLabelKey] != slotStateClaimed || got.Annotations["kubeswift.io/guest-ip"] != "192.168.99.10" {
 		t.Fatalf("claim lost the launcher's write or did not claim: labels=%v annotations=%v", got.Labels, got.Annotations)
+	}
+}
+
+func TestPoolCondition_CheckoutArtifacts(t *testing.T) {
+	pool := testPool(1)
+	for _, tc := range []struct {
+		ready, capable int
+		want           metav1.ConditionStatus
+		msg            string
+	}{{0, 0, metav1.ConditionUnknown, "no ready slot"}, {2, 2, metav1.ConditionTrue, "2/2"}, {3, 1, metav1.ConditionFalse, "1/3"}} {
+		setCheckoutArtifactsCondition(pool, tc.ready, tc.capable)
+		c := apimeta.FindStatusCondition(pool.Status.Conditions, sandboxv1alpha1.SwiftSandboxPoolConditionCheckoutArtifacts)
+		if c == nil || c.Status != tc.want || !strings.Contains(c.Message, tc.msg) {
+			t.Errorf("%d/%d: %+v", tc.capable, tc.ready, c)
+		}
 	}
 }

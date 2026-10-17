@@ -86,6 +86,13 @@ spec:
                   description: SandboxArtifact is one OCI artifact mounted read-only
                     in the guest.
                   properties:
+                    fetchTimeout:
+                      description: |-
+                        FetchTimeout bounds how long an optional artifact may delay the
+                        workload, counted from the sandbox's creation: past it, the workload
+                        starts without the artifact. 0s uses it only if it is already on the
+                        node. Only for optional artifacts; default 10s, at most 5m.
+                      type: string
                     layout:
                       default: oci
                       description: |-
@@ -109,6 +116,16 @@ spec:
                         unique within the sandbox.
                       maxLength: 40
                       type: string
+                    optional:
+                      description: |-
+                        Optional marks an artifact the workload can run without, such as a
+                        cache. When it cannot be resolved, fetched or verified in time the
+                        workload starts without it: nothing is mounted at mountPath, and
+                        status.artifacts says why. A required artifact (the default) fails the
+                        sandbox instead, or waits for an unreachable registry, as before.
+                        Verification is never skipped: an optional artifact that fails it is
+                        not mounted.
+                      type: boolean
                     pullSecretRef:
                       description: |-
                         PullSecretRef names a docker-registry Secret in the sandbox's namespace
@@ -136,8 +153,8 @@ spec:
                       description: |-
                         VerifyKeySecretRef names a Secret holding a cosign public key
                         (cosign.pub). The artifact is verified at its digest before it is
-                        mounted; a missing or invalid signature fails the sandbox. Needs a TLS
-                        registry.
+                        mounted; a missing or invalid signature fails the sandbox (an optional
+                        artifact is not mounted). Needs a TLS registry.
                       properties:
                         name:
                           description: Name of the Secret.
@@ -1348,16 +1365,40 @@ spec:
                   Artifacts reports each spec.artifacts entry as resolved: the digest
                   mounted and where.
                 items:
-                  description: SandboxArtifactStatus is a mounted artifact as resolved.
+                  description: |-
+                    SandboxArtifactStatus is an artifact as resolved, and how it was
+                    delivered. An entry without a state was written by a release that did not
+                    record one: it was mounted.
                   properties:
                     digest:
+                      description: |-
+                        Digest is what the node mounts; empty when an optional artifact was
+                        skipped before it was resolved.
+                      type: string
+                    message:
                       type: string
                     mountPath:
                       type: string
                     name:
                       type: string
+                    reason:
+                      description: |-
+                        Reason is a CamelCase word: for Skipped why (ResolveRefused,
+                        RegistryUnavailable, FetchTimeout, VerificationFailed,
+                        MaterializeFailed, KernelUnsupported); for Mounted where from (Cached,
+                        Fetched); for Failed the sandbox's failure reason.
+                      type: string
+                    state:
+                      description: SandboxArtifactState is where an artifact stands.
+                      enum:
+                      - Resolved
+                      - Fetching
+                      - Dispatched
+                      - Mounted
+                      - Skipped
+                      - Failed
+                      type: string
                   required:
-                  - digest
                   - mountPath
                   - name
                   type: object

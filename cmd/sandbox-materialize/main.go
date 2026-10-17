@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -20,6 +21,15 @@ import (
 	"github.com/kubeswift-io/kubeswift/internal/oci"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
 	"github.com/kubeswift-io/kubeswift/internal/version"
+)
+
+// stage is where a run failed: it decides an optional artifact's skip reason.
+type stage int
+
+const (
+	stageResolve stage = iota
+	stageVerify
+	stageMaterialize
 )
 
 func main() {
@@ -34,6 +44,9 @@ func main() {
 		maxBytes   = flag.Int64("max-bytes", materialize.DefaultArtifactMaxBytes, "size cap for a read-only artifact (an oci layout, or a tree with --read-only-artifact); 0 is none. Never applies to a rootfs")
 		maxEntries = flag.Int("max-entries", materialize.DefaultArtifactMaxEntries, "entry cap for an unpacked read-only artifact; 0 is none")
 		timeout    = flag.Duration("timeout", 30*time.Minute, "bound on the whole run (resolve, verify, pull); a registry that stops answering fails the init container instead of holding it forever")
+		deadline   = flag.String("deadline", "", "RFC 3339 time the whole run must end by, in addition to --timeout (an optional artifact's deadline)")
+		optional   = flag.Bool("optional", false, "an optional artifact: any failure is recorded in the result as a skip, with a reason, and the run exits 0; the artifact is not marked ok")
+		okFile     = flag.String("ok-file", "", "written once this run has resolved, verified (when a key is given) and materialized the artifact; its absence means not to mount it")
 		resultFile = flag.String("result-file", "/dev/termination-log", "where to write the JSON result")
 		showVer    = flag.Bool("version", false, "print version and exit")
 	)
@@ -50,6 +63,16 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
+	if *deadline != "" {
+		d, err := time.Parse(time.RFC3339, *deadline)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-materialize: --deadline: %v\n", err)
+			os.Exit(2)
+		}
+		var dcancel context.CancelFunc
+		ctx, dcancel = context.WithDeadline(ctx, d)
+		defer dcancel()
+	}
 
 	// The pull Secret is the tenant's input: only its "auths" are kept, in a
 	// private copy, so neither go-containerregistry nor cosign (which reads
@@ -91,14 +114,50 @@ func main() {
 		opts.MaxBytes, opts.MaxEntries = *maxBytes, *maxEntries
 	}
 
+	res, failed, err := run(ctx, opts, *verifyKey, *insecure, artifact)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sandbox-materialize: %v\n", err)
+		if !*optional {
+			os.Exit(1)
+		}
+		// An optional artifact the workload starts without: why goes in the
+		// result, and no ok file is written, so nothing mounts it.
+		skip := &materialize.Result{ImageRef: *image, Skipped: &materialize.Skip{
+			Reason: skipReason(ctx, failed, err), Message: err.Error()}}
+		if werr := materialize.WriteResult(*resultFile, skip); werr != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-materialize: warning: write result: %v\n", werr)
+		}
+		return
+	}
+
+	if *okFile != "" {
+		// Last: only a run that got this far says the artifact may be mounted.
+		if err := os.WriteFile(*okFile, []byte(res.Digest+"\n"), 0o444); err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-materialize: write ok file: %v\n", err)
+			if !*optional {
+				os.Exit(1)
+			}
+		}
+	}
+	if err := materialize.WriteResult(*resultFile, res); err != nil {
+		// Non-fatal: the artifact is published; only the result surface failed.
+		fmt.Fprintf(os.Stderr, "sandbox-materialize: warning: write result: %v\n", err)
+	}
+	fmt.Fprintf(os.Stderr, "sandbox-materialize: %s -> %s (digest=%s cacheHit=%t size=%dMiB)\n",
+		res.ImageRef, res.RootfsPath, res.Digest, res.CacheHit, res.SizeBytes>>20)
+}
+
+// run resolves, verifies (with a key) and materializes, and says at which
+// stage it failed.
+func run(ctx context.Context, opts materialize.Options, verifyKey string, insecure, artifact bool) (*materialize.Result, stage, error) {
 	// Verify-before-boot: resolve the digest and cosign-verify image@digest against
 	// the pinned public key BEFORE materializing a single layer. A missing/invalid
-	// signature exits non-zero here, so the init container fails and the sandbox
-	// goes Failed — it never boots an unverified rootfs. cosign speaks HTTPS only.
-	if *verifyKey != "" {
-		if *insecure {
-			fmt.Fprintln(os.Stderr, "sandbox-materialize: --verify-key requires a TLS registry (incompatible with --insecure)")
-			os.Exit(1)
+	// signature fails here, so the init container fails and the sandbox goes
+	// Failed (an optional artifact is skipped) -- it never mounts unverified
+	// content. cosign speaks HTTPS only.
+	if verifyKey != "" {
+		if insecure {
+			return nil, stageVerify, errors.New("--verify-key requires a TLS registry (incompatible with --insecure)")
 		}
 		resolve := materialize.Resolve
 		if opts.Mode == materialize.ModeLayout {
@@ -106,29 +165,25 @@ func main() {
 			// (an index's own, not a platform image's).
 			resolve = materialize.ResolveDescriptor
 		}
-		repo, digest, rerr := resolve(opts)
-		if rerr != nil {
-			fmt.Fprintf(os.Stderr, "sandbox-materialize: resolve for verify: %v\n", rerr)
-			os.Exit(1)
+		repo, digest, err := resolve(opts)
+		if err != nil {
+			return nil, stageResolve, fmt.Errorf("resolve for verify: %w", err)
 		}
 		// The key is read once: cosign checks a private copy of these bytes
 		// and the verification record is named from the same bytes, so a
 		// key Secret changed meanwhile cannot have its fingerprint recorded
 		// for a check another key passed.
-		key, kerr := os.ReadFile(*verifyKey)
+		key, kerr := os.ReadFile(verifyKey)
 		if kerr != nil || len(key) == 0 {
-			fmt.Fprintf(os.Stderr, "sandbox-materialize: read verify key: %v\n", kerr)
-			os.Exit(1)
+			return nil, stageVerify, fmt.Errorf("read verify key: %v", kerr)
 		}
 		pinned, perr := materialize.PinFile("", "verify-key-*.pub", key)
 		if perr != nil {
-			fmt.Fprintf(os.Stderr, "sandbox-materialize: pin verify key: %v\n", perr)
-			os.Exit(1)
+			return nil, stageVerify, fmt.Errorf("pin verify key: %w", perr)
 		}
 		defer os.Remove(pinned)
-		if verr := oci.Verify(ctx, repo, digest, pinned); verr != nil {
-			fmt.Fprintf(os.Stderr, "sandbox-materialize: %v\n", verr)
-			os.Exit(1)
+		if err := oci.Verify(ctx, repo, digest, pinned); err != nil {
+			return nil, stageVerify, err
 		}
 		// Materialize the digest we just verified, not the original ref. Otherwise
 		// Materialize re-resolves the tag independently and an attacker with push
@@ -139,12 +194,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "sandbox-materialize: cosign-verified %s@%s\n", repo, digest)
 		if artifact {
 			if err := materialize.RecordVerified(opts.CacheDir, digest, key); err != nil {
-				fmt.Fprintf(os.Stderr, "sandbox-materialize: %v\n", err)
-				os.Exit(1)
+				return nil, stageVerify, err
 			}
 		}
 	}
-
 	var res *materialize.Result
 	var err error
 	if opts.Mode == materialize.ModeLayout {
@@ -153,14 +206,22 @@ func main() {
 		res, err = materialize.Materialize(opts, nil)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "sandbox-materialize: %v\n", err)
-		os.Exit(1)
+		return nil, stageMaterialize, err
 	}
+	return res, stageMaterialize, nil
+}
 
-	if err := materialize.WriteResult(*resultFile, res); err != nil {
-		// Non-fatal: the artifact is published; only the result surface failed.
-		fmt.Fprintf(os.Stderr, "sandbox-materialize: warning: write result: %v\n", err)
+// skipReason names why an optional artifact was skipped, from a fixed set.
+func skipReason(ctx context.Context, failed stage, err error) string {
+	switch {
+	case ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded):
+		return "FetchTimeout"
+	case failed == stageVerify:
+		return "VerificationFailed"
+	case materialize.RegistryRefused(err):
+		return "ResolveRefused"
+	case failed == stageResolve || materialize.RegistryTransient(err):
+		return "RegistryUnavailable"
 	}
-	fmt.Fprintf(os.Stderr, "sandbox-materialize: %s -> %s (digest=%s cacheHit=%t size=%dMiB)\n",
-		res.ImageRef, res.RootfsPath, res.Digest, res.CacheHit, res.SizeBytes>>20)
+	return "MaterializeFailed"
 }

@@ -147,7 +147,7 @@ func TestArtifactInits_SecretsAndKey(t *testing.T) {
 		{Name: "b", Ref: "r.example/b:1", MountPath: "/b"},
 	}
 	sb.Status.Artifacts = []sandboxv1alpha1.SandboxArtifactStatus{{Name: "a", Digest: "sha256:" + strings.Repeat("1", 64)}, {Name: "b", Digest: "sha256:" + strings.Repeat("2", 64)}}
-	inits, vols := artifactInits(sb)
+	inits, vols := artifactInits(sb, true)
 	if len(inits) != 2 {
 		t.Fatalf("want 2 inits, got %d", len(inits))
 	}

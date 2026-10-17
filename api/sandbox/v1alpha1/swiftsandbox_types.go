@@ -475,10 +475,40 @@ type SandboxArtifact struct {
 	PullSecretRef *corev1.LocalObjectReference `json:"pullSecretRef,omitempty"`
 	// VerifyKeySecretRef names a Secret holding a cosign public key
 	// (cosign.pub). The artifact is verified at its digest before it is
-	// mounted; a missing or invalid signature fails the sandbox. Needs a TLS
-	// registry.
+	// mounted; a missing or invalid signature fails the sandbox (an optional
+	// artifact is not mounted). Needs a TLS registry.
 	// +optional
 	VerifyKeySecretRef *SecretObjectReference `json:"verifyKeySecretRef,omitempty"`
+	// Optional marks an artifact the workload can run without, such as a
+	// cache. When it cannot be resolved, fetched or verified in time the
+	// workload starts without it: nothing is mounted at mountPath, and
+	// status.artifacts says why. A required artifact (the default) fails the
+	// sandbox instead, or waits for an unreachable registry, as before.
+	// Verification is never skipped: an optional artifact that fails it is
+	// not mounted.
+	// +optional
+	Optional bool `json:"optional,omitempty"`
+	// FetchTimeout bounds how long an optional artifact may delay the
+	// workload, counted from the sandbox's creation: past it, the workload
+	// starts without the artifact. 0s uses it only if it is already on the
+	// node. Only for optional artifacts; default 10s, at most 5m.
+	// +optional
+	FetchTimeout *metav1.Duration `json:"fetchTimeout,omitempty"`
+}
+
+// DefaultArtifactFetchTimeout is an optional artifact's fetchTimeout when
+// unset.
+const DefaultArtifactFetchTimeout = 10 * time.Second
+
+// MaxArtifactFetchTimeout is the longest fetchTimeout accepted.
+const MaxArtifactFetchTimeout = 5 * time.Minute
+
+// ArtifactFetchTimeout returns an optional artifact's fetch timeout.
+func (a *SandboxArtifact) ArtifactFetchTimeout() time.Duration {
+	if a.FetchTimeout == nil {
+		return DefaultArtifactFetchTimeout
+	}
+	return a.FetchTimeout.Duration
 }
 
 // ArtifactLayout returns the artifact's layout, oci when unset.
@@ -489,11 +519,55 @@ func (a *SandboxArtifact) ArtifactLayout() string {
 	return a.Layout
 }
 
-// SandboxArtifactStatus is a mounted artifact as resolved.
+// SandboxArtifactState is where an artifact stands.
+// +kubebuilder:validation:Enum=Resolved;Fetching;Dispatched;Mounted;Skipped;Failed
+type SandboxArtifactState string
+
+const (
+	// SandboxArtifactResolved: its digest is known; not delivered yet.
+	SandboxArtifactResolved SandboxArtifactState = "Resolved"
+	// SandboxArtifactFetching: being fetched onto the node.
+	SandboxArtifactFetching SandboxArtifactState = "Fetching"
+	// SandboxArtifactDispatched: sent with the workload; the launcher mounts
+	// it before the workload starts or fails the start.
+	SandboxArtifactDispatched SandboxArtifactState = "Dispatched"
+	// SandboxArtifactMounted: mounted, and the workload has run with it.
+	SandboxArtifactMounted SandboxArtifactState = "Mounted"
+	// SandboxArtifactSkipped: an optional artifact the workload runs without;
+	// reason and message say why.
+	SandboxArtifactSkipped SandboxArtifactState = "Skipped"
+	// SandboxArtifactFailed: a required artifact that failed the sandbox;
+	// reason (the sandbox's: ArtifactResolveFailed, ArtifactMaterializeFailed,
+	// ArtifactMissing) and message say why.
+	SandboxArtifactFailed SandboxArtifactState = "Failed"
+)
+
+// SandboxArtifactStatus is an artifact as resolved, and how it was
+// delivered. An entry without a state was written by a release that did not
+// record one: it was mounted.
 type SandboxArtifactStatus struct {
-	Name      string `json:"name"`
-	Digest    string `json:"digest"`
+	Name string `json:"name"`
+	// Digest is what the node mounts; empty when an optional artifact was
+	// skipped before it was resolved.
+	// +optional
+	Digest    string `json:"digest,omitempty"`
 	MountPath string `json:"mountPath"`
+	// +optional
+	State SandboxArtifactState `json:"state,omitempty"`
+	// Reason is a CamelCase word: for Skipped why (ResolveRefused,
+	// RegistryUnavailable, FetchTimeout, VerificationFailed,
+	// MaterializeFailed, KernelUnsupported); for Mounted where from (Cached,
+	// Fetched); for Failed the sandbox's failure reason.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
+// Usable reports whether the artifact is to be mounted: it is resolved and
+// was not skipped.
+func (s *SandboxArtifactStatus) Usable() bool {
+	return s.Digest != "" && s.State != SandboxArtifactSkipped
 }
 
 // SandboxSecretFile is a Secret whose keys become files in the guest.

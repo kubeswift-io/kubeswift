@@ -229,7 +229,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if err := r.List(ctx, &pods, client.InNamespace(pool.Namespace), client.MatchingLabels{PoolLabelKey: pool.Name}); err != nil {
 		return ctrl.Result{}, err
 	}
-	var ready, warmLive, claimed int
+	var ready, warmLive, claimed, mountCapable int
 	var warmPods []*corev1.Pod
 	profile := poolSlotProfile(&pool)
 	for i := range pods.Items {
@@ -288,6 +288,9 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			warmPods = append(warmPods, p)
 			if slotReady(p) {
 				ready++
+				if slotSupportsWarmMounts(p) {
+					mountCapable++
+				}
 			}
 		} else {
 			claimed++ // claimed slots (Phase 3) are tracked but not replenished here
@@ -297,6 +300,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Slots that exist but cannot take a checkout yet: still scheduling,
 	// materializing or booting. Reported apart from the warm ones.
 	pool.Status.WarmingReplicas = int32(warmLive - ready)
+	setCheckoutArtifactsCondition(&pool, ready, mountCapable)
 
 	// The narrowing — only once every LIVE slot above holds its own grant, so no
 	// running slot loses access. Never fatal.
@@ -684,4 +688,21 @@ func slotAccount(p *corev1.Pod) string {
 		return swiftguest.LauncherServiceAccountFor(swiftguest.SandboxLauncher)
 	}
 	return p.Spec.ServiceAccountName
+}
+
+// setCheckoutArtifactsCondition reports how many ready slots can mount
+// artifacts at checkout. Unknown with no ready slot: nothing to say yet.
+func setCheckoutArtifactsCondition(pool *sandboxv1alpha1.SwiftSandboxPool, ready, capable int) {
+	c := metav1.Condition{Type: sandboxv1alpha1.SwiftSandboxPoolConditionCheckoutArtifacts, ObservedGeneration: pool.Generation}
+	switch {
+	case ready == 0:
+		c.Status, c.Reason, c.Message = metav1.ConditionUnknown, "NoReadySlot", "no ready slot"
+	case capable == ready:
+		c.Status, c.Reason = metav1.ConditionTrue, "WarmMounts"
+		c.Message = fmt.Sprintf("%d/%d ready slots can mount artifacts at checkout", capable, ready)
+	default:
+		c.Status, c.Reason = metav1.ConditionFalse, "KernelWithoutWarmMounts"
+		c.Message = fmt.Sprintf("%d/%d ready slots can mount artifacts at checkout (needs kernels/sandbox 6.6.15 or kernels/gpu-sandbox 6.6.4 or newer)", capable, ready)
+	}
+	apimeta.SetStatusCondition(&pool.Status.Conditions, c)
 }
