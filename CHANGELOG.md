@@ -6,12 +6,39 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.17.0] — 2026-10-17
+
+Trusted checkout artifacts for warm SwiftSandbox slots: a sandbox can mark an
+artifact optional and start without it, a pool's nodes can hold artifacts
+before any checkout asks for them, the node artifact cache can be bounded,
+and a warm checkout no longer waits on the registry to re-authorize an
+artifact it already uses.
+
+- **Optional artifacts.** An artifact marked `optional` that cannot be
+  resolved, fetched or verified within its `fetchTimeout` is left out: the
+  workload starts with nothing mounted at `mountPath`. Verification is never
+  skipped, and required artifacts, the default, behave as in v0.16.
+- **SwiftArtifactPlacement** (new CRD). Prepares digest-pinned artifacts on
+  every node that runs a slot of a SwiftSandboxPool. A checkout of a prepared
+  artifact needs no fetch: on a test cluster, the median claim-to-dispatch
+  time of a node's first checkout of a small artifact went from 8 s (a fetch
+  pod) to 2 ms.
+- **Per-artifact status.** Each artifact reports its state (Resolved,
+  Fetching, Dispatched, Mounted, Skipped, Failed) with Events and metrics.
+- **Node artifact cache limits**, off by default.
+
+Out of this release and still open: a cluster-scoped artifact verification
+policy (#790) and exporting a guest directory as an artifact (#791).
+
 ### Upgrade
 
-- CRDs changed: `swiftsandboxes` (optional artifacts, artifact status),
-  `swiftsandboxpools` (status), and a new `swiftartifactplacements`. Apply
-  `crds/` before the upgrade. The controller's ClusterRole gains
-  `swiftartifactplacements`.
+- CRDs changed: `swiftsandboxes` (optional artifacts, artifact status) and
+  the new `swiftartifactplacements` (18 CRDs across 10 groups). Apply
+  `crds/` before `helm upgrade`: Helm does not update CRDs. The controller's
+  ClusterRole gains `swiftartifactplacements`.
+- Running sandboxes and warm slots are not restarted. A warm slot started
+  before the upgrade serves checkouts as before, optional artifacts included:
+  the controller decides what a checkout mounts.
 - New chart values `sandboxMaterialize.artifactCache.{maxBytes,maxPercent,
   minAge,evictLegacy}`; the defaults set no limit, so the node artifact cache
   behaves as in v0.16. Materializer containers and sandbox launchers gain a
@@ -20,6 +47,11 @@ All notable changes to KubeSwift are documented here.
   (they take no use locks).
 - Existing artifacts stay required and behave as in v0.16; nothing becomes
   optional unless its spec says so.
+
+### Security
+
+- rustls 0.23.46 in swiftletd and the Rust crates, for RUSTSEC-2026-0346,
+  RUSTSEC-2026-0347, RUSTSEC-2026-0348 and RUSTSEC-2026-0349 (#800).
 
 ### Added
 
@@ -74,6 +106,17 @@ All notable changes to KubeSwift are documented here.
   New metrics: `kubeswift_registry_lookups_total{answer}`,
   `kubeswift_registry_requests_total{reason,outcome}`,
   `kubeswift_registry_request_seconds{reason}`.
+
+- Dependencies: Debian base images refreshed and the swiftletd build image
+  on Rust 1.99.0 (#782); tokio 1.53.2, libc 0.2.190, futures 0.3.34 (#783);
+  prometheus client_golang 1.25.0, docker/cli 29.9.0, golang.org/x/sys
+  0.49.0, golang.org/x/sync 0.24.0 (#784); CodeQL action 4.38.3 (#785).
+
+### Docs
+
+- `docs/sandbox/warm-pool.md`: optional artifacts, how a workload tells a
+  mounted artifact from an absent one, preparing artifacts before checkout,
+  and cache limits. `docs/crds.md` documents SwiftArtifactPlacement.
 
 ---
 
