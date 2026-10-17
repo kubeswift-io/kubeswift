@@ -1,0 +1,689 @@
+package swiftsandbox
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/google/go-containerregistry/pkg/name"
+	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
+
+	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/metrics"
+)
+
+// A SwiftArtifactPlacement prepares its artifacts on each node that runs a
+// slot of its pool, with a prepare pod per node: exactly the containers a
+// checkout's fetch pod runs (the same materializer, pull Secret, cosign key,
+// cache markers), pinned to the node. Nothing new is trusted: a checkout
+// still resolves its own artifacts with its own credentials, and the node's
+// launcher still checks that the entry was read from the checkout's
+// repository and verified with its key before it is mounted. A placement
+// only moves the fetch from the checkout to before it.
+const (
+	// placementLabel names the placement on its prepare pods.
+	placementLabel = "sandbox.kubeswift.io/artifact-placement"
+	// placementNodeAnnotation names the node a prepare pod is for.
+	placementNodeAnnotation = "sandbox.kubeswift.io/placement-node"
+	// placementResync re-reads the pool and the registry: the lookup keeps
+	// the authorization of the placement's credentials fresh (the resolver
+	// renews an answer looked up after half its lifetime).
+	placementResync = time.Minute
+	// placementRecheck is how long a node counts as prepared before its
+	// cache is checked again (an entry can be evicted or the node rebuilt).
+	placementRecheck = 15 * time.Minute
+	// placementPrepareTimeout bounds one artifact's preparation on a node.
+	placementPrepareTimeout = 10 * time.Minute
+	// placementBackoff and placementMaxBackoff space retries on a node that
+	// failed.
+	placementBackoff    = 30 * time.Second
+	placementMaxBackoff = 10 * time.Minute
+)
+
+// ArtifactPlacementReconciler reconciles SwiftArtifactPlacement.
+type ArtifactPlacementReconciler struct {
+	client.Client
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
+	// resolver is the registry resolver (sharedResolver when nil): the same
+	// cache of authorizations the checkouts use.
+	resolver *registryResolver
+	resolved chan event.GenericEvent
+	now      func() time.Time
+}
+
+func (r *ArtifactPlacementReconciler) clock() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
+}
+
+// placementView is the placement as a sandbox that mounts its artifacts, so
+// the checkout's own request and container builders serve it unchanged. The
+// artifacts are optional, so each container reports a classified result
+// (prepared, or skipped and why) and never fails the pod, bounded by
+// placementPrepareTimeout from now.
+func placementView(p *sandboxv1alpha1.SwiftArtifactPlacement, now time.Time) *sandboxv1alpha1.SwiftSandbox {
+	v := &sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{
+		Name: p.Name, Namespace: p.Namespace, UID: p.UID, CreationTimestamp: metav1.NewTime(now),
+	}}
+	for _, a := range p.Spec.Artifacts {
+		v.Spec.Artifacts = append(v.Spec.Artifacts, sandboxv1alpha1.SandboxArtifact{
+			Name: a.Name, Ref: a.Ref, Layout: a.ArtifactLayout(), MountPath: "/" + a.Name,
+			PullSecretRef: a.PullSecretRef, VerifyKeySecretRef: a.VerifyKeySecretRef,
+			Optional: true, FetchTimeout: &metav1.Duration{Duration: placementPrepareTimeout},
+		})
+	}
+	return v
+}
+
+func (r *ArtifactPlacementReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	var p sandboxv1alpha1.SwiftArtifactPlacement
+	if err := r.Get(ctx, req.NamespacedName, &p); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if p.DeletionTimestamp != nil {
+		return ctrl.Result{}, nil // its prepare pods are garbage collected with it
+	}
+	orig := p.Status.DeepCopy()
+	now := r.clock()
+
+	var pool sandboxv1alpha1.SwiftSandboxPool
+	err := r.Get(ctx, types.NamespacedName{Namespace: p.Namespace, Name: p.Spec.PoolRef.Name}, &pool)
+	if apierrors.IsNotFound(err) {
+		if err := r.deletePreparePods(ctx, &p, nil); err != nil {
+			return ctrl.Result{}, err
+		}
+		p.Status.Nodes = nil
+		r.summarize(&p, sandboxv1alpha1.PlacementReasonPoolNotFound, fmt.Sprintf("SwiftSandboxPool %s not found", p.Spec.PoolRef.Name))
+		return r.finish(ctx, &p, orig, placementResync)
+	}
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	targets, err := r.targetNodes(ctx, &p)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	authorized, refused := r.authorize(ctx, &p, now)
+
+	// Nodes that left the pool stop counting; their prepare pods go.
+	if err := r.deletePreparePods(ctx, &p, targets); err != nil {
+		return ctrl.Result{}, err
+	}
+	var nodes []sandboxv1alpha1.PlacementNodeStatus
+	requeue := placementResync
+	for _, name := range sortedKeys(targets) {
+		ns, after, err := r.reconcileNode(ctx, &p, name, targets[name], authorized, now)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		nodes = append(nodes, ns)
+		if after > 0 && after < requeue {
+			requeue = after
+		}
+	}
+	p.Status.Nodes = nodes
+
+	reason, msg := sandboxv1alpha1.PlacementReasonPreparing, ""
+	switch {
+	case refused != "":
+		reason, msg = sandboxv1alpha1.PlacementReasonArtifactRefused, refused
+	case len(targets) == 0:
+		reason, msg = sandboxv1alpha1.PlacementReasonNoTargetNodes, fmt.Sprintf("no node runs a slot of pool %s", p.Spec.PoolRef.Name)
+	}
+	r.summarize(&p, reason, msg)
+	return r.finish(ctx, &p, orig, requeue)
+}
+
+// targetNodes maps each node running a slot of the placement's pool to one
+// of its slot pods (for the tolerations and image pull Secrets the node's
+// launcher pods use).
+func (r *ArtifactPlacementReconciler) targetNodes(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement) (map[string]*corev1.Pod, error) {
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(p.Namespace), client.MatchingLabels{PoolLabelKey: p.Spec.PoolRef.Name}); err != nil {
+		return nil, err
+	}
+	out := map[string]*corev1.Pod{}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if pod.Spec.NodeName == "" || pod.DeletionTimestamp != nil || podFinished(pod) {
+			continue
+		}
+		if _, ok := out[pod.Spec.NodeName]; !ok {
+			out[pod.Spec.NodeName] = pod
+		}
+	}
+	return out, nil
+}
+
+// authorize looks every artifact up with its own credentials through the
+// shared resolver: only an artifact the registry serves to them is prepared,
+// and the lookup keeps that authorization fresh for checkouts that use the
+// same credentials. It returns the artifacts authorized at their digest, and
+// a message when any was refused.
+func (r *ArtifactPlacementReconciler) authorize(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement, now time.Time) (map[string]bool, string) {
+	view := placementView(p, now)
+	prev := map[string]sandboxv1alpha1.PlacementArtifactStatus{}
+	for _, a := range p.Status.Artifacts {
+		prev[a.Name] = a
+	}
+	status := make([]sandboxv1alpha1.PlacementArtifactStatus, len(p.Spec.Artifacts))
+	authorized := map[string]bool{}
+	var refused []string
+	reqs, err := artifactRequests(ctx, r.Client, view)
+	if err != nil {
+		// A missing or unreadable pull Secret: nothing can be authorized.
+		for i, a := range p.Spec.Artifacts {
+			status[i] = sandboxv1alpha1.PlacementArtifactStatus{Name: a.Name, Reason: sandboxv1alpha1.PlacementReasonArtifactRefused, Message: truncateMessage(err.Error())}
+		}
+		p.Status.Artifacts = status
+		return authorized, truncateMessage(err.Error())
+	}
+	lookup := r.lookup(p)
+	prime(lookup, reqs...)
+	for i, a := range p.Spec.Artifacts {
+		st := sandboxv1alpha1.PlacementArtifactStatus{Name: a.Name, PreparedNodes: prev[a.Name].PreparedNodes}
+		res, done := lookup(reqs[i])
+		switch {
+		case !done:
+			st.Reason, st.Message = sandboxv1alpha1.PlacementReasonResolving, "waiting for the registry to answer"
+		case res.err != nil && registryRefused(res.err):
+			st.Reason, st.Message = sandboxv1alpha1.PlacementReasonArtifactRefused, truncateMessage(res.err.Error())
+			refused = append(refused, a.Name+": "+st.Message)
+		case res.err != nil:
+			st.Reason, st.Message = sandboxv1alpha1.PlacementReasonResolving, truncateMessage(res.err.Error())
+		case res.digest != digestOf(a.Ref):
+			// A digest reference answers with its own digest; anything else
+			// is not the artifact the placement names.
+			st.Reason, st.Message = sandboxv1alpha1.PlacementReasonArtifactRefused,
+				fmt.Sprintf("the registry served %s for %s", res.digest, a.Ref)
+			refused = append(refused, a.Name+": "+st.Message)
+		default:
+			st.Reason, st.Digest = sandboxv1alpha1.PlacementReasonAuthorized, res.digest
+			authorized[a.Name] = true
+		}
+		status[i] = st
+	}
+	p.Status.Artifacts = status
+	return authorized, strings.Join(refused, "; ")
+}
+
+// digestOf is the digest a digest reference pins.
+func digestOf(ref string) string {
+	if i := strings.LastIndex(ref, "@"); i >= 0 {
+		return ref[i+1:]
+	}
+	return ""
+}
+
+// lookup is the resolver lookup for p: a request that is not answered within
+// the inline wait requeues p when it finishes.
+func (r *ArtifactPlacementReconciler) lookup(p *sandboxv1alpha1.SwiftArtifactPlacement) lookupFunc {
+	res := r.resolver
+	if res == nil {
+		res = sharedResolver
+	}
+	w := waiter{obj: &sandboxv1alpha1.SwiftArtifactPlacement{ObjectMeta: metav1.ObjectMeta{Namespace: p.Namespace, Name: p.Name}}}
+	if r.resolved != nil {
+		w.ch = r.resolved
+	} else {
+		w.obj = nil
+	}
+	var deadline time.Time
+	seen := map[resolveKey]bool{}
+	return func(req resolveRequest) (resolveResult, bool) {
+		req.namespace = p.Namespace
+		if deadline.IsZero() {
+			deadline = res.now().Add(res.inlineWait)
+		}
+		req.deadline = deadline
+		req.followUp = req.followUp || seen[req.key]
+		seen[req.key] = true
+		return res.get(req, w)
+	}
+}
+
+// reconcileNode moves one node toward holding every authorized artifact and
+// returns its status, and when the placement should look at it again.
+func (r *ArtifactPlacementReconciler) reconcileNode(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement, node string, slot *corev1.Pod, authorized map[string]bool, now time.Time) (sandboxv1alpha1.PlacementNodeStatus, time.Duration, error) {
+	prev := nodeStatus(p, node)
+	st := sandboxv1alpha1.PlacementNodeStatus{Name: node, ObservedGeneration: p.Generation}
+	if prev != nil && prev.ObservedGeneration == p.Generation {
+		st.PreparedAt, st.LastFailureTime = prev.PreparedAt, prev.LastFailureTime
+		st.Prepared, st.Reason, st.Message = prev.Prepared, prev.Reason, prev.Message
+		st.Failures = prev.Failures
+	}
+	want := wantedArtifacts(p, authorized)
+
+	var pod corev1.Pod
+	podName := preparePodName(p, node)
+	err := r.Get(ctx, types.NamespacedName{Namespace: p.Namespace, Name: podName}, &pod)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return st, 0, err
+	}
+	if err == nil && !metav1.IsControlledBy(&pod, p) {
+		// Only a pod this placement created is read for a result.
+		st.Prepared, st.Reason = false, sandboxv1alpha1.PlacementReasonPrepareFailed
+		st.Message = fmt.Sprintf("pod %s exists and was not created for this placement", podName)
+		return st, placementResync, nil
+	}
+	if err == nil {
+		switch pod.Status.Phase {
+		case corev1.PodSucceeded, corev1.PodFailed:
+			r.readPrepareResult(p, &st, &pod, want)
+			if err := r.Delete(ctx, &pod); err != nil && !apierrors.IsNotFound(err) {
+				return st, 0, err
+			}
+			return st, time.Second, nil
+		default:
+			st.Prepared = false
+			st.Reason, st.Message = sandboxv1alpha1.PlacementReasonPreparing, ""
+			return st, placementResync, nil
+		}
+	}
+
+	// No prepare pod. A prepared node stays so until its recheck; a failed
+	// one waits out its backoff; otherwise one is started.
+	if len(want) == 0 {
+		st.Prepared = false
+		st.Reason, st.Message = sandboxv1alpha1.PlacementReasonPreparing, "waiting for the registry to authorize the artifacts"
+		return st, placementResync, nil
+	}
+	if st.Prepared && st.PreparedAt != nil && now.Sub(st.PreparedAt.Time) < placementRecheck {
+		return st, st.PreparedAt.Add(placementRecheck).Sub(now), nil
+	}
+	if !st.Prepared && st.LastFailureTime != nil {
+		if wait := backoffFor(st.Failures) - now.Sub(st.LastFailureTime.Time); wait > 0 {
+			return st, wait, nil
+		}
+	}
+	pp := preparePod(p, node, slot, want, now)
+	if err := controllerutil.SetControllerReference(p, pp, r.Scheme); err != nil {
+		return st, 0, err
+	}
+	if err := r.Create(ctx, pp); err != nil && !apierrors.IsAlreadyExists(err) {
+		return st, 0, err
+	}
+	if !st.Prepared {
+		st.Reason, st.Message = sandboxv1alpha1.PlacementReasonPreparing, ""
+	}
+	return st, placementResync, nil
+}
+
+// readPrepareResult records a finished prepare pod on st: the node is
+// prepared when every wanted artifact's container prepared it.
+func (r *ArtifactPlacementReconciler) readPrepareResult(p *sandboxv1alpha1.SwiftArtifactPlacement, st *sandboxv1alpha1.PlacementNodeStatus, pod *corev1.Pod, want []string) {
+	failed := map[string]string{}
+	reason := sandboxv1alpha1.PlacementReasonPrepareFailed
+	var latest time.Time
+	for _, name := range want {
+		cs := containerStatus(pod, artifactInitPrefix+name)
+		switch {
+		case cs == nil || cs.State.Terminated == nil:
+			failed[name] = firstNonEmpty(pod.Status.Message, pod.Status.Reason, "did not run")
+		case cs.State.Terminated.ExitCode != 0:
+			failed[name] = firstNonEmpty(strings.TrimSpace(cs.State.Terminated.Message), "materialize failed")
+		default:
+			res, ok := artifactResult(cs)
+			if !ok {
+				failed[name] = "no result"
+			} else if res.Skipped != nil {
+				failed[name] = res.Skipped.Reason + ": " + res.Skipped.Message
+				if res.Skipped.Reason == "VerificationFailed" {
+					reason = sandboxv1alpha1.PlacementReasonVerificationFailed
+				}
+			}
+			if t := cs.State.Terminated.FinishedAt.Time; t.After(latest) {
+				latest = t
+			}
+		}
+	}
+	if len(failed) == 0 {
+		at := metav1.NewTime(latest)
+		if latest.IsZero() {
+			at = metav1.NewTime(r.clock())
+		}
+		if !st.Prepared {
+			r.Recorder.Eventf(p, corev1.EventTypeNormal, "Prepared", "node %s holds every artifact", st.Name)
+		}
+		st.Prepared, st.PreparedAt, st.LastFailureTime, st.Failures = true, &at, nil, 0
+		st.Reason, st.Message = sandboxv1alpha1.PlacementReasonPrepared, ""
+		metrics.ArtifactPreparesTotal.WithLabelValues("prepared").Inc()
+		return
+	}
+	var parts []string
+	for _, name := range sortedKeys(failed) {
+		parts = append(parts, name+": "+failed[name])
+	}
+	at := metav1.NewTime(r.clock())
+	if st.Prepared || st.LastFailureTime == nil {
+		r.Recorder.Eventf(p, corev1.EventTypeWarning, reason, "node %s: %s", st.Name, truncateMessage(strings.Join(parts, "; ")))
+	}
+	st.Prepared, st.LastFailureTime = false, &at
+	st.Failures++
+	st.Reason, st.Message = reason, truncateMessage(strings.Join(parts, "; "))
+	if reason == sandboxv1alpha1.PlacementReasonVerificationFailed {
+		metrics.ArtifactPreparesTotal.WithLabelValues("verification_failed").Inc()
+	} else {
+		metrics.ArtifactPreparesTotal.WithLabelValues("failed").Inc()
+	}
+}
+
+// backoffFor doubles from placementBackoff with each consecutive failure on
+// the node (recorded in its status, so it survives a controller restart), up
+// to placementMaxBackoff.
+func backoffFor(failures int32) time.Duration {
+	d := placementBackoff
+	for i := int32(1); i < failures && d < placementMaxBackoff; i++ {
+		d *= 2
+	}
+	return min(d, placementMaxBackoff)
+}
+
+// wantedArtifacts are the authorized artifacts of p, in spec order.
+func wantedArtifacts(p *sandboxv1alpha1.SwiftArtifactPlacement, authorized map[string]bool) []string {
+	var out []string
+	for _, a := range p.Spec.Artifacts {
+		if authorized[a.Name] {
+			out = append(out, a.Name)
+		}
+	}
+	return out
+}
+
+// preparePod builds the pod that prepares want on node: the checkout fetch
+// pod's containers, one per artifact, pinned to the node.
+func preparePod(p *sandboxv1alpha1.SwiftArtifactPlacement, node string, slot *corev1.Pod, want []string, now time.Time) *corev1.Pod {
+	view := placementView(p, now)
+	only := view.DeepCopy()
+	only.Spec.Artifacts = nil
+	for _, a := range view.Spec.Artifacts {
+		if slices.Contains(want, a.Name) {
+			only.Spec.Artifacts = append(only.Spec.Artifacts, a)
+			only.Status.Artifacts = append(only.Status.Artifacts, sandboxv1alpha1.SandboxArtifactStatus{
+				Name: a.Name, Digest: digestOf(a.Ref), MountPath: a.MountPath})
+		}
+	}
+	containers, volumes := artifactInits(only, false)
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        preparePodName(p, node),
+			Namespace:   p.Namespace,
+			Labels:      map[string]string{placementLabel: p.Name},
+			Annotations: map[string]string{placementNodeAnnotation: node},
+		},
+		Spec: corev1.PodSpec{
+			NodeName:      node,
+			RestartPolicy: corev1.RestartPolicyNever,
+			// Pinned by node name, so no scheduler gives up on it: the deadline
+			// ends a pod whose image pull stalls.
+			ActiveDeadlineSeconds:        ptr.To(int64((placementPrepareTimeout + 2*time.Minute) / time.Second)),
+			Containers:                   containers,
+			Volumes:                      volumes,
+			Tolerations:                  slot.Spec.Tolerations,
+			ImagePullSecrets:             slot.Spec.ImagePullSecrets,
+			AutomountServiceAccountToken: ptr.To(false),
+		},
+	}
+}
+
+// preparePodName is unique to the placement (its UID), the node and the
+// spec generation: a changed spec gets a new pod, an unchanged one finds its
+// own.
+func preparePodName(p *sandboxv1alpha1.SwiftArtifactPlacement, node string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s/%s/%d", p.UID, node, p.Generation)))
+	suffix := "-prep-" + hex.EncodeToString(sum[:])[:10]
+	base := p.Name
+	if max := 63 - len(suffix); len(base) > max {
+		base = strings.TrimRight(base[:max], "-.")
+	}
+	return base + suffix
+}
+
+// deletePreparePods deletes p's prepare pods for nodes not in keep, and
+// those of an older spec generation. keep nil deletes every one.
+func (r *ArtifactPlacementReconciler) deletePreparePods(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement, keep map[string]*corev1.Pod) error {
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(p.Namespace), client.MatchingLabels{placementLabel: p.Name}); err != nil {
+		return err
+	}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if !metav1.IsControlledBy(pod, p) {
+			continue
+		}
+		node := pod.Annotations[placementNodeAnnotation]
+		if _, ok := keep[node]; ok && pod.Name == preparePodName(p, node) {
+			continue
+		}
+		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// summarize fills the counts and the Prepared condition. reason and msg are
+// used when not every target node is prepared (or there is none).
+func (r *ArtifactPlacementReconciler) summarize(p *sandboxv1alpha1.SwiftArtifactPlacement, reason, msg string) {
+	p.Status.ObservedGeneration = p.Generation
+	p.Status.TargetNodes = int32(len(p.Status.Nodes))
+	p.Status.PreparedNodes = 0
+	count := map[string]int32{}
+	var failing []string
+	for _, n := range p.Status.Nodes {
+		if n.Prepared {
+			p.Status.PreparedNodes++
+			for _, a := range p.Spec.Artifacts {
+				count[a.Name]++
+			}
+		} else if n.Reason == sandboxv1alpha1.PlacementReasonPrepareFailed || n.Reason == sandboxv1alpha1.PlacementReasonVerificationFailed {
+			failing = append(failing, n.Name+": "+n.Message)
+			if reason == sandboxv1alpha1.PlacementReasonPreparing {
+				reason = n.Reason
+			}
+		}
+	}
+	for i := range p.Status.Artifacts {
+		p.Status.Artifacts[i].PreparedNodes = count[p.Status.Artifacts[i].Name]
+	}
+	cond := metav1.Condition{Type: sandboxv1alpha1.PlacementConditionPrepared, ObservedGeneration: p.Generation}
+	switch {
+	case p.Status.TargetNodes > 0 && p.Status.PreparedNodes == p.Status.TargetNodes:
+		cond.Status, cond.Reason = metav1.ConditionTrue, sandboxv1alpha1.PlacementReasonPrepared
+		cond.Message = fmt.Sprintf("%d/%d pool nodes hold every artifact", p.Status.PreparedNodes, p.Status.TargetNodes)
+	default:
+		cond.Status, cond.Reason = metav1.ConditionFalse, reason
+		cond.Message = msg
+		if cond.Message == "" {
+			cond.Message = fmt.Sprintf("%d/%d pool nodes hold every artifact", p.Status.PreparedNodes, p.Status.TargetNodes)
+			if len(failing) > 0 {
+				cond.Message += "; " + strings.Join(failing, "; ")
+			}
+		}
+		cond.Message = truncateMessage(cond.Message)
+	}
+	apimeta.SetStatusCondition(&p.Status.Conditions, cond)
+}
+
+// finish writes the status when it changed and requeues after.
+func (r *ArtifactPlacementReconciler) finish(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement, orig *sandboxv1alpha1.SwiftArtifactPlacementStatus, after time.Duration) (ctrl.Result, error) {
+	if !apiequality.Semantic.DeepEqual(orig, &p.Status) {
+		if err := r.Status().Update(ctx, p); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	return ctrl.Result{RequeueAfter: after}, nil
+}
+
+func nodeStatus(p *sandboxv1alpha1.SwiftArtifactPlacement, node string) *sandboxv1alpha1.PlacementNodeStatus {
+	for i := range p.Status.Nodes {
+		if p.Status.Nodes[i].Name == node {
+			return &p.Status.Nodes[i]
+		}
+	}
+	return nil
+}
+
+func containerStatus(pod *corev1.Pod, name string) *corev1.ContainerStatus {
+	for i := range pod.Status.ContainerStatuses {
+		if pod.Status.ContainerStatuses[i].Name == name {
+			return &pod.Status.ContainerStatuses[i]
+		}
+	}
+	return nil
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// placementsForPod maps a pool slot pod to the placements of its pool, and a
+// prepare pod to its placement.
+func (r *ArtifactPlacementReconciler) placementsForPod(ctx context.Context, obj client.Object) []reconcile.Request {
+	if name := obj.GetLabels()[placementLabel]; name != "" {
+		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: name}}}
+	}
+	pool := obj.GetLabels()[PoolLabelKey]
+	if pool == "" {
+		return nil
+	}
+	return r.placementsForPool(ctx, obj.GetNamespace(), pool)
+}
+
+func (r *ArtifactPlacementReconciler) placementsForPool(ctx context.Context, namespace, pool string) []reconcile.Request {
+	var list sandboxv1alpha1.SwiftArtifactPlacementList
+	if err := r.List(ctx, &list, client.InNamespace(namespace)); err != nil {
+		log.FromContext(ctx).Error(err, "list placements")
+		return nil
+	}
+	var out []reconcile.Request
+	for i := range list.Items {
+		if list.Items[i].Spec.PoolRef.Name == pool {
+			out = append(out, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])})
+		}
+	}
+	return out
+}
+
+func (r *ArtifactPlacementReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.resolved = make(chan event.GenericEvent, resolvedEventBuffer)
+	return ctrl.NewControllerManagedBy(mgr).
+		Named("sandbox-artifact-placement").
+		For(&sandboxv1alpha1.SwiftArtifactPlacement{}).
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.placementsForPod)).
+		Watches(&sandboxv1alpha1.SwiftSandboxPool{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+			return r.placementsForPool(ctx, obj.GetNamespace(), obj.GetName())
+		})).
+		WatchesRawSource(source.Channel(r.resolved, &handler.EnqueueRequestForObject{})).
+		Complete(r)
+}
+
+// placedKey identifies a prepared cache entry the way a checkout needs it:
+// read from this repository at this digest, in this layout, verified with
+// the key in this Secret (none when empty).
+type placedKey struct {
+	repository, digest, layout, key string
+}
+
+// preparedNodes are the nodes where the placements of sb's pool have
+// prepared every artifact sb mounts. Empty when sb mounts none or no
+// placement covers them. A hint for picking a slot: the launcher still checks
+// the node's entry before it mounts it.
+func (r *SwiftSandboxReconciler) preparedNodes(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox) map[string]bool {
+	arts := resolvedArtifacts(sb)
+	if len(arts) == 0 || sb.Spec.PoolRef == nil {
+		return nil
+	}
+	var list sandboxv1alpha1.SwiftArtifactPlacementList
+	if err := r.List(ctx, &list, client.InNamespace(sb.Namespace)); err != nil || len(list.Items) == 0 {
+		return nil
+	}
+	byNode := map[string]map[placedKey]bool{}
+	for i := range list.Items {
+		p := &list.Items[i]
+		if p.Spec.PoolRef.Name != sb.Spec.PoolRef.Name || p.DeletionTimestamp != nil {
+			continue
+		}
+		authorized := map[string]bool{}
+		for _, a := range p.Status.Artifacts {
+			if a.Reason == sandboxv1alpha1.PlacementReasonAuthorized {
+				authorized[a.Name] = true
+			}
+		}
+		for _, n := range p.Status.Nodes {
+			if !n.Prepared || n.ObservedGeneration != p.Generation {
+				continue
+			}
+			for _, a := range p.Spec.Artifacts {
+				if !authorized[a.Name] {
+					continue
+				}
+				if byNode[n.Name] == nil {
+					byNode[n.Name] = map[placedKey]bool{}
+				}
+				byNode[n.Name][placedKey{repoOf(a.Ref), digestOf(a.Ref), a.ArtifactLayout(), secretRefName(a.VerifyKeySecretRef)}] = true
+			}
+		}
+	}
+	out := map[string]bool{}
+	for node, have := range byNode {
+		all := true
+		for _, ra := range arts {
+			if !have[placedKey{repoOf(ra.spec.Ref), ra.digest, ra.spec.ArtifactLayout(), secretRefName(ra.spec.VerifyKeySecretRef)}] {
+				all = false
+				break
+			}
+		}
+		if all {
+			out[node] = true
+		}
+	}
+	return out
+}
+
+// repoOf is ref's repository, as the cache records where an entry was read
+// from.
+func repoOf(ref string) string {
+	r, err := name.ParseReference(ref)
+	if err != nil {
+		return ""
+	}
+	return r.Context().Name()
+}
+
+func secretRefName(s *sandboxv1alpha1.SecretObjectReference) string {
+	if s == nil {
+		return ""
+	}
+	return s.Name
+}

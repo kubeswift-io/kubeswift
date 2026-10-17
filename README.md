@@ -54,11 +54,12 @@ Boot your first VM → [Quickstart](docs/quickstart.md).
 | SwiftMigration | smig | `migration.kubeswift.io` | Namespaced | Move a guest between nodes |
 | SwiftSandbox | `sbox` | `sandbox.kubeswift.io` | Namespaced | Ephemeral OCI-rootfs microVM |
 | SwiftSandboxPool | `sboxpool` | `sandbox.kubeswift.io` | Namespaced | Warm pool of pre-booted sandboxes for sub-second checkout |
+| SwiftArtifactPlacement | `sap` | `sandbox.kubeswift.io` | Namespaced | OCI artifacts prepared on a warm pool's nodes before checkout |
 | Cluster | `ksc` | `fleet.kubeswift.io` | Namespaced | Member cluster federated by the gateway hub |
 | SwiftClusterStorageLocation | `csloc` | `storage.kubeswift.io` | Cluster | Registry for pushed artifacts, set once for the cluster |
 | SwiftStorageLocation | `sloc` | `storage.kubeswift.io` | Namespaced | A namespace's own registry, overriding the cluster's |
 
-17 CRDs, all `v1alpha1`.
+18 CRDs, all `v1alpha1`.
 
 ## Documentation
 

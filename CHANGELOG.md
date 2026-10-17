@@ -6,6 +6,15 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Upgrade
+
+- CRDs changed: `swiftsandboxes` (optional artifacts, artifact status),
+  `swiftsandboxpools` (status), and a new `swiftartifactplacements`. Apply
+  `crds/` before the upgrade. The controller's ClusterRole gains
+  `swiftartifactplacements`. No chart values changed.
+- Existing artifacts stay required and behave as in v0.16; nothing becomes
+  optional unless its spec says so.
+
 ### Added
 
 - **Optional artifacts** (#795): `spec.artifacts[].optional: true` marks an
@@ -17,6 +26,14 @@ All notable changes to KubeSwift are documented here.
   artifact (the default, and every artifact from before) behaves exactly as
   in v0.16. A warm fetch that outlives the deadline keeps running (up to 10
   minutes) and fills the node cache for the next checkout.
+- **SwiftArtifactPlacement** (new CRD, `sap`, #799): prepares digest-pinned OCI
+  artifacts in the node cache of every node that runs a slot of a
+  SwiftSandboxPool, so a checkout that mounts one needs no fetch. Each
+  artifact is authorized with the placement's own credentials, fetched and
+  verified by the same materializer as a checkout's fetch pod, and rechecked
+  every 15 minutes; status reports each node and artifact and a `Prepared`
+  condition. A checkout prefers a warm slot on a prepared node. Pools and
+  slots are not changed. Metric `kubeswift_artifact_prepares_total{result}`.
 - `status.artifacts[]` gains `state` (Resolved, Fetching, Dispatched,
   Mounted, Skipped, Failed), `reason`, `message` and `optional`. A required
   artifact that fails the sandbox reads Failed with the sandbox's reason.

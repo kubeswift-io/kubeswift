@@ -325,6 +325,16 @@ var (
 		[]string{"path", "optional", "result", "reason"},
 	)
 
+	// ArtifactPreparesTotal counts SwiftArtifactPlacement preparations of a
+	// node, by result: prepared (every artifact), verification_failed, failed.
+	ArtifactPreparesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_artifact_prepares_total",
+			Help: "Artifact placement node preparations by result (prepared, verification_failed, failed)",
+		},
+		[]string{"result"},
+	)
+
 	// RegistryLookupsTotal counts the controllers' registry lookups (sandbox
 	// and pool image, model and artifact resolves) by how they were answered:
 	// "hit" from a finished request still valid, "refresh" from a valid entry
@@ -391,6 +401,7 @@ func MarkSandboxCheckoutObserved(uid string) bool {
 func init() {
 	metrics.Registry.MustRegister(
 		SandboxArtifactsTotal,
+		ArtifactPreparesTotal,
 		RegistryLookupsTotal,
 		RegistryRequestsTotal,
 		RegistryRequestSeconds,

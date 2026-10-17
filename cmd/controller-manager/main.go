@@ -392,6 +392,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Prepares artifacts on the nodes of a warm pool before checkouts need them.
+	if err = (&swiftsandbox.ArtifactPlacementReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("swiftartifactplacement-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftArtifactPlacement controller")
+		os.Exit(1)
+	}
+
 	// Holds each sandbox launcher's NetworkPolicy until the pods it protects
 	// can no longer run.
 	if err = (&swiftsandbox.IsolationReconciler{
