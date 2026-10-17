@@ -60,6 +60,8 @@ type SwiftSandboxReconciler struct {
 	// registryFailures counts a sandbox's consecutive transient registry
 	// failures, for its retry backoff. In memory: a retry rhythm.
 	registryFailures sync.Map
+	// policies evaluates SwiftArtifactVerificationPolicies (artifact_policy.go).
+	policies artifactPolicies
 }
 
 func isTerminal(p sandboxv1alpha1.SwiftSandboxPhase) bool {
@@ -259,9 +261,19 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 			prime(lookup, modelRequest(sb.Spec.Model, modelAuth))
 		}
 	}
+	// Platform verification policies decide first: an artifact one refuses
+	// is never asked of the registry (artifact_policy.go).
+	decisions, err := r.sandboxDecisions(ctx, sb)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	artReqs, artReqErr := artifactRequests(ctx, r.APIReader, sb)
 	if artReqErr == nil {
-		prime(lookup, artReqs...)
+		for i, req := range artReqs {
+			if i >= len(decisions) || decisions[i].Denied == "" {
+				prime(lookup, req)
+			}
+		}
 	}
 	ri, imageReady, imageErr := resolveImage(sb, auth, lookup)
 	var rm resolvedModel
@@ -280,7 +292,7 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		} else {
 			// A cold start waits for an optional artifact's registry until
 			// its deadline, then starts without it.
-			arts = resolveArtifactRequests(sb, artReqs, lookup, waitUnresolvedOptional, time.Now())
+			arts = resolveArtifactRequests(sb, artReqs, lookup, waitUnresolvedOptional, time.Now(), decisions)
 			artifactsReady, artifactsErr = arts.ready, arts.err
 		}
 	}
@@ -290,6 +302,10 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	}{{"ImageResolveFailed", imageErr}, {"ModelResolveFailed", modelErr}, {"ArtifactResolveFailed", artifactsErr}} {
 		if f.err == nil {
 			continue
+		}
+		if isPolicyDenied(f.err) {
+			r.recordFailedResolve(sb, arts, "cold")
+			return r.fail(ctx, sb, "ArtifactPolicyDenied", f.err.Error())
 		}
 		if registryRefused(f.err) {
 			r.registryFailures.Delete(client.ObjectKeyFromObject(sb))
@@ -333,6 +349,9 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		return ctrl.Result{}, err
 	}
 	pod := buildPod(sb, kernelName)
+	if err := addArtifactRequirements(pod, decisionsByName(sb, decisions)); err != nil {
+		return ctrl.Result{}, err
+	}
 	// The scoped grant must exist before the pod does, or swiftletd's first
 	// annotation write 403s and the sandbox looks healthy while reporting nothing.
 	// Reconcile only mints it for a sandbox already known to be cold; a pool miss
@@ -404,8 +423,9 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 		}
 	}
 	if msg, failed := artifactInitFailure(pod); failed {
-		r.failArtifacts(sb, nil, "ArtifactMaterializeFailed", msg, "cold")
-		return r.fail(ctx, sb, "ArtifactMaterializeFailed", msg)
+		reason := policyFailureReason(msg, "ArtifactMaterializeFailed")
+		r.failArtifacts(sb, nil, reason, msg, "cold")
+		return r.fail(ctx, sb, reason, msg)
 	}
 
 	if launcherReady(pod) {
@@ -494,6 +514,13 @@ func (r *SwiftSandboxReconciler) finishTerminal(ctx context.Context, sb *sandbox
 }
 
 func (r *SwiftSandboxReconciler) fail(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, reason, msg string) (ctrl.Result, error) {
+	// A platform verification refusal is announced as well as recorded.
+	switch reason {
+	case "ArtifactPolicyDenied", "ArtifactVerificationFailed", "ArtifactClaimMismatch":
+		if r.Recorder != nil && sb.Status.Phase != sandboxv1alpha1.SwiftSandboxFailed {
+			r.Recorder.Event(sb, corev1.EventTypeWarning, reason, msg)
+		}
+	}
 	return r.terminal(ctx, sb, sandboxv1alpha1.SwiftSandboxFailed, reason, msg)
 }
 

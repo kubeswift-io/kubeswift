@@ -335,6 +335,20 @@ var (
 		[]string{"result"},
 	)
 
+	// ArtifactPolicyDecisionsTotal counts what platform artifact
+	// verification (SwiftArtifactVerificationPolicy) decided, by path (cold,
+	// warm, placement) and result: verified, verification_failed,
+	// claim_mismatch, no_policy (a policy was required and none governs),
+	// denied (refused before any fetch). Never a digest, repository, signer or
+	// policy name.
+	ArtifactPolicyDecisionsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_artifact_policy_decisions_total",
+			Help: "Platform artifact verification outcomes by path and result (verified, verification_failed, claim_mismatch, no_policy, denied)",
+		},
+		[]string{"path", "result"},
+	)
+
 	// SandboxArtifactCacheBytes is a node artifact cache's size and its limit,
 	// as the last artifact materialized on the node reported them (limits
 	// set). Label kind: used or limit.
@@ -434,6 +448,7 @@ func init() {
 	metrics.Registry.MustRegister(
 		SandboxArtifactsTotal,
 		ArtifactPreparesTotal,
+		ArtifactPolicyDecisionsTotal,
 		SandboxArtifactCacheBytes,
 		SandboxArtifactCacheEvictionsTotal,
 		SandboxArtifactCacheOverLimit,

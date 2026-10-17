@@ -489,7 +489,7 @@ func TestResolveArtifacts_RequestsRunTogether(t *testing.T) {
 	}
 	rec := &SwiftSandboxReconciler{resolver: r}
 	start := time.Now()
-	res := resolveArtifacts(context.Background(), nil, sb, rec.lookup(sb), skipUnresolvedOptional, time.Now())
+	res := resolveArtifacts(context.Background(), nil, sb, rec.lookup(sb), skipUnresolvedOptional, time.Now(), nil)
 	took := time.Since(start)
 	if res.err != nil || !res.ready || len(res.statuses) != 4 {
 		t.Fatalf("res=%+v", res)
@@ -549,7 +549,7 @@ func TestResolveArtifacts_RefusalOutranksTransient(t *testing.T) {
 		{Name: "b", Ref: "deny.example/b:1", MountPath: "/b"},
 	}
 	rec := &SwiftSandboxReconciler{resolver: r}
-	err := resolveArtifacts(context.Background(), nil, sb, rec.lookup(sb), skipUnresolvedOptional, time.Now()).err
+	err := resolveArtifacts(context.Background(), nil, sb, rec.lookup(sb), skipUnresolvedOptional, time.Now(), nil).err
 	if err == nil || !registryRefused(err) || !strings.Contains(err.Error(), "artifact b") {
 		t.Fatalf("err = %v, want artifact b's refusal", err)
 	}

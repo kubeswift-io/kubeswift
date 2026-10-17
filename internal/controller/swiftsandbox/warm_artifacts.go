@@ -21,6 +21,7 @@ import (
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
+	"github.com/kubeswift-io/kubeswift/internal/sandbox/artifactpolicy"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
 )
 
@@ -113,12 +114,20 @@ type warmArtifactArg struct {
 	// artifact from: the node's entry must have been read from it
 	// (materialize/origin.go).
 	RepositoryFingerprint string `json:"repositoryFingerprint"`
+	// Requirements has one group per governing platform policy: the node's
+	// entry needs, for every group, the record of at least one of its
+	// fingerprints (materialize/requirement.go). Sent only to a launcher
+	// that enforces them (launcher feature artifact-requirements).
+	Requirements [][]string `json:"requirements,omitempty"`
 }
 
 // warmArtifactArgs lists sb's resolved artifacts for the exec action, with
-// the fingerprint of each one's cosign key: the node's verification of that
-// digest must have used exactly this key.
-func warmArtifactArgs(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.SwiftSandbox) ([]warmArtifactArg, error) {
+// the fingerprint of each one's cosign key (the node's verification of that
+// digest must have used exactly this key) and, for an artifact a platform
+// policy governs, the records that meet each policy (decisions, one per
+// spec artifact, from the current policies).
+func warmArtifactArgs(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.SwiftSandbox, decisions []artifactpolicy.Decision) ([]warmArtifactArg, error) {
+	by := decisionsByName(sb, decisions)
 	var out []warmArtifactArg
 	for _, r := range resolvedArtifacts(sb) {
 		ref, err := name.ParseReference(r.spec.Ref)
@@ -137,6 +146,16 @@ func warmArtifactArgs(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.
 				return nil, refusedError{fmt.Errorf("artifact %s: verify key Secret %s has no %s", r.spec.Name, k.Name, verifyKeyName)}
 			}
 			a.KeyFingerprint = materialize.KeyFingerprint(key)
+		}
+		if d := by[r.spec.Name]; d != nil {
+			if d.Denied != "" {
+				return nil, policyDeniedError{artifact: r.spec.Name, why: d.Denied, msg: d.Message}
+			}
+			recs, err := d.AcceptableRecords(r.digest)
+			if err != nil {
+				return nil, policyDeniedError{artifact: r.spec.Name, why: artifactpolicy.DeniedPolicyInvalid, msg: err.Error()}
+			}
+			a.Requirements = recs
 		}
 		out = append(out, a)
 	}
@@ -233,6 +252,14 @@ func (r *SwiftSandboxReconciler) ensureArtifactFetch(ctx context.Context, sb *sa
 		fp := artifactFetchPod(sb, slot, missing)
 		if len(fp.Spec.Containers) == 0 {
 			return fetchFailed, "swiftletd reported unknown artifacts missing: " + strings.Join(missing, ","), nil, nil
+		}
+		// The fetch verifies under the policies as they are now.
+		decisions, err := r.sandboxDecisions(ctx, sb)
+		if err != nil {
+			return fetchRunning, "", nil, err
+		}
+		if err := addArtifactRequirements(fp, decisionsByName(sb, decisions)); err != nil {
+			return fetchRunning, "", nil, err
 		}
 		if err := controllerutil.SetControllerReference(sb, fp, r.Scheme); err != nil {
 			return fetchRunning, "", nil, err

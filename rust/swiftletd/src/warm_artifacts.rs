@@ -48,6 +48,11 @@ pub struct WarmArtifact {
     /// entry's content must have been read from exactly that repository.
     #[serde(default)]
     pub repository_fingerprint: String,
+    /// One group per platform verification policy that governs the
+    /// artifact: the entry needs, for every group, the materializer's record
+    /// for at least one of its fingerprints (one per key the policy trusts).
+    #[serde(default)]
+    pub requirements: Vec<Vec<String>>,
 }
 
 fn is_hex64(s: &str) -> bool {
@@ -97,6 +102,16 @@ impl WarmArtifact {
                 self.name
             ));
         }
+        // Joined into paths too; a group with no fingerprint could never be
+        // met, and is refused rather than read as "nothing required".
+        for group in &self.requirements {
+            if group.is_empty() || !group.iter().all(|fp| is_hex64(fp)) {
+                return Err(format!(
+                    "artifact {}: a requirement is not a list of sha256 hex",
+                    self.name
+                ));
+            }
+        }
         if !self.mount_path.starts_with('/') {
             return Err(format!(
                 "artifact {}: mount path is not absolute",
@@ -124,6 +139,26 @@ impl WarmArtifact {
             .join(&self.key_fingerprint)
     }
 
+    /// The materializer's record that this digest met a platform requirement
+    /// (materialize/requirement.go): in its own directory, apart from key
+    /// markers.
+    fn requirement_marker(&self, cache: &Path, fingerprint: &str) -> PathBuf {
+        cache
+            .join(".verified")
+            .join(self.digest.replace(':', "-"))
+            .join("r")
+            .join(fingerprint)
+    }
+
+    /// Every platform requirement has a record.
+    fn requirements_met(&self, cache: &Path) -> bool {
+        self.requirements.iter().all(|group| {
+            group
+                .iter()
+                .any(|fp| self.requirement_marker(cache, fp).is_file())
+        })
+    }
+
     /// The materializer's marker that this digest's content was read from
     /// this repository.
     fn origin_marker(&self, cache: &Path) -> PathBuf {
@@ -141,12 +176,14 @@ impl WarmArtifact {
             .join(entry.file_name().unwrap_or_default())
     }
 
-    /// Ready to project: sealed, from this repository, and verified for its key.
+    /// Ready to project: sealed, from this repository, verified for its key,
+    /// and meeting every platform requirement.
     fn ready(&self, cache: &Path) -> bool {
         self.entry(cache).is_dir()
             && self.sealed_marker(cache).is_file()
             && self.origin_marker(cache).is_file()
             && (self.key_fingerprint.is_empty() || self.verified_marker(cache).is_file())
+            && self.requirements_met(cache)
     }
 }
 
@@ -305,6 +342,7 @@ mod tests {
             mount_path: format!("/run/{}", name),
             key_fingerprint: fp.into(),
             repository_fingerprint: REPO.into(),
+            requirements: vec![],
         }
     }
 
@@ -392,6 +430,47 @@ mod tests {
         let signed = art("app", &D1.replace('1', "4"), "oci", FP);
         touch(signed.verified_marker(&cache));
         project(&[signed], &cache, &stage, &Recorder::default()).unwrap();
+    }
+
+    /// A governed artifact needs a record for every policy (any key of
+    /// each); a tenant-key marker with the same name never counts.
+    #[test]
+    fn platform_requirements_gate_the_projection() {
+        let (cache, stage) = (tmp(), tmp());
+        let (a, b, c) = ("a".repeat(64), "b".repeat(64), "c".repeat(64));
+        let mut gov = art("cache", D1, "oci", "");
+        gov.requirements = vec![vec![a.clone(), b.clone()], vec![c.clone()]];
+        cached(&cache, &gov);
+        let missing = |what: &str| {
+            let err = project(&[gov.clone()], &cache, &stage, &Recorder::default()).unwrap_err();
+            assert_eq!(err, "ArtifactMissing: cache", "{}", what);
+        };
+        missing("no records");
+        // A tenant-key marker named like a requirement record is not one.
+        let mut key = gov.clone();
+        key.key_fingerprint = a.clone();
+        touch(key.verified_marker(&cache));
+        missing("only a key marker");
+        touch(gov.requirement_marker(&cache, &a));
+        missing("one policy of two");
+        touch(gov.requirement_marker(&cache, &c));
+        project(&[gov.clone()], &cache, &stage, &Recorder::default()).unwrap();
+        // Rotation: the second policy's other key also meets it.
+        let other = tmp();
+        cached(&other, &gov);
+        touch(gov.requirement_marker(&other, &b));
+        touch(gov.requirement_marker(&other, &c));
+        project(&[gov.clone()], &other, &tmp(), &Recorder::default()).unwrap();
+        // Malformed groups are refused before any path is built.
+        for bad in [
+            vec![vec![]],
+            vec![vec!["../x".to_string()]],
+            vec![vec![a.to_uppercase()]],
+        ] {
+            let mut x = gov.clone();
+            x.requirements = bad;
+            assert!(x.validate().is_err());
+        }
     }
 
     #[test]

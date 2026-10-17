@@ -43,7 +43,7 @@ func resolveWith(t *testing.T, sb *sandboxv1alpha1.SwiftSandbox, wait optionalWa
 		t.Fatal(err)
 	}
 	rec := &SwiftSandboxReconciler{resolver: r}
-	return resolveArtifactRequests(sb, reqs, rec.lookup(sb), wait, now)
+	return resolveArtifactRequests(sb, reqs, rec.lookup(sb), wait, now, nil)
 }
 
 func optSandbox(arts ...sandboxv1alpha1.SandboxArtifact) *sandboxv1alpha1.SwiftSandbox {

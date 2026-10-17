@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -119,14 +120,32 @@ func main() {
 		opts.MaxBytes, opts.MaxEntries = *maxBytes, *maxEntries
 	}
 
+	// Platform verification requirements come from the pod spec the
+	// controller wrote (materialize/requirement.go), never from a file a
+	// tenant can change.
+	var reqs []materialize.Requirement
+	if raw := os.Getenv(materialize.RequirementsEnv); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &reqs); err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-materialize: %s: %v\n", materialize.RequirementsEnv, err)
+			os.Exit(2)
+		}
+		if !artifact {
+			fmt.Fprintln(os.Stderr, "sandbox-materialize: verification requirements apply to artifacts only")
+			os.Exit(2)
+		}
+	}
+
 	cache := cacheOpts{useDir: *useDir, limits: materialize.CacheLimits{MaxBytes: *cacheMax, MaxPercent: *cachePct, MinAge: *cacheAge, EvictLegacy: *cacheOld}}
 	if !artifact {
 		cache = cacheOpts{}
 	}
-	res, failed, err := run(ctx, opts, *verifyKey, *insecure, artifact, cache)
+	res, failed, err := run(ctx, opts, *verifyKey, reqs, *insecure, artifact, cache)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sandbox-materialize: %v\n", err)
 		if !*optional {
+			// The reason goes first in the termination message, where the
+			// controller reads why the artifact failed.
+			_ = os.WriteFile(*resultFile, []byte(err.Error()+"\n"), 0o644)
 			os.Exit(1)
 		}
 		// An optional artifact the workload starts without: why goes in the
@@ -162,17 +181,17 @@ type cacheOpts struct {
 	limits materialize.CacheLimits
 }
 
-// run resolves, verifies (with a key) and materializes, and says at which
-// stage it failed.
-func run(ctx context.Context, opts materialize.Options, verifyKey string, insecure, artifact bool, cache cacheOpts) (*materialize.Result, stage, error) {
+// run resolves, verifies (with a key, and against every platform
+// requirement) and materializes, and says at which stage it failed.
+func run(ctx context.Context, opts materialize.Options, verifyKey string, reqs []materialize.Requirement, insecure, artifact bool, cache cacheOpts) (*materialize.Result, stage, error) {
 	// Verify-before-boot: resolve the digest and cosign-verify image@digest against
 	// the pinned public key BEFORE materializing a single layer. A missing/invalid
 	// signature fails here, so the init container fails and the sandbox goes
 	// Failed (an optional artifact is skipped) -- it never mounts unverified
 	// content. cosign speaks HTTPS only.
-	if verifyKey != "" {
+	if verifyKey != "" || len(reqs) > 0 {
 		if insecure {
-			return nil, stageVerify, errors.New("--verify-key requires a TLS registry (incompatible with --insecure)")
+			return nil, stageVerify, errors.New("signature verification requires a TLS registry (incompatible with --insecure)")
 		}
 		resolve := materialize.Resolve
 		if opts.Mode == materialize.ModeLayout {
@@ -188,17 +207,46 @@ func run(ctx context.Context, opts materialize.Options, verifyKey string, insecu
 		// and the verification record is named from the same bytes, so a
 		// key Secret changed meanwhile cannot have its fingerprint recorded
 		// for a check another key passed.
-		key, kerr := os.ReadFile(verifyKey)
-		if kerr != nil || len(key) == 0 {
-			return nil, stageVerify, fmt.Errorf("read verify key: %v", kerr)
+		var key []byte
+		if verifyKey != "" {
+			var kerr error
+			key, kerr = os.ReadFile(verifyKey)
+			if kerr != nil || len(key) == 0 {
+				return nil, stageVerify, fmt.Errorf("read verify key: %v", kerr)
+			}
+			pinned, perr := materialize.PinFile("", "verify-key-*.pub", key)
+			if perr != nil {
+				return nil, stageVerify, fmt.Errorf("pin verify key: %w", perr)
+			}
+			defer os.Remove(pinned)
+			if err := oci.Verify(ctx, repo, digest, pinned); err != nil {
+				return nil, stageVerify, err
+			}
 		}
-		pinned, perr := materialize.PinFile("", "verify-key-*.pub", key)
-		if perr != nil {
-			return nil, stageVerify, fmt.Errorf("pin verify key: %w", perr)
-		}
-		defer os.Remove(pinned)
-		if err := oci.Verify(ctx, repo, digest, pinned); err != nil {
-			return nil, stageVerify, err
+		// Every platform requirement, after the tenant's own key: each must
+		// be met at this digest by one of its keys, with its claims.
+		var records []string
+		if len(reqs) > 0 {
+			canon, err := materialize.CanonicalRepository(opts.ImageRef)
+			if err != nil {
+				return nil, stageVerify, err
+			}
+			verify := func(pemKey []byte) ([]oci.SignedPayload, error) {
+				pinned, err := materialize.PinFile("", "policy-key-*.pub", pemKey)
+				if err != nil {
+					return nil, err
+				}
+				defer os.Remove(pinned)
+				return oci.VerifyPayloads(ctx, repo, digest, pinned)
+			}
+			for _, req := range reqs {
+				fp, err := materialize.CheckRequirement(req, canon, digest, verify)
+				if err != nil {
+					return nil, stageVerify, err
+				}
+				fmt.Fprintf(os.Stderr, "sandbox-materialize: %s@%s meets policy %s\n", repo, digest, req.Policy)
+				records = append(records, fp)
+			}
 		}
 		// Materialize the digest we just verified, not the original ref. Otherwise
 		// Materialize re-resolves the tag independently and an attacker with push
@@ -207,8 +255,13 @@ func run(ctx context.Context, opts materialize.Options, verifyKey string, insecu
 		// sibling snapshot-oras download-image path pins the same way.
 		opts.ImageRef = repo + "@" + digest
 		fmt.Fprintf(os.Stderr, "sandbox-materialize: cosign-verified %s@%s\n", repo, digest)
-		if artifact {
+		if artifact && key != nil {
 			if err := materialize.RecordVerified(opts.CacheDir, digest, key); err != nil {
+				return nil, stageVerify, err
+			}
+		}
+		for _, fp := range records {
+			if err := materialize.RecordRequirement(opts.CacheDir, digest, fp); err != nil {
 				return nil, stageVerify, err
 			}
 		}
@@ -263,6 +316,9 @@ func skipReason(ctx context.Context, failed stage, err error) string {
 	case ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded):
 		return "FetchTimeout"
 	case failed == stageVerify:
+		if r, ok := materialize.RequirementReason(err); ok {
+			return r
+		}
 		return "VerificationFailed"
 	case materialize.RegistryRefused(err):
 		return "ResolveRefused"
