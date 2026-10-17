@@ -62,8 +62,7 @@ func (r *SwiftSandboxReconciler) ensureTerminationFinalizer(ctx context.Context,
 	if controllerutil.ContainsFinalizer(sb, sandboxTerminationFinalizer) {
 		return nil
 	}
-	controllerutil.AddFinalizer(sb, sandboxTerminationFinalizer)
-	return r.Update(ctx, sb)
+	return patchFinalizers(ctx, r.Client, sb, func() { controllerutil.AddFinalizer(sb, sandboxTerminationFinalizer) })
 }
 
 // podFinished is whether every container of pod has exited for good (a

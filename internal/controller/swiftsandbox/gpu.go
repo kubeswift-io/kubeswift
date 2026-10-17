@@ -50,8 +50,7 @@ func (r *SwiftSandboxReconciler) reconcileNativeGPU(ctx context.Context, sb *san
 	// Ensure the release finalizer before any allocation work, so a delete
 	// between allocation and the next reconcile still frees the GPUs.
 	if !controllerutil.ContainsFinalizer(sb, sandboxGPUFinalizer) {
-		controllerutil.AddFinalizer(sb, sandboxGPUFinalizer)
-		if err := r.Update(ctx, sb); err != nil {
+		if err := patchFinalizers(ctx, r.Client, sb, func() { controllerutil.AddFinalizer(sb, sandboxGPUFinalizer) }); err != nil {
 			return false, ctrl.Result{}, err
 		}
 	}
@@ -222,14 +221,12 @@ func (r *SwiftSandboxReconciler) handleDeletion(ctx context.Context, sb *sandbox
 		if err := r.releaseNativeGPU(ctx, sb); err != nil {
 			return ctrl.Result{}, err
 		}
-		controllerutil.RemoveFinalizer(sb, sandboxGPUFinalizer)
-		if err := r.Update(ctx, sb); err != nil {
+		if err := patchFinalizers(ctx, r.Client, sb, func() { controllerutil.RemoveFinalizer(sb, sandboxGPUFinalizer) }); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
 	if controllerutil.ContainsFinalizer(sb, sandboxTerminationFinalizer) {
-		controllerutil.RemoveFinalizer(sb, sandboxTerminationFinalizer)
-		if err := r.Update(ctx, sb); err != nil {
+		if err := patchFinalizers(ctx, r.Client, sb, func() { controllerutil.RemoveFinalizer(sb, sandboxTerminationFinalizer) }); err != nil {
 			return ctrl.Result{}, err
 		}
 	}

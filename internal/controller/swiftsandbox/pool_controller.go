@@ -183,8 +183,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 					"pool", req.NamespacedName)
 				return ctrl.Result{RequeueAfter: poolGPUReleaseRecheck}, nil
 			}
-			controllerutil.RemoveFinalizer(&pool, poolGPUFinalizer)
-			if err := r.Update(ctx, &pool); err != nil {
+			if err := patchFinalizers(ctx, r.Client, &pool, func() { controllerutil.RemoveFinalizer(&pool, poolGPUFinalizer) }); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
@@ -192,8 +191,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 	// A GPU pool needs the release finalizer before it warms any GPU slot.
 	if pool.Spec.GPUProfileRef != nil && !controllerutil.ContainsFinalizer(&pool, poolGPUFinalizer) {
-		controllerutil.AddFinalizer(&pool, poolGPUFinalizer)
-		if err := r.Update(ctx, &pool); err != nil {
+		if err := patchFinalizers(ctx, r.Client, &pool, func() { controllerutil.AddFinalizer(&pool, poolGPUFinalizer) }); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
