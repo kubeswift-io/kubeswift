@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -243,25 +244,42 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	if err != nil {
 		return r.fail(ctx, sb, "ImagePullSecretInvalid", err.Error())
 	}
-	// Every registry request starts at once, off this worker (resolver.go).
+	// Every registry request starts at once, off this worker (resolver.go),
+	// and the pass waits for them together.
 	lookup := r.lookup(sb)
+	prime(lookup, imageRequest(sb, auth))
+	var modelAuth authn.Authenticator
+	var modelAuthErr error
+	if sb.Spec.Model != nil {
+		// The model against its OWN registry entry (same imagePullSecret,
+		// which may carry auth for more than one registry), so a model on a
+		// different registry than the rootfs still authenticates.
+		modelAuth, modelAuthErr = pullSecretAuth(ctx, r.APIReader, sb.Namespace, sb.Spec.ImagePullSecret, sb.Spec.Model.ImageRef)
+		if modelAuthErr == nil {
+			prime(lookup, modelRequest(sb.Spec.Model, modelAuth))
+		}
+	}
+	artReqs, artReqErr := artifactRequests(ctx, r.APIReader, sb)
+	if artReqErr == nil {
+		prime(lookup, artReqs...)
+	}
 	ri, imageReady, imageErr := resolveImage(sb, auth, lookup)
 	var rm resolvedModel
 	modelReady, artifactsReady := true, true
 	var modelErr, artifactsErr error
 	if sb.Spec.Model != nil {
-		// Resolve the model against its OWN registry entry (same imagePullSecret,
-		// which may carry auth for more than one registry) so a model on a different
-		// registry than the rootfs still authenticates.
-		modelAuth, merr := pullSecretAuth(ctx, r.APIReader, sb.Namespace, sb.Spec.ImagePullSecret, sb.Spec.Model.ImageRef)
-		if merr != nil {
-			return r.fail(ctx, sb, "ImagePullSecretInvalid", merr.Error())
+		if modelAuthErr != nil {
+			return r.fail(ctx, sb, "ImagePullSecretInvalid", modelAuthErr.Error())
 		}
 		rm, modelReady, modelErr = resolveModel(sb.Spec.Model, modelAuth, lookup)
 	}
 	var arts []sandboxv1alpha1.SandboxArtifactStatus
 	if len(sb.Spec.Artifacts) > 0 {
-		arts, artifactsReady, artifactsErr = resolveArtifacts(ctx, r.APIReader, sb, lookup)
+		if artReqErr != nil {
+			artifactsErr = artReqErr
+		} else {
+			arts, artifactsReady, artifactsErr = resolveArtifactRequests(sb, artReqs, lookup)
+		}
 	}
 	for _, f := range []struct {
 		reason string
@@ -740,8 +758,19 @@ func (r *SwiftSandboxReconciler) lookup(sb *sandboxv1alpha1.SwiftSandbox) lookup
 	} else {
 		w.obj = nil // no channel (a test): the periodic recheck reads the result
 	}
+	// One deadline for the pass: its lookups share the inline wait.
+	var deadline time.Time
+	// A request asked for again in the same pass (primed, then waited for) is
+	// a follow-up: counted once.
+	seen := map[resolveKey]bool{}
 	return func(req resolveRequest) (resolveResult, bool) {
 		req.namespace = sb.Namespace
+		if deadline.IsZero() {
+			deadline = res.now().Add(res.inlineWait)
+		}
+		req.deadline = deadline
+		req.followUp = req.followUp || seen[req.key]
+		seen[req.key] = true
 		return res.get(req, w)
 	}
 }

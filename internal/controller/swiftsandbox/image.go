@@ -98,7 +98,7 @@ func resolveImage(sb *sandboxv1alpha1.SwiftSandbox, auth authn.Authenticator, lo
 	if virtiofs {
 		mode = materialize.ModeTree
 	}
-	res, ok := lookup(newResolveRequest(resolveImageKind, sb.Spec.Image, mode, rootfsCacheDir, auth))
+	res, ok := lookup(imageRequest(sb, auth))
 	if !ok || res.err != nil {
 		return resolvedImage{}, ok, res.err
 	}
@@ -108,6 +108,20 @@ func resolveImage(sb *sandboxv1alpha1.SwiftSandbox, auth authn.Authenticator, lo
 		Virtiofs:   virtiofs,
 		Exec:       resolveExec(sb, res.config),
 	}, true, nil
+}
+
+// imageRequest is the registry request resolveImage makes for sb's image.
+func imageRequest(sb *sandboxv1alpha1.SwiftSandbox, auth authn.Authenticator) resolveRequest {
+	mode := materialize.ModeBlock
+	if sb.Spec.RootfsMode == sandboxv1alpha1.SandboxRootfsVirtiofs {
+		mode = materialize.ModeTree
+	}
+	return newResolveRequest(resolveImageKind, sb.Spec.Image, mode, rootfsCacheDir, auth)
+}
+
+// modelRequest is the registry request resolveModel makes for model.
+func modelRequest(model *sandboxv1alpha1.SandboxModel, auth authn.Authenticator) resolveRequest {
+	return newResolveRequest(resolveDigestKind, model.ImageRef, materialize.ModeTree, modelCacheDir, auth)
 }
 
 // resolvedModel is the controller's upfront resolve of spec.model.
@@ -123,7 +137,7 @@ type resolvedModel struct {
 // model is always a tree (virtio-fs). auth (from pullSecretAuth) authenticates a
 // private model image; nil = anonymous.
 func resolveModel(model *sandboxv1alpha1.SandboxModel, auth authn.Authenticator, lookup lookupFunc) (resolvedModel, bool, error) {
-	res, ok := lookup(newResolveRequest(resolveDigestKind, model.ImageRef, materialize.ModeTree, modelCacheDir, auth))
+	res, ok := lookup(modelRequest(model, auth))
 	if !ok || res.err != nil {
 		return resolvedModel{}, ok, res.err
 	}
