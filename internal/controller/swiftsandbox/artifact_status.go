@@ -42,8 +42,10 @@ func (r *SwiftSandboxReconciler) setArtifactState(sb *sandboxv1alpha1.SwiftSandb
 			r.artifactSkipped(sb, s, path)
 		case sandboxv1alpha1.SandboxArtifactMounted:
 			metrics.SandboxArtifactsTotal.WithLabelValues(path, boolLabel(artifactOptional(sb, name)), "mounted", reason).Inc()
+			recordPolicyOutcome(s, path)
 		case sandboxv1alpha1.SandboxArtifactFailed:
 			metrics.SandboxArtifactsTotal.WithLabelValues(path, boolLabel(artifactOptional(sb, name)), "failed", reason).Inc()
+			recordPolicyOutcome(s, path)
 		}
 	}
 }
@@ -73,6 +75,7 @@ func (r *SwiftSandboxReconciler) recordFailedResolve(sb *sandboxv1alpha1.SwiftSa
 	for i := range res.failed {
 		if s := &res.failed[i]; s.State == sandboxv1alpha1.SandboxArtifactFailed {
 			metrics.SandboxArtifactsTotal.WithLabelValues(path, "false", "failed", s.Reason).Inc()
+			recordPolicyOutcome(s, path)
 		}
 	}
 }
@@ -80,12 +83,18 @@ func (r *SwiftSandboxReconciler) recordFailedResolve(sb *sandboxv1alpha1.SwiftSa
 // artifactSkipped reports a skipped optional artifact.
 func (r *SwiftSandboxReconciler) artifactSkipped(sb *sandboxv1alpha1.SwiftSandbox, s *sandboxv1alpha1.SandboxArtifactStatus, path string) {
 	metrics.SandboxArtifactsTotal.WithLabelValues(path, "true", "skipped", s.Reason).Inc()
+	recordPolicyOutcome(s, path)
 	if r.Recorder == nil {
 		return
 	}
 	event := "ArtifactSkipped"
-	if s.Reason == "VerificationFailed" {
+	switch s.Reason {
+	case "VerificationFailed":
 		event = "ArtifactVerificationFailed"
+	case "ClaimMismatch":
+		event = "ArtifactClaimMismatch"
+	case "PolicyDenied":
+		event = "ArtifactPolicyDenied"
 	}
 	r.Recorder.Eventf(sb, corev1.EventTypeWarning, event,
 		"optional artifact %s is not mounted (%s): %s; the workload starts without it", s.Name, s.Reason, s.Message)

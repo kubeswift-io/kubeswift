@@ -3,6 +3,7 @@ package oci
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -184,4 +185,49 @@ func Verify(ctx context.Context, repository, digest, keyPath string) error {
 		return fmt.Errorf("cosign verify %s@%s: %w", repository, digest, err)
 	}
 	return nil
+}
+
+// CosignOutput executes the cosign CLI and returns its stdout. A package var
+// for the same reason as CosignRun.
+var CosignOutput = func(ctx context.Context, args []string) ([]byte, error) {
+	env, cleanup, err := cosignEnv()
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	cmd := exec.CommandContext(ctx, "cosign", args...)
+	cmd.Env = env
+	cmd.Stderr = os.Stderr
+	return cmd.Output()
+}
+
+// SignedPayload is one signature payload cosign verified, in the form
+// `cosign verify --output json` prints for both signature formats: the
+// digest it signs and its annotations (claims).
+type SignedPayload struct {
+	Critical struct {
+		Image struct {
+			DockerManifestDigest string `json:"docker-manifest-digest"`
+		} `json:"image"`
+	} `json:"critical"`
+	Optional map[string]any `json:"optional"`
+}
+
+// VerifyPayloads checks public-key signatures on Repository@Digest, like
+// Verify, and returns the payloads that verified with this key: only those,
+// so claims are never read from a signature another key made.
+func VerifyPayloads(ctx context.Context, repository, digest, keyPath string) ([]SignedPayload, error) {
+	if _, err := os.Stat(keyPath); err != nil {
+		return nil, fmt.Errorf("verify key %q not readable: %w", keyPath, err)
+	}
+	args := []string{"verify", "--key", keyPath, "--insecure-ignore-tlog=true", "--output", "json", repository + "@" + digest}
+	out, err := CosignOutput(ctx, args)
+	if err != nil {
+		return nil, fmt.Errorf("cosign verify %s@%s: %w", repository, digest, err)
+	}
+	var payloads []SignedPayload
+	if err := json.Unmarshal(out, &payloads); err != nil {
+		return nil, fmt.Errorf("cosign verify %s@%s: read its output: %w", repository, digest, err)
+	}
+	return payloads, nil
 }

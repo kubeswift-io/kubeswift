@@ -571,8 +571,9 @@ type SandboxArtifactStatus struct {
 	State SandboxArtifactState `json:"state,omitempty"`
 	// Reason is a CamelCase word: for Skipped why (ResolveRefused,
 	// RegistryUnavailable, FetchTimeout, VerificationFailed, ClaimMismatch,
-	// PolicyDenied, MaterializeFailed, KernelUnsupported); for Mounted where
-	// from (Cached, Fetched); for Failed the sandbox's failure reason.
+	// PolicyDenied, MaterializeFailed, KernelUnsupported, LauncherUnsupported);
+	// for Mounted where from (Cached, Fetched); for Failed the sandbox's
+	// failure reason.
 	// +optional
 	Reason string `json:"reason,omitempty"`
 	// +optional

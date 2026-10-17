@@ -124,10 +124,12 @@ spec:
       requirePlatformVerification: true
 ```
 
-- `claims` supplies the values a policy reads with `fromArtifact`, and adds
-  claims the platform-verified signature must also carry. An artifact with
-  `claims` that no policy governs is refused (`NoMatchingPolicy`): nothing
-  would check them.
+- `claims` supplies the values a policy reads with `fromArtifact` (the entry
+  named in `fromArtifact`). Every other entry is a claim the platform-verified
+  signature must also carry, under that key with that value; one that
+  contradicts a policy's own value is refused (`ClaimConflict`). An artifact
+  with `claims` that no policy governs is refused (`NoMatchingPolicy`):
+  nothing would check them.
 - `requirePlatformVerification: true` refuses the artifact when no policy
   governs it in this namespace, so a consumer that relies on platform trust
   is told when there is none.
@@ -160,7 +162,10 @@ has passed there. Prepared checkouts keep their speed.
 Warm slots started by a KubeSwift release before v0.18 cannot check policy
 records; a governed artifact is never dispatched to one. A checkout of a
 required governed artifact boots cold instead, and an optional one starts
-without it, until the pool has replaced those slots.
+without it (`LauncherUnsupported`), until the pool has replaced those slots.
+Required artifacts that fail report `ArtifactPolicyDenied`,
+`ArtifactVerificationFailed` or `ArtifactClaimMismatch` as the sandbox's
+reason.
 
 ## Rotating keys
 
@@ -190,7 +195,7 @@ Event:
 
 | Reason | Meaning |
 |---|---|
-| `PolicyDenied` | refused before any fetch; the message says why: `NoMatchingPolicy`, `RepositoryNotAllowed`, `TagReference`, `PolicyInvalid`, `MissingClaimValue` |
+| `PolicyDenied` | refused before any fetch; the message says why: `NoMatchingPolicy`, `RepositoryNotAllowed`, `TagReference`, `PolicyInvalid`, `MissingClaimValue`, `ClaimConflict` |
 | `VerificationFailed` | no signature by a policy key for this digest |
 | `ClaimMismatch` | a policy key signed it, without the required claims |
 

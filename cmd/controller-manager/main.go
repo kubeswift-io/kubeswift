@@ -402,6 +402,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Reports whether each platform artifact verification policy can be
+	// enforced (the sandbox and placement controllers enforce it).
+	if err = (&swiftsandbox.ArtifactPolicyStatusReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("swiftartifactverificationpolicy-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftArtifactVerificationPolicy controller")
+		os.Exit(1)
+	}
+
 	// Holds each sandbox launcher's NetworkPolicy until the pods it protects
 	// can no longer run.
 	if err = (&swiftsandbox.IsolationReconciler{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -77,7 +78,7 @@ func TestCheckout_ArtifactsTakeAWarmSlot(t *testing.T) {
 	repo, _ := name.ParseReference(ref)
 	want := warmArtifactArg{Name: "app", Digest: digest, Layout: "oci", MountPath: "/run/app", KeyFingerprint: materialize.KeyFingerprint(testKey),
 		RepositoryFingerprint: materialize.RepositoryFingerprint(repo.Context().Name())}
-	if len(arts) != 1 || arts[0] != want {
+	if len(arts) != 1 || !reflect.DeepEqual(arts[0], want) {
 		t.Errorf("action artifacts = %+v, want %+v", arts, want)
 	}
 	if strings.Contains(p.Annotations[annSandboxExecActionArgs], "tenant key") {
@@ -236,7 +237,7 @@ func TestCheckout_ArtifactAuthorizationIsPerCredentials(t *testing.T) {
 	r.resolver = res
 	// Tenant A's answer is in the resolver.
 	resolveArtifacts(ctx, c, &sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
-		Spec: sandboxv1alpha1.SwiftSandboxSpec{ImagePullSecret: "tenant-a", Artifacts: sb.Spec.Artifacts}}, r.lookup(sb), skipUnresolvedOptional, time.Now())
+		Spec: sandboxv1alpha1.SwiftSandboxSpec{ImagePullSecret: "tenant-a", Artifacts: sb.Spec.Artifacts}}, r.lookup(sb), skipUnresolvedOptional, time.Now(), nil)
 
 	reconcileSB(t, r, "sb")
 	got := getSandbox(t, c, "sb")

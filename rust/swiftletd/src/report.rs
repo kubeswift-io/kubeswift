@@ -133,6 +133,14 @@ pub fn guest_name(env_guest: Option<String>, pod_name: Option<String>) -> Option
 /// controller's `bridgeFeaturesAnnotation`).
 pub const BRIDGE_FEATURES_ANNOTATION: &str = "kubeswift.io/bridge-features";
 
+/// What this launcher enforces, space-separated (the controller's
+/// `launcherFeaturesAnnotation`). `artifact-requirements`: a checkout's
+/// platform verification records are checked before an artifact is
+/// projected (warm_artifacts.rs); the controller sends a governed artifact
+/// only to a launcher that says so.
+pub const LAUNCHER_FEATURES_ANNOTATION: &str = "kubeswift.io/launcher-features";
+pub const LAUNCHER_FEATURES: &str = "artifact-requirements";
+
 /// Reports runtime and console to the launcher pod annotations.
 /// The controller maps these annotations to SwiftGuest status.
 pub async fn report_guest_runtime(
@@ -153,6 +161,10 @@ pub async fn report_guest_runtime(
             bridge_features.to_string(),
         );
     }
+    annotations.insert(
+        LAUNCHER_FEATURES_ANNOTATION.to_string(),
+        LAUNCHER_FEATURES.to_string(),
+    );
     annotations.insert(
         "kubeswift.io/guest-runtime-pid".to_string(),
         pid.to_string(),

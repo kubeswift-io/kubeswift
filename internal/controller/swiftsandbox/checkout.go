@@ -23,6 +23,7 @@ import (
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/sandbox/artifactpolicy"
 	sandboxwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsandbox"
 )
 
@@ -90,16 +91,27 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	// Artifacts are resolved and authorized with this sandbox's credentials
 	// before a slot is claimed, so no slot is held while the registry is asked
 	// (cached for a digest reference, resolver.go). Also on an adopted slot,
-	// whose status may not have been written.
+	// whose status may not have been written. The platform's verification
+	// policies are applied first, with what they are now
+	// (artifact_policy.go).
+	var decisions []artifactpolicy.Decision
 	if len(sb.Spec.Artifacts) > 0 {
 		if err := sandboxwebhook.ValidateArtifacts(&sb.Spec); err != nil {
 			return r.fail(ctx, sb, "InvalidArtifacts", err.Error())
 		}
+		var err error
+		if decisions, err = r.sandboxDecisions(ctx, sb); err != nil {
+			return ctrl.Result{}, err
+		}
 		// An optional artifact the registry has not answered for is not waited
 		// for here: the checkout claims without it, and the request's answer
 		// serves the next checkout.
-		res := resolveArtifacts(ctx, r.APIReader, sb, r.lookup(sb), skipUnresolvedOptional, time.Now())
+		res := resolveArtifacts(ctx, r.APIReader, sb, r.lookup(sb), skipUnresolvedOptional, time.Now(), decisions)
 		if res.err != nil {
+			if isPolicyDenied(res.err) {
+				r.recordFailedResolve(sb, res, "warm")
+				return r.fail(ctx, sb, "ArtifactPolicyDenied", res.err.Error())
+			}
 			if registryRefused(res.err) {
 				r.registryFailures.Delete(client.ObjectKeyFromObject(sb))
 				r.recordFailedResolve(sb, res, "warm")
@@ -161,9 +173,9 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		// the claim, once the slot's own account may read them.
 		var inject *execInject
 		if !usesSecrets(sb) {
-			arts, err := warmArtifactArgs(ctx, r.APIReader, sb)
+			arts, err := warmArtifactArgs(ctx, r.APIReader, sb, decisions)
 			if err != nil {
-				return r.fail(ctx, sb, "ArtifactResolveFailed", err.Error())
+				return r.fail(ctx, sb, artifactArgsFailure(err), err.Error())
 			}
 			inject = &execInject{argv: argv, env: env, cwd: cwd, arts: arts}
 		}
@@ -173,9 +185,12 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		if slot == nil && onlyOptionalArtifacts(sb) {
 			// No slot can mount artifacts at checkout, and every artifact left
 			// is optional: start without them rather than cold.
+			reason, why := "KernelUnsupported", "no warm slot can mount artifacts at checkout (needs kernels/sandbox 6.6.15 or kernels/gpu-sandbox 6.6.4 or newer)"
+			if anyGoverned(sb, decisions) {
+				reason, why = "LauncherUnsupported", "no warm slot can mount artifacts at checkout under a platform verification policy (a slot needs a v0.18 launcher and kernels/sandbox 6.6.15 or kernels/gpu-sandbox 6.6.4 or newer)"
+			}
 			for _, a := range artifactsToMount(sb) {
-				r.setArtifactState(sb, a.Name, sandboxv1alpha1.SandboxArtifactSkipped, "KernelUnsupported",
-					"no warm slot can mount artifacts at checkout (needs kernels/sandbox 6.6.15 or kernels/gpu-sandbox 6.6.4 or newer)", "warm")
+				r.setArtifactState(sb, a.Name, sandboxv1alpha1.SandboxArtifactSkipped, reason, why, "warm")
 			}
 			if inject != nil {
 				inject.arts = nil
@@ -185,6 +200,10 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 			}
 		}
 		if slot == nil {
+			if anyGoverned(sb, decisions) {
+				return r.coldFallback(ctx, sb, kernelName,
+					"no warm slot that can take artifacts under a platform verification policy is available (a slot needs a v0.18 launcher and kernels/sandbox 6.6.15 or kernels/gpu-sandbox 6.6.4 or newer)")
+			}
 			if len(artifactsToMount(sb)) > 0 {
 				return r.coldFallback(ctx, sb, kernelName,
 					"no warm slot that can take artifacts is available (a slot needs kernels/sandbox 6.6.15 or kernels/gpu-sandbox 6.6.4 or newer)")
@@ -208,10 +227,10 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 			swiftguest.SandboxLauncher, slotAccount(slot), secretNamesFor(slotAccount(slot), sb, slot.Name)); err != nil {
 			return ctrl.Result{}, err
 		}
-		arts, err := warmArtifactArgs(ctx, r.APIReader, sb)
+		arts, err := warmArtifactArgs(ctx, r.APIReader, sb, decisions)
 		if err != nil {
 			_ = r.Delete(ctx, slot)
-			return r.fail(ctx, sb, "ArtifactResolveFailed", err.Error())
+			return r.fail(ctx, sb, artifactArgsFailure(err), err.Error())
 		}
 		if err := r.stampExecAction(ctx, slot, sb, string(sb.UID), execInject{argv: argv, env: env, cwd: cwd, arts: arts}); err != nil {
 			return ctrl.Result{}, err
@@ -307,6 +326,16 @@ func (r *SwiftSandboxReconciler) findClaimedSlot(ctx context.Context, sb *sandbo
 // nil when none is claimable.
 // profile is the pool's current slot profile; the caller has checked it honors sb.
 func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, profile string, inject *execInject) (*corev1.Pod, error) {
+	// An artifact a platform policy governs goes only to a launcher that
+	// enforces the policy: an older one would ignore the requirements.
+	needRequirements := false
+	if len(artifactsToMount(sb)) > 0 {
+		decisions, err := r.sandboxDecisions(ctx, sb)
+		if err != nil {
+			return nil, err
+		}
+		needRequirements = anyGoverned(sb, decisions)
+	}
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(sb.Namespace),
 		client.MatchingLabels{PoolLabelKey: sb.Spec.PoolRef.Name, SlotStateLabelKey: slotStateWarm}); err != nil {
@@ -329,8 +358,12 @@ func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandb
 		if usesSecrets(sb) && slotAccount(p) != swiftguest.SandboxLauncherServiceAccountFor(p.Name) {
 			return false
 		}
-		// Artifacts need a slot whose bridge and launcher can project them.
+		// Artifacts need a slot whose bridge and launcher can project them,
+		// and governed artifacts a launcher that enforces their policies.
 		if len(artifactsToMount(sb)) > 0 && !slotSupportsWarmMounts(p) {
+			return false
+		}
+		if needRequirements && !slotEnforcesRequirements(p) {
 			return false
 		}
 		return true
@@ -736,8 +769,9 @@ func (r *SwiftSandboxReconciler) artifactsMissing(ctx context.Context, sb *sandb
 	switch state {
 	case fetchFailed:
 		_ = r.Delete(ctx, slot)
-		r.failArtifacts(sb, fetch, "ArtifactMaterializeFailed", msg, "warm")
-		res, err := r.fail(ctx, sb, "ArtifactMaterializeFailed", msg)
+		reason := policyFailureReason(msg, "ArtifactMaterializeFailed")
+		r.failArtifacts(sb, fetch, reason, msg, "warm")
+		res, err := r.fail(ctx, sb, reason, msg)
 		return res, true, err
 	case fetchDone:
 		for name, skip := range results {

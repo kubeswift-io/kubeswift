@@ -16,6 +16,7 @@ import (
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
+	"github.com/kubeswift-io/kubeswift/internal/sandbox/artifactpolicy"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
 )
 
@@ -105,23 +106,35 @@ type artifactResolution struct {
 // resolveArtifacts resolves each artifact to the digest the node will mount.
 // Every request starts before any is waited for, and they share the pass's
 // wait.
-func resolveArtifacts(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.SwiftSandbox, lookup lookupFunc, wait optionalWait, now time.Time) artifactResolution {
+func resolveArtifacts(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.SwiftSandbox, lookup lookupFunc, wait optionalWait, now time.Time, decisions []artifactpolicy.Decision) artifactResolution {
 	reqs, err := artifactRequests(ctx, c, sb)
 	if err != nil {
 		return artifactResolution{ready: true, err: err}
 	}
-	return resolveArtifactRequests(sb, reqs, lookup, wait, now)
+	return resolveArtifactRequests(sb, reqs, lookup, wait, now, decisions)
 }
 
 // resolveArtifactRequests is resolveArtifacts for requests already built (in
 // spec order). A required artifact behaves as it always has: a refusal fails
 // the sandbox, anything else waits. An optional one never fails or delays a
 // required one: refused, it is skipped; unanswered, it is skipped or waited
-// for until its deadline, as wait says.
-func resolveArtifactRequests(sb *sandboxv1alpha1.SwiftSandbox, reqs []resolveRequest, lookup lookupFunc, wait optionalWait, now time.Time) artifactResolution {
+// for until its deadline, as wait says. decisions (one per artifact, or nil
+// when no policy is in play) come first: an artifact a policy refuses is
+// never asked of the registry; it fails the sandbox (required) or is skipped.
+func resolveArtifactRequests(sb *sandboxv1alpha1.SwiftSandbox, reqs []resolveRequest, lookup lookupFunc, wait optionalWait, now time.Time, decisions []artifactpolicy.Decision) artifactResolution {
+	denied := func(i int) *artifactpolicy.Decision {
+		if i < len(decisions) && decisions[i].Denied != "" {
+			return &decisions[i]
+		}
+		return nil
+	}
 	results := make([]resolveResult, len(reqs))
 	done := make([]bool, len(reqs))
 	for i, req := range reqs {
+		if denied(i) != nil {
+			done[i] = true
+			continue
+		}
 		req.noWait = true
 		results[i], done[i] = lookup(req)
 	}
@@ -135,8 +148,18 @@ func resolveArtifactRequests(sb *sandboxv1alpha1.SwiftSandbox, reqs []resolveReq
 	for i := range reqs {
 		a := &sb.Spec.Artifacts[i]
 		st := sandboxv1alpha1.SandboxArtifactStatus{Name: a.Name, MountPath: a.MountPath}
+		if i < len(decisions) {
+			st.Policies = decisions[i].Policies
+		}
 		res := results[i]
-		switch {
+		switch d := denied(i); {
+		case d != nil && a.Optional:
+			skipArtifact(&st, "PolicyDenied", d.Denied+": "+d.Message)
+		case d != nil:
+			if refused == nil || !isPolicyDenied(refused) {
+				refused = policyDeniedError{artifact: a.Name, why: d.Denied, msg: d.Message}
+			}
+			st.State, st.Reason, st.Message = sandboxv1alpha1.SandboxArtifactFailed, "ArtifactPolicyDenied", truncateMessage(d.Denied+": "+d.Message)
 		case done[i] && res.err == nil:
 			st.Digest, st.State = res.digest, sandboxv1alpha1.SandboxArtifactResolved
 		case !a.Optional && !done[i]:
