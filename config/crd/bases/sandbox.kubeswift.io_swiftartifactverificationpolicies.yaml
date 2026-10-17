@@ -1,0 +1,356 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: swiftartifactverificationpolicies.sandbox.kubeswift.io
+spec:
+  group: sandbox.kubeswift.io
+  names:
+    kind: SwiftArtifactVerificationPolicy
+    listKind: SwiftArtifactVerificationPolicyList
+    plural: swiftartifactverificationpolicies
+    shortNames:
+    - savp
+    singular: swiftartifactverificationpolicy
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.namespaces
+      name: Namespaces
+      type: integer
+    - jsonPath: .spec.otherRepositories
+      name: Other
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SwiftArtifactVerificationPolicy is a cluster-wide, administrator-owned rule
+          for verifying the OCI artifacts sandboxes mount. See
+          docs/sandbox/artifact-verification-policy.md.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SwiftArtifactVerificationPolicySpec is a platform rule for the OCI
+              artifacts sandboxes and placements mount: in the namespaces it selects,
+              every artifact from a repository it governs must carry a signature by one
+              of its authorities, with its claims, before it is materialized. The
+              workload cannot choose, skip or weaken it: which policies apply is decided
+              by the namespace's labels and the artifact's repository, never by a field
+              of the workload. Every policy that governs an artifact must be satisfied,
+              and so must the artifact's own verifyKeySecretRef. See
+              docs/sandbox/artifact-verification-policy.md.
+            properties:
+              authorities:
+                description: |-
+                  Authorities that may sign governed artifacts: a signature by any one of
+                  them, carrying every claim, satisfies the policy. Add the new key
+                  before removing the old one to rotate without a flag day.
+                items:
+                  description: |-
+                    ArtifactAuthority is a signer the policy trusts. Exactly one kind is set;
+                    key is the only kind in v1alpha1.
+                  properties:
+                    key:
+                      description: Key is a public key signature (cosign sign --key).
+                      properties:
+                        publicKey:
+                          description: |-
+                            PublicKey is one PEM "PUBLIC KEY" block: ECDSA P-256 or P-384, Ed25519,
+                            or RSA of at least 2048 bits. Never a private key.
+                          maxLength: 4096
+                          minLength: 1
+                          type: string
+                      required:
+                      - publicKey
+                      type: object
+                    name:
+                      description: Name identifies the authority in status and Events.
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                  required:
+                  - name
+                  type: object
+                  x-kubernetes-validations:
+                  - message: key is required
+                    rule: has(self.key)
+                maxItems: 8
+                minItems: 1
+                type: array
+              claims:
+                description: |-
+                  Claims the signature must carry: signed annotations (cosign sign -a
+                  key=value), read from the same signature the authority verified. Their
+                  meaning is the signer's; KubeSwift only compares strings.
+                items:
+                  description: |-
+                    ArtifactClaimRequirement is one signed annotation the signature must carry.
+                    Exactly one of value, values, fromNamespace and fromArtifact is set.
+                  properties:
+                    fromArtifact:
+                      description: |-
+                        FromArtifact names the entry of the artifact's claims (in the
+                        SwiftSandbox or SwiftArtifactPlacement) that holds the expected value:
+                        the workload says which signed artifact it means, and the signature
+                        must agree. An artifact that does not supply it is refused.
+                      maxLength: 63
+                      pattern: ^[A-Za-z0-9][A-Za-z0-9._/-]*$
+                      type: string
+                    fromNamespace:
+                      description: |-
+                        FromNamespace: the value must be the name of the namespace the artifact
+                        is mounted in, binding a signed artifact to its consumer.
+                      type: boolean
+                    key:
+                      description: Key is the annotation's key.
+                      maxLength: 253
+                      pattern: ^[A-Za-z0-9][A-Za-z0-9._/-]*$
+                      type: string
+                    value:
+                      description: Value is the only accepted value.
+                      maxLength: 256
+                      pattern: ^[A-Za-z0-9._:/@+-]+$
+                      type: string
+                    values:
+                      description: Values are the accepted values (any one).
+                      items:
+                        maxLength: 256
+                        pattern: ^[A-Za-z0-9._:/@+-]+$
+                        type: string
+                      maxItems: 16
+                      minItems: 1
+                      type: array
+                  required:
+                  - key
+                  type: object
+                  x-kubernetes-validations:
+                  - message: set exactly one of value, values, fromNamespace, fromArtifact
+                    rule: '(has(self.value) ? 1 : 0) + (has(self.values) ? 1 : 0)
+                      + (has(self.fromNamespace) && self.fromNamespace ? 1 : 0) +
+                      (has(self.fromArtifact) ? 1 : 0) == 1'
+                maxItems: 16
+                type: array
+              digestPinning:
+                default: Required
+                description: |-
+                  DigestPinning is Required (default): a governed artifact must be
+                  referenced by digest (repo@sha256:...), so the artifact a workload
+                  names cannot change after it is reviewed; a tag is refused. Optional
+                  allows tags, which are resolved to a digest and verified there.
+                enum:
+                - Required
+                - Optional
+                type: string
+              namespaceSelector:
+                description: |-
+                  NamespaceSelector selects the namespaces the policy applies in. {}
+                  selects every namespace. Select on labels only administrators can set
+                  (kubernetes.io/metadata.name always is).
+                properties:
+                  matchExpressions:
+                    description: matchExpressions is a list of label selector requirements.
+                      The requirements are ANDed.
+                    items:
+                      description: |-
+                        A label selector requirement is a selector that contains values, a key, and an operator that
+                        relates the key and values.
+                      properties:
+                        key:
+                          description: key is the label key that the selector applies
+                            to.
+                          type: string
+                        operator:
+                          description: |-
+                            operator represents a key's relationship to a set of values.
+                            Valid operators are In, NotIn, Exists and DoesNotExist.
+                          type: string
+                        values:
+                          description: |-
+                            values is an array of string values. If the operator is In or NotIn,
+                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                            the values array must be empty. This array is replaced during a strategic
+                            merge patch.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      required:
+                      - key
+                      - operator
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                      map is equivalent to an element of matchExpressions, whose key field is "key", the
+                      operator is "In", and the values array contains only "value". The requirements are ANDed.
+                    type: object
+                type: object
+                x-kubernetes-map-type: atomic
+              otherRepositories:
+                default: Allow
+                description: |-
+                  OtherRepositories decides what happens, in the selected namespaces, to
+                  an artifact that no policy governs: Allow (default) mounts it as
+                  before, with only the workload's own verification; Deny refuses it.
+                enum:
+                - Allow
+                - Deny
+                type: string
+              repositories:
+                description: |-
+                  Repositories the policy governs, as globs over the canonical
+                  repository (registry host and path, for example
+                  registry.example.com/caches/app): * matches within one path segment,
+                  ** across segments. Docker Hub repositories are index.docker.io/....
+                items:
+                  maxLength: 255
+                  pattern: ^[a-z0-9*][a-z0-9._:*-]*(/[a-z0-9*][a-z0-9._*-]*)*$
+                  type: string
+                maxItems: 32
+                minItems: 1
+                type: array
+            required:
+            - authorities
+            - namespaceSelector
+            - repositories
+            type: object
+            x-kubernetes-validations:
+            - message: authority names must be unique
+              rule: self.authorities.all(a, self.authorities.exists_one(b, b.name
+                == a.name))
+            - message: claim keys must be unique
+              rule: '!has(self.claims) || self.claims.all(c, self.claims.exists_one(d,
+                d.key == c.key))'
+          status:
+            description: |-
+              SwiftArtifactVerificationPolicyStatus reports whether the policy can be
+              enforced.
+            properties:
+              authorities:
+                description: Authorities lists each authority's key identity.
+                items:
+                  description: ArtifactAuthorityStatus identifies an authority's key.
+                  properties:
+                    algorithm:
+                      description: Algorithm is ECDSA-P256, ECDSA-P384, Ed25519 or
+                        RSA-<bits>.
+                      type: string
+                    keyID:
+                      description: KeyID is the sha256 of the key's SubjectPublicKeyInfo
+                        (DER), hex.
+                      type: string
+                    name:
+                      description: Name is the authority's name.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+              conditions:
+                description: |-
+                  Conditions: Ready is True when the policy is valid. While it is not,
+                  every artifact it governs is refused (PolicyInvalid), never mounted
+                  unverified.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              namespaces:
+                description: Namespaces is how many namespaces the selector matches.
+                format: int32
+                type: integer
+              observedGeneration:
+                description: ObservedGeneration is the spec generation this status
+                  describes.
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

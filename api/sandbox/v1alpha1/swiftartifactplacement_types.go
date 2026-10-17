@@ -53,6 +53,14 @@ type PlacementArtifact struct {
 	// checkout that verifies with the same key then needs no fetch.
 	// +optional
 	VerifyKeySecretRef *SecretObjectReference `json:"verifyKeySecretRef,omitempty"`
+	// Claims and RequirePlatformVerification are as in a SwiftSandbox
+	// artifact: a checkout uses the prepared entry only when its own
+	// artifact asks for the same claims.
+	// +kubebuilder:validation:MaxProperties=8
+	// +optional
+	Claims map[string]string `json:"claims,omitempty"`
+	// +optional
+	RequirePlatformVerification bool `json:"requirePlatformVerification,omitempty"`
 }
 
 // ArtifactLayout is the layout, defaulted.
@@ -107,7 +115,8 @@ type PlacementNodeStatus struct {
 	// PreparedAt is when the node was last found prepared.
 	// +optional
 	PreparedAt *metav1.Time `json:"preparedAt,omitempty"`
-	// Reason is Prepared, Preparing, VerificationFailed or PrepareFailed.
+	// Reason is Prepared, Preparing, VerificationFailed, ClaimMismatch or
+	// PrepareFailed.
 	// +optional
 	Reason string `json:"reason,omitempty"`
 	// Message says what failed, when something did.
@@ -121,6 +130,11 @@ type PlacementNodeStatus struct {
 	// backoff doubles with each, from 30s to 10m.
 	// +optional
 	Failures int32 `json:"failures,omitempty"`
+	// Requirements identifies the platform verification the node was
+	// prepared under (a hash of every artifact's governing policies, keys and
+	// claims). When a policy change alters it, the node is prepared again.
+	// +optional
+	Requirements string `json:"requirements,omitempty"`
 }
 
 // PlacementArtifactStatus is one artifact.
@@ -133,12 +147,17 @@ type PlacementArtifactStatus struct {
 	// PreparedNodes is how many target nodes hold it.
 	// +optional
 	PreparedNodes int32 `json:"preparedNodes"`
-	// Reason is Authorized, Resolving or ArtifactRefused.
+	// Reason is Authorized, Resolving, ArtifactRefused or PolicyDenied.
 	// +optional
 	Reason string `json:"reason,omitempty"`
-	// Message says why the registry refused it.
+	// Message says why the registry or a policy refused it.
 	// +optional
 	Message string `json:"message,omitempty"`
+	// Policies are the SwiftArtifactVerificationPolicies that govern it.
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Policies []ArtifactPolicyReference `json:"policies,omitempty"`
 }
 
 // Condition and reasons of a SwiftArtifactPlacement.

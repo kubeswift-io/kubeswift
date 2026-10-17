@@ -49,7 +49,8 @@ func init() {
 	Scheme.AddKnownTypes(gvSandbox,
 		&sandboxv1alpha1.SwiftSandbox{}, &sandboxv1alpha1.SwiftSandboxList{},
 		&sandboxv1alpha1.SwiftSandboxPool{}, &sandboxv1alpha1.SwiftSandboxPoolList{},
-		&sandboxv1alpha1.SwiftArtifactPlacement{}, &sandboxv1alpha1.SwiftArtifactPlacementList{})
+		&sandboxv1alpha1.SwiftArtifactPlacement{}, &sandboxv1alpha1.SwiftArtifactPlacementList{},
+		&sandboxv1alpha1.SwiftArtifactVerificationPolicy{}, &sandboxv1alpha1.SwiftArtifactVerificationPolicyList{})
 	metav1.AddToGroupVersion(Scheme, gvSandbox)
 	// storage.kubeswift.io/v1alpha1: where pushed artifacts are kept, set once
 	// for the cluster and overridable per namespace.

@@ -416,6 +416,11 @@ spec:
   reached keeps it `Pending` and retries (see Troubleshooting).
 - Mounts are read-only, at clean absolute paths that do not overlap each other,
   the model mount, `/proc`, `/sys` or `/dev`.
+- **Platform verification.** An administrator can require, per namespace and
+  repository, that artifacts carry a signature by a platform key with given
+  signed claims (a cluster-scoped `SwiftArtifactVerificationPolicy`). It
+  applies in addition to `verifyKeySecretRef`, and nothing in the sandbox can
+  turn it off. See [Artifact verification policy](artifact-verification-policy.md).
 - **Optional artifacts.** `optional: true` marks an artifact the workload can
   run without, such as a cache. When it cannot be resolved, fetched or
   verified in time, the workload starts without it: nothing is mounted at its

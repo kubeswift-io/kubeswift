@@ -86,6 +86,18 @@ spec:
                   description: SandboxArtifact is one OCI artifact mounted read-only
                     in the guest.
                   properties:
+                    claims:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Claims are signed annotations this artifact's platform verification
+                        must find (SwiftArtifactVerificationPolicy): the expected values of a
+                        policy's fromArtifact claims, and extra claims the verified signature
+                        must also carry. They can only add requirements; an artifact with
+                        claims that no policy governs is refused, since nothing would check
+                        them.
+                      maxProperties: 8
+                      type: object
                     fetchTimeout:
                       description: |-
                         FetchTimeout bounds how long an optional artifact may delay the
@@ -149,6 +161,13 @@ spec:
                         status.artifacts.
                       minLength: 1
                       type: string
+                    requirePlatformVerification:
+                      description: |-
+                        RequirePlatformVerification refuses the artifact (skips it, if
+                        optional) unless a SwiftArtifactVerificationPolicy governs it in this
+                        namespace: a consumer that relies on platform trust learns when there
+                        is none, instead of mounting an artifact only its own key checked.
+                      type: boolean
                     verifyKeySecretRef:
                       description: |-
                         VerifyKeySecretRef names a Secret holding a cosign public key
@@ -1381,12 +1400,33 @@ spec:
                       type: string
                     name:
                       type: string
+                    policies:
+                      description: |-
+                        Policies are the SwiftArtifactVerificationPolicies that governed the
+                        artifact, at the generation applied.
+                      items:
+                        description: |-
+                          ArtifactPolicyReference names a SwiftArtifactVerificationPolicy at a
+                          generation.
+                        properties:
+                          generation:
+                            format: int64
+                            type: integer
+                          name:
+                            type: string
+                        required:
+                        - name
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - name
+                      x-kubernetes-list-type: map
                     reason:
                       description: |-
                         Reason is a CamelCase word: for Skipped why (ResolveRefused,
-                        RegistryUnavailable, FetchTimeout, VerificationFailed,
-                        MaterializeFailed, KernelUnsupported); for Mounted where from (Cached,
-                        Fetched); for Failed the sandbox's failure reason.
+                        RegistryUnavailable, FetchTimeout, VerificationFailed, ClaimMismatch,
+                        PolicyDenied, MaterializeFailed, KernelUnsupported); for Mounted where
+                        from (Cached, Fetched); for Failed the sandbox's failure reason.
                       type: string
                     state:
                       description: SandboxArtifactState is where an artifact stands.

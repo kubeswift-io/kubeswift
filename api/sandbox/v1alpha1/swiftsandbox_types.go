@@ -494,6 +494,21 @@ type SandboxArtifact struct {
 	// node. Only for optional artifacts; default 10s, at most 5m.
 	// +optional
 	FetchTimeout *metav1.Duration `json:"fetchTimeout,omitempty"`
+	// Claims are signed annotations this artifact's platform verification
+	// must find (SwiftArtifactVerificationPolicy): the expected values of a
+	// policy's fromArtifact claims, and extra claims the verified signature
+	// must also carry. They can only add requirements; an artifact with
+	// claims that no policy governs is refused, since nothing would check
+	// them.
+	// +kubebuilder:validation:MaxProperties=8
+	// +optional
+	Claims map[string]string `json:"claims,omitempty"`
+	// RequirePlatformVerification refuses the artifact (skips it, if
+	// optional) unless a SwiftArtifactVerificationPolicy governs it in this
+	// namespace: a consumer that relies on platform trust learns when there
+	// is none, instead of mounting an artifact only its own key checked.
+	// +optional
+	RequirePlatformVerification bool `json:"requirePlatformVerification,omitempty"`
 }
 
 // DefaultArtifactFetchTimeout is an optional artifact's fetchTimeout when
@@ -555,13 +570,27 @@ type SandboxArtifactStatus struct {
 	// +optional
 	State SandboxArtifactState `json:"state,omitempty"`
 	// Reason is a CamelCase word: for Skipped why (ResolveRefused,
-	// RegistryUnavailable, FetchTimeout, VerificationFailed,
-	// MaterializeFailed, KernelUnsupported); for Mounted where from (Cached,
-	// Fetched); for Failed the sandbox's failure reason.
+	// RegistryUnavailable, FetchTimeout, VerificationFailed, ClaimMismatch,
+	// PolicyDenied, MaterializeFailed, KernelUnsupported); for Mounted where
+	// from (Cached, Fetched); for Failed the sandbox's failure reason.
 	// +optional
 	Reason string `json:"reason,omitempty"`
 	// +optional
 	Message string `json:"message,omitempty"`
+	// Policies are the SwiftArtifactVerificationPolicies that governed the
+	// artifact, at the generation applied.
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Policies []ArtifactPolicyReference `json:"policies,omitempty"`
+}
+
+// ArtifactPolicyReference names a SwiftArtifactVerificationPolicy at a
+// generation.
+type ArtifactPolicyReference struct {
+	Name string `json:"name"`
+	// +optional
+	Generation int64 `json:"generation,omitempty"`
 }
 
 // Usable reports whether the artifact is to be mounted: it is resolved and
