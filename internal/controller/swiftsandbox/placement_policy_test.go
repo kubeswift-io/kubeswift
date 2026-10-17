@@ -7,6 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
@@ -173,3 +174,39 @@ func TestPreparedNodes_ClaimsMustMatch(t *testing.T) {
 }
 
 func strp(s string) *string { return &s }
+
+// A prepare pod built before every artifact was authorized is not a failure
+// for the artifacts it never had (it used to report them "did not run",
+// with a backoff): the node is simply not prepared yet.
+func TestPlacement_PodWithoutALaterArtifactIsNotAFailure(t *testing.T) {
+	r := &ArtifactPlacementReconciler{Recorder: record.NewFakeRecorder(5)}
+	p := testPlacement(plDigestA)
+	pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: artifactInitPrefix + "a"}}},
+		Status: corev1.PodStatus{Phase: corev1.PodSucceeded, ContainerStatuses: []corev1.ContainerStatus{{Name: artifactInitPrefix + "a",
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Message: `{"digest":"` + plDigestA + `"}`}}}}}}
+	st := sandboxv1alpha1.PlacementNodeStatus{Name: "node-a"}
+	r.readPrepareResult(p, &st, pod, []string{"a", "b"})
+	if st.Prepared || st.Reason != sandboxv1alpha1.PlacementReasonPreparing || st.Failures != 0 || st.LastFailureTime != nil {
+		t.Errorf("node %+v", st)
+	}
+	r.readPrepareResult(p, &st, pod, []string{"a"})
+	if !st.Prepared {
+		t.Errorf("every wanted artifact prepared: %+v", st)
+	}
+}
+
+// The requirements a node is prepared under depend on the policies, not on
+// which artifacts the registry has answered for yet.
+func TestPlacementRequirements_IndependentOfAuthorization(t *testing.T) {
+	pl := testPlacement(plDigestA)
+	pl.Spec.Artifacts = append(pl.Spec.Artifacts, sandboxv1alpha1.PlacementArtifact{Name: "b", Ref: "reg.example/art@" + plDigestB, Layout: "unpacked"})
+	e := newPlacementEnv(t, pl, poolSlot("s1", "node-a"), trustedNamespace(), verificationPolicy(t))
+	r := &ArtifactPlacementReconciler{Client: e.c}
+	d, err := r.policies.decide(context.Background(), e.c, "default", placementArtifactInputs(pl))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := placementRequirements(pl, d); got == "" || got != placementRequirements(pl, d) {
+		t.Errorf("requirements %q", got)
+	}
+}
