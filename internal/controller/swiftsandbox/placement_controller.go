@@ -141,7 +141,7 @@ func (r *ArtifactPlacementReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 	authorized, refused := r.authorize(ctx, &p, now, decisions)
-	reqs := placementRequirements(&p, decisions, authorized)
+	reqs := placementRequirements(&p, decisions)
 
 	// Nodes that left the pool stop counting; their prepare pods go, and so
 	// do pods preparing under requirements that no longer apply.
@@ -379,9 +379,14 @@ func (r *ArtifactPlacementReconciler) readPrepareResult(p *sandboxv1alpha1.Swift
 	failed := map[string]string{}
 	reason := sandboxv1alpha1.PlacementReasonPrepareFailed
 	var latest time.Time
+	pending := false
 	for _, name := range want {
 		cs := containerStatus(pod, artifactInitPrefix+name)
 		switch {
+		case !podHasContainer(pod, artifactInitPrefix+name):
+			// Authorized after this pod was built: the next pod prepares it.
+			// Not a failure of this node.
+			pending = true
 		case cs == nil || cs.State.Terminated == nil:
 			failed[name] = firstNonEmpty(pod.Status.Message, pod.Status.Reason, "did not run")
 		case cs.State.Terminated.ExitCode != 0:
@@ -405,6 +410,11 @@ func (r *ArtifactPlacementReconciler) readPrepareResult(p *sandboxv1alpha1.Swift
 				latest = t
 			}
 		}
+	}
+	if len(failed) == 0 && pending {
+		st.Prepared = false
+		st.Reason, st.Message = sandboxv1alpha1.PlacementReasonPreparing, ""
+		return
 	}
 	if len(failed) == 0 {
 		at := metav1.NewTime(latest)
@@ -599,6 +609,15 @@ func (r *ArtifactPlacementReconciler) finish(ctx context.Context, p *sandboxv1al
 	return ctrl.Result{RequeueAfter: after}, nil
 }
 
+func podHasContainer(pod *corev1.Pod, name string) bool {
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func nodeStatus(p *sandboxv1alpha1.SwiftArtifactPlacement, node string) *sandboxv1alpha1.PlacementNodeStatus {
 	for i := range p.Status.Nodes {
 		if p.Status.Nodes[i].Name == node {
@@ -709,14 +728,16 @@ func deniedAny(decisions []artifactpolicy.Decision) bool {
 	return false
 }
 
-// placementRequirements identifies the platform verification p's authorized
-// artifacts are prepared under: a hash of each governed artifact's acceptable
-// records, or "" when no policy governs any of them.
-func placementRequirements(p *sandboxv1alpha1.SwiftArtifactPlacement, decisions []artifactpolicy.Decision, authorized map[string]bool) string {
+// placementRequirements identifies the platform verification p's artifacts
+// are prepared under: a hash of each governed artifact's acceptable records,
+// or "" when no policy governs any of them. It depends on the policies only,
+// never on how far the registry has answered, so a prepare pod is not
+// replaced while authorizations arrive.
+func placementRequirements(p *sandboxv1alpha1.SwiftArtifactPlacement, decisions []artifactpolicy.Decision) string {
 	h := sha256.New()
 	governed := false
 	for i, a := range p.Spec.Artifacts {
-		if !authorized[a.Name] || i >= len(decisions) || !decisions[i].Governed() {
+		if i >= len(decisions) || !decisions[i].Governed() || decisions[i].Denied != "" {
 			continue
 		}
 		recs, err := decisions[i].AcceptableRecords(digestOf(a.Ref))
@@ -796,7 +817,7 @@ func (r *SwiftSandboxReconciler) preparedNodes(ctx context.Context, sb *sandboxv
 		if err != nil {
 			continue
 		}
-		reqs := placementRequirements(p, decisions, authorized)
+		reqs := placementRequirements(p, decisions)
 		for _, n := range p.Status.Nodes {
 			if !n.Prepared || n.ObservedGeneration != p.Generation || n.Requirements != reqs {
 				continue
