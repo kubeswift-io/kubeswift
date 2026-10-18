@@ -61,6 +61,8 @@ spec:
   image: <your-registry>/cuda-inference@sha256:...   # must match the pool
   cpu: 4
   memory: 8Gi
+  network:
+    mode: open          # must match the pool too: unset means restricted, a cold boot
   poolRef:
     name: infer-pool
   command: ["/bin/sh", "-c", "nvidia-smi -L && python /app/infer.py --model /model"]
