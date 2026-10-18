@@ -6,6 +6,23 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.18.0] — 2026-10-18
+
+Platform-controlled artifact verification, and sandbox fixes.
+
+- **SwiftArtifactVerificationPolicy** (new cluster-scoped CRD). An
+  administrator decides, per namespace and repository, which public keys and
+  which signed claims the artifacts sandboxes mount must carry. A workload
+  cannot choose, skip or weaken it, and a cache entry verified under one
+  policy never satisfies another. Warm checkouts of prepared artifacts keep
+  their millisecond claim-to-dispatch.
+- **Sandboxes without `spec.network` start again.** Since v0.16.3 such a
+  sandbox never started on a cluster with the webhook enabled (#768).
+- **Warm slots boot about 3 s faster**: the guest's first DHCP request is
+  answered (#780).
+- A warm slot whose guest agent never answers is replaced (#781); update
+  conflicts are no longer logged as errors (#758).
+
 ### Upgrade
 
 - CRDs changed: the new cluster-scoped `swiftartifactverificationpolicies`;
@@ -20,6 +37,13 @@ All notable changes to KubeSwift are documented here.
   checkout of an artifact a policy governs never goes to one: a required
   artifact boots cold, an optional one starts without it
   (`LauncherUnsupported`), until the pool has replaced those slots.
+- **Behaviour change:** a warm slot that waits for its guest agent and has
+  not got it 5 minutes after its launcher started is now deleted and
+  replaced (Warning Event `SlotNotReady`), backing off up to an hour per
+  pool. Set the new controller flag `--warm-slot-ready-timeout` (default
+  `5m`, `0` disables) if slots legitimately take longer. Slots started
+  before v0.16.4 are never replaced this way.
+- Running sandboxes, warm slots and guests are not restarted by the upgrade.
 
 ### Added
 
@@ -47,6 +71,32 @@ All notable changes to KubeSwift are documented here.
   See `docs/sandbox/artifact-verification-policy.md`.
 - `spec.artifacts[].requirePlatformVerification` refuses an artifact no
   policy governs.
+
+### Fixed
+
+- A SwiftSandbox created without `spec.network` never started when the
+  webhook was enabled: finalizers were added with a full-object update that
+  wrote `spec.network` back as `{}`, the API server defaulted it, and the
+  webhook refused the "spec change". It hit native-GPU sandboxes (#768) and,
+  since v0.16.3, every sandbox without `spec.network`. Every SwiftSandbox and
+  SwiftSandboxPool finalizer is now added and removed with a metadata-only
+  patch (#806).
+- A warm slot whose guest agent never answered stayed in
+  `status.warmingReplicas` forever, in place of a working slot; it is now
+  replaced (#781, #808).
+- A placement prepare pod built before every artifact was authorized
+  reported the later artifacts "did not run" and backed off; they are now
+  pending (#805).
+- Write conflicts that the controller retries were logged as
+  `Reconciler error` at error level; they are now a debug-level requeue, and
+  placement status is written as a patch (#758, #807).
+
+### Changed
+
+- The launcher's dnsmasq answers the guest's first DHCP request instead of
+  pinging the address and waiting up to 3 s (`--no-ping`; the bridge is the
+  pod's own). Warm slot launcher start to guest agent ready went from about
+  5.2 s to 2.1 s on a lab node (#780, #809).
 
 ---
 
