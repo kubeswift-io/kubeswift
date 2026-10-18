@@ -155,7 +155,8 @@ func (r *SwiftSandboxPoolReconciler) clearResolveBackoff(key types.NamespacedNam
 	r.resolveFailures.Delete(key)
 }
 
-func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
+	defer requeueOnConflict(ctx, &res, &err)
 	var pool sandboxv1alpha1.SwiftSandboxPool
 	if err := r.Get(ctx, req.NamespacedName, &pool); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)

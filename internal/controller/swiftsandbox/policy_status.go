@@ -32,7 +32,8 @@ type ArtifactPolicyStatusReconciler struct {
 	Recorder record.EventRecorder
 }
 
-func (r *ArtifactPolicyStatusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *ArtifactPolicyStatusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
+	defer requeueOnConflict(ctx, &res, &err)
 	var p sandboxv1alpha1.SwiftArtifactVerificationPolicy
 	if err := r.Get(ctx, req.NamespacedName, &p); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
