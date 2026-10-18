@@ -111,6 +111,10 @@ func main() {
 		"Fraction of --artifact-authorization-ttl after which a lookup answered from the cache also "+
 			"asks the registry again in the background, so a reference in use is renewed before it "+
 			"expires and no checkout waits for the registry. 0 disables renewal. At least 0, below 1.")
+	slotReadyTimeout := flag.Duration("warm-slot-ready-timeout", swiftsandbox.DefaultSlotReadyTimeout,
+		"How long after its launcher starts a warm SwiftSandboxPool slot may wait for its guest agent "+
+			"before it is deleted and replaced (Warning Event SlotNotReady). Doubles with each consecutive "+
+			"replacement in a pool, up to 1h; the first slot that gets ready resets it. 0 never replaces one.")
 	klog.InitFlags(nil)
 	flag.Parse()
 
@@ -424,10 +428,11 @@ func main() {
 	}
 
 	if err = (&swiftsandbox.SwiftSandboxPoolReconciler{
-		Client:    mgr.GetClient(),
-		APIReader: mgr.GetAPIReader(),
-		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorderFor("swiftsandboxpool-controller"),
+		Client:           mgr.GetClient(),
+		APIReader:        mgr.GetAPIReader(),
+		Scheme:           mgr.GetScheme(),
+		Recorder:         mgr.GetEventRecorderFor("swiftsandboxpool-controller"),
+		SlotReadyTimeout: *slotReadyTimeout,
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftSandboxPool controller")
 		os.Exit(1)
