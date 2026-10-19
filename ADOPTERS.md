@@ -12,9 +12,10 @@ to be counted, open an issue and say so.
 
 | Organization | Contact | Status | Description of Use |
 |---|---|---|---|
-| _Your organization_ | _@your-github-handle_ | _evaluating_ | _What you run on KubeSwift_ |
+| CLASTIX | @prometherion | testing | Part of our development environment, `baby-kmetal`, to test and offer testing environments of CLASTIX's kMetal product. |
 
 <!--
+| _Your organization_ | _@your-github-handle_ | _evaluating_ | _What you run on KubeSwift_ |
 Add a row in alphabetical order by Organization. Keep it to one line.
 
   Organization  Company, institution, or project name. Use "(individual)" if
