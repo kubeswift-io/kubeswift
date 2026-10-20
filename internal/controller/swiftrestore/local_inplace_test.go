@@ -60,7 +60,7 @@ func TestLocal_Pending_InPlaceRestore_StampsExistingGuestAndAdvances(t *testing.
 	source := makeSourceGuest("default", "g1", "ubuntu-noble")
 	// Existing launcher pod (will be deleted by the in-place path).
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", OwnerReferences: guestControllerRef("g1")},
 	}
 
 	r, c := newReconciler(t, snap, restore, source, pod)
@@ -246,7 +246,7 @@ func TestLocal_Pending_KernelBootSourceIsRefused(t *testing.T) {
 			source := makeSourceGuest("default", "g1", "ubuntu-noble")
 			source.Spec.ImageRef = nil
 			source.Spec.KernelRef = &corev1.LocalObjectReference{Name: "faas"}
-			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default"}}
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", OwnerReferences: guestControllerRef("g1")}}
 
 			r, c := newReconciler(t, snap, restore, source, pod)
 			r.CurrentHypervisorVersion = "v51.1"
@@ -273,5 +273,31 @@ func TestLocal_Pending_KernelBootSourceIsRefused(t *testing.T) {
 				t.Errorf("clone target created: err=%v", err)
 			}
 		})
+	}
+}
+
+// #824: after a live migration the guest's launcher is the renamed
+// destination pod. An in-place restore deleted the pod named like the guest,
+// which did not exist, and left the migrated VM running, so nothing was
+// restored. It deletes the launcher status.podRef names.
+func TestLocal_Pending_InPlaceRestoreOfAMigratedGuestReplacesItsLauncher(t *testing.T) {
+	snap := makeLocalSnapWithBackend("snap1", "default", "g1", "/var/lib/kubeswift/snapshots/default-snap1", "v51.1")
+	snap.Spec.ResumeAfterSnapshot = false
+	restore := makeRestore("r1", "default", "snap1", "g1", true)
+	restore.Spec.TargetGuest.OverwriteExisting = true
+	source := makeSourceGuest("default", "g1", "ubuntu-noble")
+	source.Status.PodRef = &corev1.ObjectReference{Kind: "Pod", Name: "g1-mig-abc", Namespace: "default"}
+	migrated := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1-mig-abc", Namespace: "default", OwnerReferences: guestControllerRef("g1")}}
+
+	r, c := newReconciler(t, snap, restore, source, migrated)
+	r.CurrentHypervisorVersion = "v51.1"
+	reconcile(t, r, "r1", "default")
+
+	if got := get(t, c, "r1", "default"); got.Status.Phase != snapshotv1alpha1.SwiftRestorePhaseRestoring {
+		t.Fatalf("phase = %s (%s), want Restoring", got.Status.Phase, reasonOrEmpty(findReady(got)))
+	}
+	err := c.Get(context.Background(), client.ObjectKey{Name: "g1-mig-abc", Namespace: "default"}, &corev1.Pod{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("the migrated launcher was not replaced: err=%v", err)
 	}
 }

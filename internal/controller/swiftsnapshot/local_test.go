@@ -42,11 +42,12 @@ func makeLocalSnap(name, ns, guestName string) *snapshotv1alpha1.SwiftSnapshot {
 }
 
 // makeLauncherPod fabricates a launcher pod with the same name as the
-// guest, scheduled on `node`, in PodRunning phase by default. Tests
-// override Status.Phase as needed.
+// guest, controlled by makeGuest's guest of that name, scheduled on
+// `node`, in PodRunning phase by default. Tests override Status.Phase as
+// needed.
 func makeLauncherPod(ns, name, node string) *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, OwnerReferences: guestControllerRef(name)},
 		Spec:       corev1.PodSpec{NodeName: node},
 		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
 	}

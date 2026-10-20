@@ -26,7 +26,7 @@ func fullStateSnap(capturedAt time.Time) *snapshotv1alpha1.SwiftSnapshot {
 }
 
 func launcherCreatedAt(at time.Time) *corev1.Pod {
-	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", CreationTimestamp: metav1.NewTime(at)}}
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", OwnerReferences: guestControllerRef("g1"), CreationTimestamp: metav1.NewTime(at)}}
 }
 
 func inPlaceRestore() *snapshotv1alpha1.SwiftRestore {

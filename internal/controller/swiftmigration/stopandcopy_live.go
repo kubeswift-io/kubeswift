@@ -702,7 +702,37 @@ func (r *SwiftMigrationReconciler) writeMigrationAction(
 	pod.Annotations[AnnotationMigrationAction] = action
 	pod.Annotations[AnnotationMigrationActionID] = id
 	pod.Annotations[AnnotationMigrationActionArgs] = argsJSON
+	dropFinishedSnapshotAction(pod.Annotations)
 	return r.Patch(ctx, pod, patch)
+}
+
+// Snapshot action keys on a launcher. Mirrors
+// rust/swiftletd/src/action.rs SNAPSHOT_*_KEY.
+const (
+	annoSnapshotAction     = "kubeswift.io/snapshot-action"
+	annoSnapshotActionID   = "kubeswift.io/snapshot-action-id"
+	annoSnapshotActionArgs = "kubeswift.io/snapshot-action-args"
+	annoSnapshotStatus     = "kubeswift.io/snapshot-status"
+	annoSnapshotStatusID   = "kubeswift.io/snapshot-status-id"
+)
+
+// dropFinishedSnapshotAction removes a snapshot action swiftletd has
+// finished. swiftletd counts the snapshot namespace busy while its action is
+// set, and rejects a migration action written next to it (#823), so a
+// capture finished long ago failed the migration. The SwiftSnapshot
+// controller clears its own actions; this covers one whose snapshot is gone.
+// An action not finished is left: it still belongs to a running capture.
+func dropFinishedSnapshotAction(a map[string]string) {
+	id := a[annoSnapshotActionID]
+	if id == "" || a[annoSnapshotStatusID] != id {
+		return
+	}
+	switch a[annoSnapshotStatus] {
+	case "ready", "failed", "rejected":
+		delete(a, annoSnapshotAction)
+		delete(a, annoSnapshotActionID)
+		delete(a, annoSnapshotActionArgs)
+	}
 }
 
 // AnnotationMigrationActionArgs carries the JSON-encoded action

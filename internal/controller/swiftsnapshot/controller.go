@@ -99,6 +99,9 @@ func (r *SwiftSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if err := r.ensureFinalizer(ctx, &snap); err != nil {
 			return ctrl.Result{}, err
 		}
+		if err := r.clearFinishedActions(ctx, &snap); err != nil {
+			return ctrl.Result{}, err
+		}
 		// TTL-driven retention: delete once capturedAt+ttl elapses (deferred
 		// while still referenced). No-op when spec.ttl is unset.
 		requeue, err := r.handleRetention(ctx, &snap)
@@ -108,7 +111,9 @@ func (r *SwiftSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{RequeueAfter: requeue}, nil
 	}
 	if snap.Status.Phase == snapshotv1alpha1.SwiftSnapshotPhaseFailed {
-		return ctrl.Result{}, nil
+		// A resume queued behind an abandoned capture is cleared once it has
+		// run; the pod watch brings the snapshot back when it has.
+		return ctrl.Result{}, r.clearFinishedActions(ctx, &snap)
 	}
 
 	phase := snap.Status.Phase
@@ -550,8 +555,9 @@ func (r *SwiftSnapshotReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // podToSnapshots maps a Pod event to the SwiftSnapshots that target
 // the Pod's guest. Returns at most one Request: launcher pods are
 // 1:1 with SwiftGuests, and we filter to SwiftSnapshots in the same
-// namespace whose guestRef.name matches the pod name AND whose phase
-// is Capturing (terminal phases don't need re-reconcile).
+// namespace whose guestRef.name is the pod's guest AND whose phase
+// is Capturing (terminal phases don't need re-reconcile, except a
+// Failed one with a queued resume to clear).
 //
 // The mapper returns no requests for non-launcher pods (e.g. CSI
 // driver pods, image-import jobs); the guestRef-name filter is the
@@ -571,17 +577,27 @@ func (r *SwiftSnapshotReconciler) podToSnapshots(ctx context.Context, obj client
 		// level would be noisy on every Pod event.
 		return nil
 	}
+	// A launcher is labelled with its guest's name; after a live migration
+	// its own name is <guest>-mig-<id>, so the pod name alone missed it.
+	guestName := pod.Labels[launcherGuestLabel]
+	if guestName == "" {
+		guestName = pod.Name
+	}
 	var out []ctrlreconcile.Request
 	for i := range snaps.Items {
 		s := &snaps.Items[i]
-		if s.Spec.GuestRef.Name != pod.Name {
+		if s.Spec.GuestRef.Name != guestName {
 			continue
 		}
 		// Only Capturing snapshots care about Pod transitions —
 		// Pending hasn't dispatched the action, terminal phases are
-		// done. Skipping the rest keeps the reconcile-rate budget
-		// for the SwiftSnapshots that actually need it.
-		if s.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseCapturing {
+		// done — except a Failed one whose queued resume is on the pod:
+		// it clears the resume once swiftletd has run it. Skipping the
+		// rest keeps the reconcile-rate budget for the SwiftSnapshots
+		// that actually need it.
+		pendingResume := s.Status.Phase == snapshotv1alpha1.SwiftSnapshotPhaseFailed &&
+			pod.Annotations[annoActionID] == capturingActionID(s)+"-resume"
+		if s.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseCapturing && !pendingResume {
 			continue
 		}
 		out = append(out, ctrlreconcile.Request{

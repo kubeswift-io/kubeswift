@@ -9,6 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -81,9 +82,21 @@ func makeRestore(name, ns, snapName, targetName string, resume bool) *snapshotv1
 	}
 }
 
+// testGuestUID is makeSourceGuest's UID for a guest name; test launcher pods
+// are controlled by it (guestControllerRef), as every launcher is controlled
+// by its guest.
+func testGuestUID(name string) types.UID { return types.UID("uid-" + name) }
+
+// guestControllerRef is the controller reference of makeSourceGuest's guest.
+func guestControllerRef(name string) []metav1.OwnerReference {
+	return []metav1.OwnerReference{*metav1.NewControllerRef(
+		&swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: name, UID: testGuestUID(name)}},
+		schema.GroupVersionKind{Group: swiftv1alpha1.GroupName, Version: swiftv1alpha1.Version, Kind: "SwiftGuest"})}
+}
+
 func makeSourceGuest(ns, name, image string) *swiftv1alpha1.SwiftGuest {
 	return &swiftv1alpha1.SwiftGuest{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: testGuestUID(name)},
 		Spec: swiftv1alpha1.SwiftGuestSpec{
 			ImageRef:      &corev1.LocalObjectReference{Name: image},
 			GuestClassRef: corev1.LocalObjectReference{Name: "default-class"},
