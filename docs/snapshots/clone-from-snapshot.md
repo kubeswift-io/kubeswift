@@ -41,6 +41,9 @@ spec:
 required** by the CRD schema (set it to any class) but is not used for
 resources — the resumed VM's CPU/memory come from the snapshot.
 
+The snapshot's source must be a **disk-boot** guest. A clone of a kernel-boot
+source (`spec.kernelRef`) fails with the reason on `Resolved`.
+
 ## How it works
 
 ```

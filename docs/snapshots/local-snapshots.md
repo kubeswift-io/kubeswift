@@ -137,6 +137,11 @@ The admission webhook **rejects** SwiftSnapshots with:
 - `kubeswift.io/hypervisor-override=qemu` on the source guest.
   Phase 2 ships memory snapshots on Cloud Hypervisor only.
 
+A kernel-boot guest (`spec.kernelRef`) can be captured, but not restored: the
+restore launcher serves disk-boot guests only. A SwiftRestore of one fails with
+`KernelBootUnsupported` before anything is stopped, and a `cloneFromSnapshot`
+guest of one fails with the reason on `Resolved`.
+
 ## One capture at a time per guest
 
 A guest's launcher runs one action at a time. A memory snapshot (`local`,

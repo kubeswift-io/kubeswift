@@ -567,3 +567,24 @@ func TestPrepareCloneFromSnapshot_SourceGone_NoGuestClass_Fails(t *testing.T) {
 		t.Errorf("fail = %q, want a SwiftGuestClass-not-found message", fail)
 	}
 }
+
+// A kernel-boot source cannot be cloned: the restore launcher needs a root
+// disk and mounts no kernel artifact, so the clone sat Pending forever (#818).
+func TestPrepareCloneFromSnapshot_KernelBootSource_Fails(t *testing.T) {
+	g := cloneGuest()
+	src := sourceGuest()
+	src.Spec.ImageRef = nil
+	src.Spec.KernelRef = &corev1.LocalObjectReference{Name: "faas"}
+	r, c := newCloneReconciler(t, g, src, localSnap(snapshotv1alpha1.SwiftSnapshotPhaseReady))
+	_, _, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	if err != nil || requeue || !strings.Contains(fail, "disk-boot sources only") || !strings.Contains(fail, "kernelRef") {
+		t.Fatalf("kernel-boot source should fail with the reason; fail=%q requeue=%v err=%v", fail, requeue, err)
+	}
+	var got swiftv1alpha1.SwiftGuest
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "clone-a", Namespace: "ns"}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Annotations[AnnotationActiveRestore] != "" {
+		t.Errorf("restore annotations stamped on a clone that cannot run: %+v", got.Annotations)
+	}
+}

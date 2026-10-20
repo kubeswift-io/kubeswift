@@ -132,6 +132,13 @@ func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 		}
 		return nil, nil, "", false, err
 	}
+	// The restore launcher serves disk-boot guests only: it needs a root disk
+	// and does not mount a kernel artifact, so a clone of a kernel-boot source
+	// sat Pending forever on a root PVC that is never created (#818).
+	if source.Spec.KernelRef != nil {
+		return nil, nil, "cloneFromSnapshot is supported for disk-boot sources only; SwiftGuest " + source.Name +
+			" boots from a kernel (spec.kernelRef)", false, nil
+	}
 
 	// Self-stamp the clone-mode restore annotations (mirrors what the
 	// SwiftRestore controller stamps on its clone targets) if not already set.
