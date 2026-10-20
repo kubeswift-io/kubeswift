@@ -1,0 +1,96 @@
+# The fastest way to a running SwiftSandbox: check out a pre-booted microVM
+# from a warm pool.
+#
+# A SwiftSandboxPool keeps minWarm microVMs booted and idle, with the rootfs
+# materialized and the guest agent answering. A SwiftSandbox with spec.poolRef
+# claims one and sends its command over vsock: nothing is pulled, materialized
+# or booted on the request path. A checkout reaches Running in about half a
+# second (measured on a 3-node lab cluster; approximate).
+#
+# Two steps, so the slow part happens before the audience watches:
+#
+#   kubectl apply -f config/samples/fast-path/swiftsandbox-fast.yaml -l step=prepare
+#   kubectl -n fast-path get swiftkernel sandbox -w        # Ready: kernel on the nodes
+#   kubectl -n fast-path get sboxpool fast-pool -w         # WARM 2: two pre-booted slots
+#
+#   # the demo
+#   kubectl apply -f config/samples/fast-path/swiftsandbox-fast.yaml -l step=create
+#   kubectl -n fast-path get sbox fast-sandbox -w          # Running in about half a second
+#
+# Show that it is a VM, and that it was booted before you asked for it:
+#   swiftctl sandbox exec fast-sandbox -n fast-path -- uname -r     # the guest's own kernel
+#   swiftctl sandbox exec fast-sandbox -n fast-path -- cat /proc/uptime
+#     → uptime is longer than the sandbox's age: the slot booted earlier.
+#
+# Do it again: the pool boots a replacement slot in the background (a few
+# seconds). Delete the sandbox and re-apply the create step once WARM is back
+# to 2; the new checkout is just as fast.
+#
+#   kubectl -n fast-path delete sbox fast-sandbox
+#   kubectl apply -f config/samples/fast-path/swiftsandbox-fast.yaml -l step=create
+#
+# The checkout must match the pool's shape exactly (image, cpu, memory,
+# network.mode). A mismatch still works but boots cold, and the sandbox gets a
+# PoolColdFallback Event naming the field.
+#
+# Prereq: at least one node labelled kubeswift.io/kernel-node=true. Two nodes
+# let the pool spread its slots.
+#
+# Cleanup:
+#   kubectl delete ns fast-path
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fast-path
+  labels:
+    step: prepare
+---
+# The sandbox kernel, pulled once per kernel node. Pinned by digest; the tag is
+# the artifact's version (Linux 6.6.158).
+apiVersion: kernel.kubeswift.io/v1alpha1
+kind: SwiftKernel
+metadata:
+  name: sandbox
+  namespace: fast-path
+  labels:
+    step: prepare
+spec:
+  ociRef:
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.16@sha256:4305c3b3ba46c1a3a1c751a6976cbb7c9f0af443879a628d7fb55518ae93d633
+  kernelCmdline: "console=ttyS0"
+  profile: sandbox
+---
+# Two pre-booted alpine microVMs, ready to be checked out.
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandboxPool
+metadata:
+  name: fast-pool
+  namespace: fast-path
+  labels:
+    step: prepare
+spec:
+  image: docker.io/library/alpine:3.20
+  cpu: 1
+  memory: 512Mi
+  network:
+    mode: restricted
+  minWarm: 2
+  maxWarm: 4
+---
+# The checkout. Same shape as the pool, plus a command.
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandbox
+metadata:
+  name: fast-sandbox
+  namespace: fast-path
+  labels:
+    step: create
+spec:
+  poolRef:
+    name: fast-pool
+  image: docker.io/library/alpine:3.20
+  cpu: 1
+  memory: 512Mi
+  network:
+    mode: restricted
+  command: ["/bin/sh", "-c", "echo ready; sleep 3600"]

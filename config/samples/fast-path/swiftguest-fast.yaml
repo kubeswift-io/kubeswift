@@ -1,0 +1,94 @@
+# The fastest way to a running SwiftGuest: direct kernel boot.
+#
+# The guest boots a kernel + initramfs (an OCI artifact pulled once per node by
+# the SwiftKernel) straight into memory. There is no disk image to import, no
+# root PVC to provision or clone, and no firmware. With the kernel already on
+# the node, a new guest reaches Running in about 5 seconds (measured on a
+# 3-node lab cluster; approximate).
+#
+# Two steps, so the slow part happens before the audience watches:
+#
+#   kubectl apply -f config/samples/fast-path/swiftguest-fast.yaml -l step=prepare
+#   kubectl -n fast-path get swiftkernel faas -w           # Ready: kernel on the nodes
+#
+#   # the demo
+#   kubectl apply -f config/samples/fast-path/swiftguest-fast.yaml -l step=create
+#   kubectl -n fast-path get swiftguest fast-guest -w      # Running in about 5 s
+#
+# Show it:
+#   swiftctl console fast-guest -n fast-path
+#     → "KubeSwift faas-minimal ready", a BusyBox shell. Ctrl+O detaches.
+#     The shell is the guest's PID 1: `exit` or Ctrl+D ends init and panics
+#     the guest kernel. Detach with Ctrl+O instead.
+#   kubectl -n fast-path get swiftguest fast-guest -o wide # the guest IP
+#
+# Do it again: delete the guest, wait for its launcher pod to go (it shuts the
+# VM down; up to ~30 s), then re-apply the create step. Re-creating it while
+# the old pod is still terminating shows the OLD VM's status for a while.
+#
+#   kubectl -n fast-path delete swiftguest fast-guest
+#   kubectl -n fast-path wait --for=delete pod/fast-guest --timeout=60s
+#   kubectl apply -f config/samples/fast-path/swiftguest-fast.yaml -l step=create
+#
+# Why not a memory clone? cloneFromSnapshot resumes a disk-boot VM instead of
+# booting it, but each clone still gets its own root disk and its RAM staged
+# from the snapshot, which takes tens of seconds even on copy-on-write storage.
+# It is the right tool for skipping a slow in-guest warm-up, not for raw
+# create-to-Running time. See docs/snapshots/fast-vms.md.
+#
+# Prereq: at least one node labelled kubeswift.io/kernel-node=true.
+#
+# Cleanup:
+#   kubectl delete ns fast-path
+#   kubectl delete swiftguestclass fast-micro
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fast-path
+  labels:
+    step: prepare
+---
+# A small class for the microVM. rootDisk is required by the schema but unused
+# by a kernel-boot guest, which has no root disk.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestClass
+metadata:
+  name: fast-micro
+  labels:
+    step: prepare
+spec:
+  cpu: 1
+  memory: "512Mi"
+  rootDisk:
+    size: "1Gi"
+    format: raw
+---
+# The faas-minimal kernel, pulled once per kernel node. Pinned by digest; the
+# tag is the artifact's version (Linux 6.6.158).
+apiVersion: kernel.kubeswift.io/v1alpha1
+kind: SwiftKernel
+metadata:
+  name: faas
+  namespace: fast-path
+  labels:
+    step: prepare
+spec:
+  ociRef:
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.4@sha256:27e88761b65c48af2c65423f4ef0bab323ad172470168c2a866f7be56e304a06
+  kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
+  profile: faas-minimal
+---
+# The guest.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: fast-guest
+  namespace: fast-path
+  labels:
+    step: create
+spec:
+  kernelRef:
+    name: faas
+  guestClassRef:
+    name: fast-micro
+  runPolicy: Running
