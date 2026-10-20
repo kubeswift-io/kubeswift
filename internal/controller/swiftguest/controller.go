@@ -152,6 +152,15 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
+	// Only a pod this guest controls is its launcher (#819). Ahead of every
+	// path that reads the launcher (stop, restart, status), so none of them
+	// reports, stops or replaces a previous guest's pod by the same name.
+	if reason, msg, err := r.foreignLauncher(ctx, &guest); err != nil {
+		return ctrl.Result{}, err
+	} else if reason != "" {
+		return r.holdForForeignLauncher(ctx, &guest, reason, msg)
+	}
+
 	// Per-namespace RBAC bootstrap: idempotently ensure the
 	// `swiftletd-reporter` RoleBinding exists in this SwiftGuest's
 	// namespace, so the launcher pod's `default` ServiceAccount has
