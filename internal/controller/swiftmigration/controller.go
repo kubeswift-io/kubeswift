@@ -252,6 +252,9 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// removeFinalizer call when the finalizer is already gone avoids
 	// an unnecessary API roundtrip on every spurious enqueue.
 	if isTerminalPhase(mig.Status.Phase) {
+		if err := r.clearDestinationReceive(ctx, &mig); err != nil {
+			return ctrl.Result{}, fmt.Errorf("clear receive action on the guest's launcher: %w", err)
+		}
 		if hasFinalizer(&mig) {
 			// Reclaim the per-node identity copies before dropping the
 			// finalizer, so a node-wide private key does not linger in the

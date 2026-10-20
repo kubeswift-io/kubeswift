@@ -1,8 +1,36 @@
 package swiftguest
 
 import (
+	"context"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
+
+// LauncherPod returns the guest's launcher pod, or nil when it has none: the
+// pod status.podRef names (after a live migration, the renamed destination
+// pod), else the pod named like the guest, and only if the guest controls it.
+// Other controllers that act on a guest's launcher (snapshot, restore) find it
+// this way. Looking it up by the guest's name alone missed a migrated guest's
+// launcher, so a snapshot of it waited forever (#824), and could take a pod
+// left by a previous guest of the same name for this one's (#819).
+func LauncherPod(ctx context.Context, c client.Reader, guest *swiftv1alpha1.SwiftGuest) (*corev1.Pod, error) {
+	var pod corev1.Pod
+	if err := c.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: canonicalPodName(guest)}, &pod); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !metav1.IsControlledBy(&pod, guest) {
+		return nil, nil
+	}
+	return &pod, nil
+}
 
 // canonicalPodName returns the launcher pod name to look up for this
 // SwiftGuest. Pre-migration (and Phase 1 offline migration), the pod

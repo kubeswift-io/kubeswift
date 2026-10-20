@@ -96,7 +96,7 @@ func TestLocal_InPlaceRestoreRefusesADivergedDisk(t *testing.T) {
 	snap.Spec.ResumeAfterSnapshot = true
 	restore := makeRestore("r1", "default", "snap1", "g1", true)
 	restore.Spec.TargetGuest.OverwriteExisting = true
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default"}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", OwnerReferences: guestControllerRef("g1")}}
 	r, c := newReconciler(t, snap, restore, makeSourceGuest("default", "g1", "ubuntu-noble"), pod)
 	r.CurrentHypervisorVersion = "v51.1"
 
@@ -180,7 +180,7 @@ func guestAnnotations(t *testing.T, c client.Client) map[string]string {
 // the snapshot the restore is done, and no resume is sent. The in-place path
 // used to resume it regardless.
 func TestLocal_NoResumeLeavesTheVMPaused(t *testing.T) {
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default"}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", OwnerReferences: guestControllerRef("g1")}}
 	r, c := inPlaceRestoring(t, false, pod)
 
 	for i := 0; i < 3; i++ {
@@ -207,7 +207,7 @@ func TestLocal_NoResumeLeavesTheVMPaused(t *testing.T) {
 // restore on every relaunch and the guest never booted from its disk again.
 func TestLocal_FailedInPlaceRestoreReleasesTheGuest(t *testing.T) {
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", OwnerReferences: guestControllerRef("g1")},
 		Status:     corev1.PodStatus{Phase: corev1.PodFailed},
 	}
 	r, c := inPlaceRestoring(t, true, pod)
@@ -233,7 +233,7 @@ func TestLocal_FailedInPlaceRestoreReleasesTheGuest(t *testing.T) {
 // are not this restore's to remove.
 func TestLocal_FailedRestoreLeavesOtherRestoresAnnotations(t *testing.T) {
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", OwnerReferences: guestControllerRef("g1")},
 		Status:     corev1.PodStatus{Phase: corev1.PodFailed},
 	}
 	r, c := inPlaceRestoring(t, true, pod)
@@ -281,7 +281,7 @@ func TestLocal_InPlaceRestoreRefusesAGuestRelaunchedSinceTheCapture(t *testing.T
 			snap.Status.CapturedAt = &captured
 			restore := makeRestore("r1", "default", "snap1", "g1", true)
 			restore.Spec.TargetGuest.OverwriteExisting = true
-			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", CreationTimestamp: tc.podCreated}}
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", OwnerReferences: guestControllerRef("g1"), CreationTimestamp: tc.podCreated}}
 			r, c := newReconciler(t, snap, restore, makeSourceGuest("default", "g1", "ubuntu-noble"), pod)
 			r.CurrentHypervisorVersion = "v51.1"
 
@@ -311,20 +311,20 @@ func TestLocal_InPlaceRestoreWaitsForItsOwnLauncher(t *testing.T) {
 	}{
 		{
 			name: "status still describes the replaced launcher",
-			pod: corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", UID: "new",
+			pod: corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", OwnerReferences: guestControllerRef("g1"), UID: "new",
 				Labels:            map[string]string{swiftguestctrl.PodRoleLabel: swiftguestctrl.PodRoleRestoreReceive},
 				CreationTimestamp: metav1.NewTime(started.Add(time.Second))}},
 			ref: "old",
 		},
 		{
 			name: "the name still resolves to the replaced launcher",
-			pod: corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", UID: "old",
+			pod: corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", OwnerReferences: guestControllerRef("g1"), UID: "old",
 				CreationTimestamp: metav1.NewTime(started.Add(-time.Hour))}},
 			ref: "old",
 		},
 		{
 			name: "an earlier restore's launcher",
-			pod: corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", UID: "earlier",
+			pod: corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", OwnerReferences: guestControllerRef("g1"), UID: "earlier",
 				Labels:            map[string]string{swiftguestctrl.PodRoleLabel: swiftguestctrl.PodRoleRestoreReceive},
 				CreationTimestamp: metav1.NewTime(started.Add(-time.Hour))}},
 			ref: "earlier",
@@ -372,7 +372,7 @@ func TestLocal_InPlaceRestoreWaitsForItsOwnLauncher(t *testing.T) {
 	// Once the guest's status names the restore's launcher, the restore
 	// resumes that launcher.
 	t.Run("its own launcher reported", func(t *testing.T) {
-		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", UID: "new",
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", OwnerReferences: guestControllerRef("g1"), UID: "new",
 			CreationTimestamp: metav1.NewTime(started.Add(time.Second))}}
 		r, c := inPlaceRestoring(t, true, pod)
 		var restore snapshotv1alpha1.SwiftRestore

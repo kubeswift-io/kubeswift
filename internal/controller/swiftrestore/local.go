@@ -240,7 +240,7 @@ func (r *SwiftRestoreReconciler) diskDivergence(
 	if snap.Spec.ResumeAfterSnapshot && !snap.Spec.IncludeDisk {
 		why = "the guest was resumed after the capture (resumeAfterSnapshot=true)"
 	} else if snap.Status.CapturedAt != nil {
-		pod, err := r.findLauncherPod(ctx, guest.Namespace, guest.Name)
+		pod, err := r.findLauncherPod(ctx, guest)
 		if err != nil {
 			return "", err
 		}
@@ -749,11 +749,15 @@ func (r *SwiftRestoreReconciler) deleteLauncherPodForRecreation(
 	ctx context.Context,
 	guest *swiftv1alpha1.SwiftGuest,
 ) error {
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: guest.Name, Namespace: guest.Namespace},
+	// The guest's launcher, which after a live migration is the renamed
+	// destination pod; deleting the pod named like the guest left a migrated
+	// guest running from its live state, so nothing was restored (#824).
+	pod, err := r.findLauncherPod(ctx, guest)
+	if err != nil || pod == nil {
+		return err
 	}
 	zero := int64(0)
-	err := r.Delete(ctx, pod, &client.DeleteOptions{GracePeriodSeconds: &zero})
+	err = r.Delete(ctx, pod, &client.DeleteOptions{GracePeriodSeconds: &zero})
 	if err == nil || apierrors.IsNotFound(err) {
 		return nil
 	}
@@ -851,9 +855,9 @@ func (r *SwiftRestoreReconciler) unstampGuestRestoreAnnotations(
 	return r.Patch(ctx, &guest, client.RawPatch(types.MergePatchType, data))
 }
 
-// findLauncherPod returns the launcher pod for a SwiftGuest, or nil
-// if not yet present. Convention: launcher pod name == SwiftGuest
-// name (one launcher per guest).
+// findLauncherPod returns the SwiftGuest's launcher pod, or nil if not
+// yet present, found as the SwiftGuest controller finds it: after a live
+// migration it is the renamed destination pod status.podRef names (#824).
 // restoreLauncher returns the target guest's launcher pod if it is the one this
 // restore started, and whether the guest's status now describes it.
 //
@@ -872,7 +876,7 @@ func (r *SwiftRestoreReconciler) restoreLauncher(
 	status *snapshotv1alpha1.SwiftRestoreStatus,
 	target *swiftv1alpha1.SwiftGuest,
 ) (*corev1.Pod, bool, error) {
-	pod, err := r.findLauncherPod(ctx, restore.Namespace, target.Name)
+	pod, err := r.findLauncherPod(ctx, target)
 	if err != nil || pod == nil {
 		return nil, false, err
 	}
@@ -885,16 +889,8 @@ func (r *SwiftRestoreReconciler) restoreLauncher(
 	return pod, ref != nil && ref.UID != "" && ref.UID == pod.UID, nil
 }
 
-func (r *SwiftRestoreReconciler) findLauncherPod(ctx context.Context, namespace, guestName string) (*corev1.Pod, error) {
-	var pod corev1.Pod
-	err := r.Get(ctx, client.ObjectKey{Name: guestName, Namespace: namespace}, &pod)
-	if apierrors.IsNotFound(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &pod, nil
+func (r *SwiftRestoreReconciler) findLauncherPod(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) (*corev1.Pod, error) {
+	return swiftguestctrl.LauncherPod(ctx, r.Client, guest)
 }
 
 // patchPodActionAnnotations writes a merge patch that sets the action

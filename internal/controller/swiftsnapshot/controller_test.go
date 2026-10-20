@@ -11,12 +11,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	storagev1alpha1 "github.com/kubeswift-io/kubeswift/api/storage/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
@@ -50,6 +52,10 @@ func testScheme(t *testing.T) *runtime.Scheme {
 		&storagev1alpha1.SwiftClusterStorageLocation{}, &storagev1alpha1.SwiftClusterStorageLocationList{},
 	)
 	metav1.AddToGroupVersion(s, gvStorage)
+	// A capture checks the launcher for a migration's action (#823).
+	gvMig := schema.GroupVersion{Group: "migration.kubeswift.io", Version: "v1alpha1"}
+	s.AddKnownTypes(gvMig, &migrationv1alpha1.SwiftMigration{}, &migrationv1alpha1.SwiftMigrationList{})
+	metav1.AddToGroupVersion(s, gvMig)
 	metav1.AddToGroupVersion(s, gvSnap)
 	metav1.AddToGroupVersion(s, gvSwift)
 	return s
@@ -91,9 +97,20 @@ func makeBoundClonePVC(ns, guestName string) *corev1.PersistentVolumeClaim {
 	}
 }
 
+// testGuestUID is makeGuest's UID for a guest name; makeLauncherPod's pods
+// are controlled by it, as every launcher is controlled by its guest.
+func testGuestUID(name string) types.UID { return types.UID("uid-" + name) }
+
+// guestControllerRef is the controller reference of makeGuest's guest name.
+func guestControllerRef(name string) []metav1.OwnerReference {
+	return []metav1.OwnerReference{*metav1.NewControllerRef(
+		&swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: name, UID: testGuestUID(name)}},
+		schema.GroupVersionKind{Group: swiftv1alpha1.GroupName, Version: swiftv1alpha1.Version, Kind: "SwiftGuest"})}
+}
+
 func makeGuest(ns, name string) *swiftv1alpha1.SwiftGuest {
 	return &swiftv1alpha1.SwiftGuest{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: testGuestUID(name)},
 		Spec: swiftv1alpha1.SwiftGuestSpec{
 			ImageRef: &corev1.LocalObjectReference{Name: "ubuntu-noble"},
 		},

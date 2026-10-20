@@ -38,6 +38,7 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 	"github.com/kubeswift-io/kubeswift/internal/sharedbase"
 )
@@ -158,6 +159,15 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 	// waited for a reply that never came until its deadline (#735). Wait
 	// for the slot, before anything about this capture is recorded.
 	if waitFor, err := r.actionSlotBusy(ctx, snap, pod); err != nil {
+		return false, 0, err
+	} else if waitFor != "" {
+		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhasePending)
+		setReadyCondition(status, metav1.ConditionFalse, ReasonCaptureInProgress, waitFor)
+		return false, 5 * time.Second, nil
+	}
+	// A capture and a migration cannot share the launcher: swiftletd rejects
+	// both (#823). Wait for a running migration; clear one that has ended.
+	if waitFor, err := r.migrationSlot(ctx, snap, pod); err != nil {
 		return false, 0, err
 	} else if waitFor != "" {
 		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhasePending)
@@ -390,21 +400,22 @@ func (r *SwiftSnapshotReconciler) handleCapturingLocal(
 	return true, "", nil
 }
 
-// findLauncherPod returns the launcher pod for the SwiftGuest, or nil
-// if not yet present.
+// findLauncherPod returns the SwiftGuest's launcher pod, or nil if the
+// guest or its launcher is not there (yet).
 //
-// Convention: launcher pod name == SwiftGuest name (one launcher per
-// guest). Get-by-name keeps RBAC narrow.
+// The launcher is found as the SwiftGuest controller finds it
+// (swiftguest.LauncherPod): after a live migration it is the renamed
+// destination pod that status.podRef names. Looking for a pod named like the
+// guest missed it, so a snapshot of a migrated guest waited forever (#824).
 func (r *SwiftSnapshotReconciler) findLauncherPod(ctx context.Context, namespace, guestName string) (*corev1.Pod, error) {
-	var pod corev1.Pod
-	err := r.Get(ctx, client.ObjectKey{Name: guestName, Namespace: namespace}, &pod)
-	if apierrors.IsNotFound(err) {
-		return nil, nil
-	}
-	if err != nil {
+	var guest swiftv1alpha1.SwiftGuest
+	if err := r.Get(ctx, client.ObjectKey{Name: guestName, Namespace: namespace}, &guest); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
-	return &pod, nil
+	return swiftguest.LauncherPod(ctx, r.Client, &guest)
 }
 
 // patchPodActionAnnotations writes a merge patch that sets the action

@@ -9,6 +9,7 @@ import (
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 )
 
 // migrationStatusSending is swiftletd-on-src's pre-dispatch status for a send
@@ -54,4 +55,35 @@ func (r *SwiftMigrationReconciler) clearSourceSend(ctx context.Context, mig *mig
 	delete(src.Annotations, AnnotationMigrationActionID)
 	delete(src.Annotations, AnnotationMigrationActionArgs)
 	return client.IgnoreNotFound(r.Patch(ctx, &src, patch))
+}
+
+// clearDestinationReceive removes this migration's receive action from the
+// guest's launcher once the migration has completed. After cutover that pod
+// is the guest's launcher, and swiftletd counts its migration namespace busy
+// while the action is set: every later memory snapshot of the guest was
+// rejected as concurrent with a migration that had ended (#823).
+//
+// Idempotent; it runs on every pass over a completed migration, so a
+// controller upgrade clears the actions earlier versions left. A no-op when
+// the launcher carries another migration's action.
+func (r *SwiftMigrationReconciler) clearDestinationReceive(ctx context.Context, mig *migrationv1alpha1.SwiftMigration) error {
+	if mig.Status.Phase != migrationv1alpha1.SwiftMigrationPhaseCompleted {
+		return nil
+	}
+	var guest swiftv1alpha1.SwiftGuest
+	if err := r.Get(ctx, client.ObjectKey{Name: mig.Spec.GuestRef.Name, Namespace: mig.Namespace}, &guest); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	pod, err := swiftguest.LauncherPod(ctx, r.Client, &guest)
+	if err != nil || pod == nil {
+		return err
+	}
+	if !strings.HasPrefix(pod.Annotations[AnnotationMigrationActionID], mig.Name+":recv:") {
+		return nil
+	}
+	patch := client.MergeFrom(pod.DeepCopy())
+	delete(pod.Annotations, AnnotationMigrationAction)
+	delete(pod.Annotations, AnnotationMigrationActionID)
+	delete(pod.Annotations, AnnotationMigrationActionArgs)
+	return client.IgnoreNotFound(r.Patch(ctx, pod, patch))
 }
