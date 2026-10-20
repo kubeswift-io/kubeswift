@@ -355,6 +355,17 @@ func (r *SwiftRestoreReconciler) materializeRestoreTarget(
 			"source SwiftGuest "+snap.Spec.GuestRef.Name+" no longer exists; Tier B restore needs the source spec")
 		return true, 0, nil
 	}
+	// The restore launcher serves disk-boot guests only: it needs a root disk
+	// and does not mount a kernel artifact. A kernel-boot target never started
+	// and sat Pending on a root PVC that is never created (#818). Refused
+	// before anything is stamped, so an in-place restore leaves the running
+	// guest alone.
+	if source.Spec.KernelRef != nil {
+		setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
+		setReadyCondition(status, metav1.ConditionFalse, ReasonKernelBootUnsupported,
+			"SwiftGuest "+source.Name+" boots from a kernel (spec.kernelRef); restoring a memory snapshot is supported for disk-boot guests only")
+		return true, 0, nil
+	}
 
 	// Annotation set both branches write onto the target SwiftGuest.
 	// The SwiftGuest controller picks these up in buildPod() and routes

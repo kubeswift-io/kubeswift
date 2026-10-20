@@ -224,3 +224,54 @@ func TestLocal_Pending_RejectsSnapshotMissingNodeName(t *testing.T) {
 		t.Errorf("expected nodeName-required message, got %q", reasonOrEmpty(cond))
 	}
 }
+
+// A restore of a kernel-boot guest fails up front (#818): the restore
+// launcher serves disk-boot guests only. In place, the running launcher is
+// left alone and the guest is not stamped.
+func TestLocal_Pending_KernelBootSourceIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name, target string
+		regen        []snapshotv1alpha1.IdentityRegenerationItem
+	}{
+		{"in place", "g1", nil},
+		{"clone", "g1-clone", []snapshotv1alpha1.IdentityRegenerationItem{snapshotv1alpha1.RegenMACAddresses}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snap := makeLocalSnapWithBackend("snap1", "default", "g1", "/var/lib/kubeswift/snapshots/default-snap1", "v51.1")
+			restore := makeRestore("r1", "default", "snap1", tc.target, true)
+			restore.Spec.TargetGuest.OverwriteExisting = tc.regen == nil
+			if tc.regen != nil {
+				restore.Spec.Identity = &snapshotv1alpha1.IdentityRegeneration{Regenerate: tc.regen}
+			}
+			source := makeSourceGuest("default", "g1", "ubuntu-noble")
+			source.Spec.ImageRef = nil
+			source.Spec.KernelRef = &corev1.LocalObjectReference{Name: "faas"}
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default"}}
+
+			r, c := newReconciler(t, snap, restore, source, pod)
+			r.CurrentHypervisorVersion = "v51.1"
+			reconcile(t, r, "r1", "default")
+
+			got := get(t, c, "r1", "default")
+			if got.Status.Phase != snapshotv1alpha1.SwiftRestorePhaseFailed {
+				t.Fatalf("phase = %s, want Failed", got.Status.Phase)
+			}
+			if cond := findReady(got); cond == nil || cond.Reason != ReasonKernelBootUnsupported {
+				t.Errorf("Ready reason = %q, want %s", reasonOrEmpty(cond), ReasonKernelBootUnsupported)
+			}
+			if err := c.Get(context.Background(), client.ObjectKey{Name: "g1", Namespace: "default"}, &corev1.Pod{}); err != nil {
+				t.Errorf("the running launcher was touched: %v", err)
+			}
+			var g swiftv1alpha1.SwiftGuest
+			if err := c.Get(context.Background(), client.ObjectKey{Name: "g1", Namespace: "default"}, &g); err != nil {
+				t.Fatal(err)
+			}
+			if g.Annotations[swiftguestctrl.AnnotationActiveRestore] != "" {
+				t.Errorf("guest stamped for a restore that cannot run: %+v", g.Annotations)
+			}
+			if err := c.Get(context.Background(), client.ObjectKey{Name: "g1-clone", Namespace: "default"}, &swiftv1alpha1.SwiftGuest{}); !apierrors.IsNotFound(err) {
+				t.Errorf("clone target created: err=%v", err)
+			}
+		})
+	}
+}

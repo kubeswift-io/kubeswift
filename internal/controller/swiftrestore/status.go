@@ -24,6 +24,9 @@ const (
 	// ReasonDiskDiverged: an in-place memory restore whose guest kept running
 	// on its disk after the capture (see AnnotationAcceptDiskDivergence).
 	ReasonDiskDiverged = "DiskDiverged"
+	// ReasonKernelBootUnsupported: the snapshot's source boots from a kernel
+	// (spec.kernelRef); the restore launcher serves disk-boot guests only.
+	ReasonKernelBootUnsupported = "KernelBootUnsupported"
 )
 
 func setPhase(status *snapshotv1alpha1.SwiftRestoreStatus, phase snapshotv1alpha1.SwiftRestorePhase) {
