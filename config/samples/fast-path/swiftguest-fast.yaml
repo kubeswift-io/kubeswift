@@ -1,46 +1,48 @@
-# The fastest way to a running SwiftGuest: direct kernel boot.
+# The fastest way to a running Ubuntu SwiftGuest: a shared-base root disk.
 #
-# The guest boots a kernel + initramfs (an OCI artifact pulled once per node by
-# the SwiftKernel) straight into memory. There is no disk image to import, no
-# root PVC to provision or clone, and no firmware. With the kernel already on
-# the node, a new guest reaches Running in about 5 seconds (measured on a
-# 3-node lab cluster; approximate).
+# Normally every guest gets its own copy of the image before it can boot. With
+# a sharedBaseDisk class, the image is copied once per node (the "base"), and
+# each new guest's root disk is a copy-on-write snapshot of it: no copy on the
+# request path. The guest then boots Ubuntu 24.04, and cloud-init creates the
+# user kubeswift with password kubeswift.
+#
+# Measured on a 3-node lab cluster (approximate): Running ~25 s after apply,
+# guest IP ~35 s. The first guest of an image on a node builds the base (one
+# image copy); that is the prepare step's job, so it happens off stage.
 #
 # Two steps, so the slow part happens before the audience watches:
 #
 #   kubectl apply -f config/samples/fast-path/swiftguest-fast.yaml -l step=prepare
-#   kubectl -n fast-path get swiftkernel faas -w           # Ready: kernel on the nodes
+#   kubectl -n fast-path get swiftimage ubuntu-noble -w     # Ready (image import, 5-15 min)
+#   kubectl -n fast-path get swiftguest fast-base -w        # Running: the base is built
+#   kubectl -n fast-path delete swiftguest fast-base        # optional: the base stays cached
 #
 #   # the demo
 #   kubectl apply -f config/samples/fast-path/swiftguest-fast.yaml -l step=create
-#   kubectl -n fast-path get swiftguest fast-guest -w      # Running in about 5 s
+#   kubectl -n fast-path get swiftguest fast-guest -o wide -w
 #
-# Show it:
+# Log in as kubeswift / kubeswift on the serial console (Ctrl+O detaches):
 #   swiftctl console fast-guest -n fast-path
-#     → "KubeSwift faas-minimal ready", a BusyBox shell. Ctrl+O detaches.
-#     The shell is the guest's PID 1: `exit` or Ctrl+D ends init and panics
-#     the guest kernel. Detach with Ctrl+O instead.
-#   kubectl -n fast-path get swiftguest fast-guest -o wide # the guest IP
+# SSH uses the key in the seed (swiftctl ssh needs a key file):
+#   swiftctl ssh fast-guest -n fast-path -i ~/.ssh/id_ed25519
 #
-# Do it again: delete the guest, wait for its launcher pod to go (it shuts the
-# VM down; up to ~30 s), then re-apply the create step. Re-creating it while
-# the old pod is still terminating shows the OLD VM's status for a while.
+# Do it again: delete the guest, wait for its launcher pod to go, then re-apply
+# the create step. Re-creating it while the old pod is still terminating shows
+# the OLD VM's status for a while (#819).
 #
 #   kubectl -n fast-path delete swiftguest fast-guest
-#   kubectl -n fast-path wait --for=delete pod/fast-guest --timeout=60s
+#   kubectl -n fast-path wait --for=delete pod/fast-guest --timeout=90s
 #   kubectl apply -f config/samples/fast-path/swiftguest-fast.yaml -l step=create
 #
-# Why not a memory clone? cloneFromSnapshot resumes a disk-boot VM instead of
-# booting it, but each clone still gets its own root disk and its RAM staged
-# from the snapshot, which takes tens of seconds even on copy-on-write storage.
-# It is the right tool for skipping a slow in-guest warm-up, not for raw
-# create-to-Running time. See docs/snapshots/fast-vms.md.
-#
-# Prereq: at least one node labelled kubeswift.io/kernel-node=true.
+# Prereqs:
+#   - A node labelled kubeswift.io/basedisk-node=true, with room for the pool
+#     (swiftGuest.sharedBaseDisk.poolSize, default 40Gi, preallocated on first
+#     use). See docs/shared-base-disks.md.
+#   - The disk is node-local: these guests cannot migrate.
 #
 # Cleanup:
 #   kubectl delete ns fast-path
-#   kubectl delete swiftguestclass fast-micro
+#   kubectl delete swiftguestclass fast-shared
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -48,35 +50,81 @@ metadata:
   labels:
     step: prepare
 ---
-# A small class for the microVM. rootDisk is required by the schema but unused
-# by a kernel-boot guest, which has no root disk.
-apiVersion: swift.kubeswift.io/v1alpha1
-kind: SwiftGuestClass
+apiVersion: image.kubeswift.io/v1alpha1
+kind: SwiftImage
 metadata:
-  name: fast-micro
-  labels:
-    step: prepare
-spec:
-  cpu: 1
-  memory: "512Mi"
-  rootDisk:
-    size: "1Gi"
-    format: raw
----
-# The faas-minimal kernel, pulled once per kernel node. Pinned by digest; the
-# tag is the artifact's version (Linux 6.6.158).
-apiVersion: kernel.kubeswift.io/v1alpha1
-kind: SwiftKernel
-metadata:
-  name: faas
+  name: ubuntu-noble
   namespace: fast-path
   labels:
     step: prepare
 spec:
-  ociRef:
-    image: ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.4@sha256:27e88761b65c48af2c65423f4ef0bab323ad172470168c2a866f7be56e304a06
-  kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
-  profile: faas-minimal
+  format: qcow2
+  rootDisk:
+    size: "10Gi"
+  source:
+    http:
+      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+---
+# sharedBaseDisk is immutable: to change it, create a new class.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestClass
+metadata:
+  name: fast-shared
+  labels:
+    step: prepare
+spec:
+  cpu: "2"
+  memory: "2Gi"
+  rootDisk:
+    size: "10Gi"
+    format: raw
+  sharedBaseDisk: true
+---
+# User kubeswift, password kubeswift (the hash below) for the console, plus an
+# SSH key. Replace the key with your own.
+apiVersion: seed.kubeswift.io/v1alpha1
+kind: SwiftSeedProfile
+metadata:
+  name: fast-seed
+  namespace: fast-path
+  labels:
+    step: prepare
+spec:
+  datasource: NoCloud
+  userData: |
+    #cloud-config
+    users:
+      - name: kubeswift
+        # openssl passwd -6 -salt kubeswift kubeswift
+        passwd: $6$kubeswift$/2TeJTNbX7JcApzW0gTbSFzCAN4eFcOdnQsI0lVANFpXhHmjqLy7npyhHxvT65kpUd0YKVMBAbRt3MUfV6eCJ.
+        lock_passwd: false
+        shell: /bin/bash
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_authorized_keys:
+          - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ53Xu8rRSofCQqb91XUgZqQam+5Q2e7tOwr0egG/W5x
+    runcmd:
+      - systemctl enable --now getty@ttyS0.service
+  metaData: |
+    instance-id: fast-guest
+    local-hostname: fast-guest
+---
+# Builds the base on a node ahead of time. Once it is Running you can delete
+# it: the base stays cached on the node.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: fast-base
+  namespace: fast-path
+  labels:
+    step: prepare
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: fast-shared
+  seedProfileRef:
+    name: fast-seed
+  runPolicy: Running
 ---
 # The guest.
 apiVersion: swift.kubeswift.io/v1alpha1
@@ -87,8 +135,10 @@ metadata:
   labels:
     step: create
 spec:
-  kernelRef:
-    name: faas
+  imageRef:
+    name: ubuntu-noble
   guestClassRef:
-    name: fast-micro
+    name: fast-shared
+  seedProfileRef:
+    name: fast-seed
   runPolicy: Running

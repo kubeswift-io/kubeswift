@@ -31,11 +31,12 @@ swiftctl ssh sample -u kubeswift        # SSH access
 ## Fastest path (demos)
 
 [fast-path/](fast-path/) has one self-contained file for each workload. Each
-file applies in two steps: `-l step=prepare` pulls the kernel (and, for the
-sandbox, boots a warm pool) ahead of time, then `-l step=create` is the part
-you time.
+file applies in two steps: `-l step=prepare` does the slow part ahead of time
+(the guest's image import and shared base, the sandbox's kernel and warm pool),
+then `-l step=create` is the part you time.
 
-- `swiftguest-fast.yaml`: a direct-kernel-boot microVM, Running in about 5 s.
+- `swiftguest-fast.yaml`: an Ubuntu guest on a shared-base root disk, user
+  `kubeswift` / password `kubeswift`, Running in about 25 s.
 - `swiftsandbox-fast.yaml`: a warm-pool checkout, Running in about half a second.
 
 ## Catalog
