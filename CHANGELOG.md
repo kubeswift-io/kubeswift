@@ -13,12 +13,20 @@ A patch release of SwiftGuest controller fixes:
 - A guest re-created under a deleted guest's name no longer reports that guest's VM as its own.
 - Restoring or cloning a kernel-boot guest now fails with a reason, instead of hanging.
 
+It also picks up two upstream certificate-verification fixes (Go and Rust TLS libraries).
+
 ### Upgrade
 
 - No CRD changed and no chart value or template changed; applying `crds/` is not needed. No launcher pod is restarted by the upgrade, and none needs to be.
 - On start, the controller removes snapshot and migration actions left on running launchers by operations that have ended (see #823 below). Only the pod's annotations change; no VM is touched or restarted. Guests that were migrated or snapshotted under an earlier version can then be snapshotted or migrated again.
 - A SwiftGuest now treats only a pod it controls as its launcher. If a pod named like the guest exists and is not the guest's, the guest stays `Pending` and doesn't start (`PodScheduled=False`, reason `LauncherPodConflict`); it used to report that pod's state. Every launcher KubeSwift creates is controlled by its guest, live-migration destinations included, so this only affects a pod created by something else.
 - A `cloneFromSnapshot` guest or SwiftRestore of a kernel-boot guest that is waiting at upgrade fails with the reason, instead of staying `Pending`.
+- The Rust fix below is in the launcher (swiftletd). A running launcher keeps the swiftletd it started with until its guest or sandbox is restarted; new launchers get the fixed one.
+
+### Security
+
+- Every Go binary is built with Go 1.27.3 (builder image `golang:1.27-bookworm`, re-pinned by digest), and `go.mod` requires Go 1.26.10: GO-2026-6809, `crypto/x509` accepted certificates chaining through compromised intermediates that should be distrusted (fixed in Go 1.26.10 / 1.27.3).
+- swiftletd uses `rustls-webpki` 0.103.16: RUSTSEC-2026-0382, certificate verification could accept distrusted intermediates. swiftletd verifies the Kubernetes API server's certificate with it. `webpki-root-certs` is updated to 1.0.10 (RUSTSEC-2026-0383) in `Cargo.lock`; it is not compiled into the Linux images.
 
 ### Fixed
 
