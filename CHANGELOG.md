@@ -6,6 +6,71 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.18.1] — 2026-10-21
+
+A patch release of SwiftGuest controller fixes:
+- A guest can be snapshotted after a live migration, and live-migrated after a memory snapshot. Each used to wait forever or be rejected.
+- A guest re-created under a deleted guest's name no longer reports that guest's VM as its own.
+- Restoring or cloning a kernel-boot guest now fails with a reason, instead of hanging.
+
+It also picks up two upstream certificate-verification fixes (Go and Rust TLS libraries).
+
+### Upgrade
+
+- No CRD changed and no chart value or template changed; applying `crds/` is not needed. No launcher pod is restarted by the upgrade, and none needs to be.
+- On start, the controller removes snapshot and migration actions left on running launchers by operations that have ended (see #823 below). Only the pod's annotations change; no VM is touched or restarted. Guests that were migrated or snapshotted under an earlier version can then be snapshotted or migrated again.
+- A SwiftGuest now treats only a pod it controls as its launcher. If a pod named like the guest exists and is not the guest's, the guest stays `Pending` and doesn't start (`PodScheduled=False`, reason `LauncherPodConflict`); it used to report that pod's state. Every launcher KubeSwift creates is controlled by its guest, live-migration destinations included, so this only affects a pod created by something else.
+- A `cloneFromSnapshot` guest or SwiftRestore of a kernel-boot guest that is waiting at upgrade fails with the reason, instead of staying `Pending`.
+- The Rust fix below is in the launcher (swiftletd). A running launcher keeps the swiftletd it started with until its guest or sandbox is restarted; new launchers get the fixed one.
+
+### Security
+
+- Every Go binary is built with Go 1.27.3 (builder image `golang:1.27-bookworm`, re-pinned by digest), and `go.mod` requires Go 1.26.10: GO-2026-6809, `crypto/x509` accepted certificates chaining through compromised intermediates that should be distrusted (fixed in Go 1.26.10 / 1.27.3).
+- swiftletd uses `rustls-webpki` 0.103.16: RUSTSEC-2026-0382, certificate verification could accept distrusted intermediates. swiftletd verifies the Kubernetes API server's certificate with it. `webpki-root-certs` is updated to 1.0.10 (RUSTSEC-2026-0383) in `Cargo.lock`; it is not compiled into the Linux images.
+
+### Fixed
+
+- **Snapshot after a live migration** (#824). The snapshot and restore controllers looked for the launcher pod named like the guest. After a live migration the launcher is the renamed destination pod (`<guest>-mig-<id>`, in `status.podRef`). As a result:
+  - a SwiftSnapshot of a migrated guest stayed `Pending` with `launcher pod for SwiftGuest <name> not yet present`;
+  - an in-place SwiftRestore of a migrated guest deleted nothing and left the migrated VM running.
+
+  Both now find the launcher the way the SwiftGuest controller does. The snapshot controller's pod watch now matches launchers by their guest label, so a migrated launcher's events reach its snapshots.
+- **Live migration after a memory snapshot** (#823). The launcher (swiftletd) counts its snapshot or migration slot as busy while that slot's action annotation is set. It rejects both when a snapshot action and a migration action are set together and neither is running, and nothing cleared a finished action. So:
+  - after a capture, the guest's next live migration failed with `concurrent action with snapshot rejected`, and the rejection overwrote the snapshot's status on the pod with `rejected`;
+  - after a migration, the receive action left on the destination pod blocked the next capture the same way.
+
+  Now:
+  - a terminal SwiftSnapshot clears its capture action, and clears the resume queued behind an abandoned capture once it has run;
+  - a completed SwiftMigration clears its receive action;
+  - a capture waits for a SwiftMigration of the same guest that is still running (`waiting for SwiftMigration <name> …`), and removes a migration action no running migration owns;
+  - a migration writing its action drops a snapshot action the launcher has finished.
+- **A re-created guest reported its predecessor's VM** (#819, #821). A SwiftGuest deleted and re-created under the same name found the old guest's still-stopping launcher by name, and treated it as its own:
+  - it reported `Running` with the old VM's IP, for as long as that pod took to stop;
+  - it then went `Failed`, and only then created its own launcher;
+  - a guest set `Stopped` would also delete such a pod.
+
+  A pod the guest doesn't control is now never its launcher. The guest waits `Pending` with reason `PreviousLauncherStopping` while the old pod stops, then starts its own launcher.
+- **Kernel-boot restore hung** (#818, #822). The restore launcher serves disk-boot guests only: it always mounts a root-disk volume and never the kernel. For a kernel-boot guest:
+  - a `cloneFromSnapshot` clone sat `Pending` forever on a volume that is never created;
+  - a SwiftRestore did the same, and in place it first stopped the running guest.
+
+  The clone now fails with the reason on `Resolved`. The SwiftRestore fails with `KernelBootUnsupported` before it stamps or stops anything. Capturing a memory snapshot of a kernel-boot guest still works.
+
+### Docs
+
+- `config/samples/fast-path/`: the quickest path to a running SwiftGuest (a direct-kernel-boot microVM, about 5 s) and to a running SwiftSandbox (a warm-pool checkout, about half a second), each with a prepare step (#817).
+- The GPU warm-pool samples' checkouts now set the pool's `network.mode`, so they take a warm slot instead of booting cold (#811).
+- `docs/snapshots/`: a kernel-boot guest can be captured but not restored.
+- ADOPTERS: Clastix (#816).
+
+### Dependencies
+
+- Go: `minio-go` v7.4.1, `external-snapshotter/client` v8.7.0, `oras-go` v2.6.3, `connect` v1.21.1, `golang.org/x/{net,crypto,term,text}`, and others (#814).
+- Rust: `tokio` 1.53.3, `serde_json` 1.0.154 (#813); the swiftletd builder image is on Rust 1.99.1 (#812).
+- CI: CodeQL action (#815).
+
+---
+
 ## [v0.18.0] — 2026-10-18
 
 Platform-controlled artifact verification, and sandbox fixes.
