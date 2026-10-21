@@ -554,11 +554,13 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 	if err := controllerutil.SetControllerReference(pool, cm, r.Scheme); err != nil {
 		return err
 	}
-	if err := r.Create(ctx, cm); err != nil && !apierrors.IsAlreadyExists(err) {
+	// A conflict leaves this slot unbuilt; the next pass picks a new name.
+	if err := swiftguest.EnsureImmutableIntentConfigMap(ctx, r.Client, pool, cm); err != nil {
 		return err
 	}
 
 	pod := buildPod(slot, kernelName)
+	swiftguest.SetIntentDigest(pod, intentJSON)
 	addWarmStage(pod)
 	pod.Labels[PoolLabelKey] = pool.Name
 	pod.Labels[SlotStateLabelKey] = slotStateWarm

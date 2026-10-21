@@ -103,7 +103,8 @@ fn main() {
         .ok()
         .filter(|v| !v.is_empty());
 
-    match intent::load_intent(&intent_path) {
+    let expected_digest = env::var(intent::INTENT_SHA256_ENV).ok();
+    match intent::load_intent_checked(&intent_path, expected_digest.as_deref()) {
         Ok(mut intent) => {
             if let Some(ref role) = migration_role {
                 intent.migration = Some(intent::MigrationIntent { role: role.clone() });
@@ -705,7 +706,21 @@ fn main() {
                 }
             }
         }
-        Err(e) => {
+        Err(intent::LoadError::Mismatch(msg)) => {
+            // Not the intent this pod was built for: someone else wrote the
+            // ConfigMap. Nothing in it is used.
+            log::error!("intent_refused: {}", msg);
+            if let (Ok(ns), Ok(n)) = (env::var("POD_NAMESPACE"), env::var("POD_NAME")) {
+                if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    let _ = rt.block_on(report::report_intent_error(&ns, &n, &msg));
+                }
+            }
+            std::process::exit(1);
+        }
+        Err(intent::LoadError::Other(e)) => {
             log::error!("intent_load_error: {}", e);
             std::process::exit(1);
         }

@@ -346,10 +346,15 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	if err := controllerutil.SetControllerReference(sb, cm, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.Create(ctx, cm); err != nil && !apierrors.IsAlreadyExists(err) {
+	if err := swiftguest.EnsureImmutableIntentConfigMap(ctx, r.Client, sb, cm); err != nil {
+		var conflict *swiftguest.IntentConflictError
+		if errors.As(err, &conflict) {
+			return r.waitForReference(ctx, sb, reasonIntentConfigMapConflict, conflict.Error())
+		}
 		return ctrl.Result{}, err
 	}
 	pod := buildPod(sb, kernelName)
+	swiftguest.SetIntentDigest(pod, intentJSON)
 	if err := addArtifactRequirements(pod, decisionsByName(sb, decisions)); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -487,6 +492,10 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 // the launcher container's exit code.
 func (r *SwiftSandboxReconciler) finishTerminal(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) (ctrl.Result, error) {
 	applyMaterializeResult(sb, pod)
+	// swiftletd refused an intent that is not the one its pod was built for.
+	if msg, failed := intentError(pod); failed {
+		return r.fail(ctx, sb, reasonIntentMismatch, msg)
+	}
 	if msg, failed := kernelError(pod); failed {
 		return r.fail(ctx, sb, "KernelUnsupported", msg)
 	}

@@ -1457,6 +1457,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "sha2",
  "swift-ch-client",
  "swift-qemu-client",
  "swift-runtime",

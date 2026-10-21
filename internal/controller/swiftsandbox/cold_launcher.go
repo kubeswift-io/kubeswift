@@ -22,6 +22,12 @@ const (
 	// reasonLauncherPodConflict: a live pod by this name is not this
 	// sandbox's; nothing is created until it is removed.
 	reasonLauncherPodConflict = "LauncherPodConflict"
+	// reasonIntentConfigMapConflict: a ConfigMap by the launcher's intent name
+	// is not this sandbox's; the launcher is not created until it is removed.
+	reasonIntentConfigMapConflict = "IntentConfigMapConflict"
+	// reasonIntentMismatch: swiftletd found an intent other than the one its
+	// pod was built for, and did not start the VM.
+	reasonIntentMismatch = "IntentMismatch"
 )
 
 // foreignColdLauncher reports why the pod named sb.Name, if any, cannot be

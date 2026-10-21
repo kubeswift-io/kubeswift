@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -97,29 +96,18 @@ func (r *SwiftMigrationReconciler) ensureFrozenDstIntent(
 		return "", fmt.Errorf("get live runtime-intent ConfigMap %q: %w", liveName, err)
 	}
 
+	// The live intent is copied into a privileged launcher: only one the guest
+	// controls is a KubeSwift intent.
+	if !metav1.IsControlledBy(&live, guest) {
+		return "", &swiftguest.IntentConflictError{Name: liveName}
+	}
+
 	frozenData, err := forceLifecycleStart(live.Data)
 	if err != nil {
 		return "", fmt.Errorf("freeze runtime intent lifecycle: %w", err)
 	}
 
 	frozenName := frozenDstIntentCMName(dstPodName)
-	key := types.NamespacedName{Namespace: guest.Namespace, Name: frozenName}
-	var existing corev1.ConfigMap
-	gerr := r.Get(ctx, key, &existing)
-	if gerr == nil {
-		if equality.Semantic.DeepEqual(existing.Data, frozenData) {
-			return frozenName, nil
-		}
-		existing.Data = frozenData
-		if uerr := r.Update(ctx, &existing); uerr != nil {
-			return "", fmt.Errorf("update frozen intent ConfigMap %q: %w", frozenName, uerr)
-		}
-		return frozenName, nil
-	}
-	if !apierrors.IsNotFound(gerr) {
-		return "", fmt.Errorf("get frozen intent ConfigMap %q: %w", frozenName, gerr)
-	}
-
 	frozen := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      frozenName,
@@ -135,11 +123,10 @@ func (r *SwiftMigrationReconciler) ensureFrozenDstIntent(
 	if serr := controllerutil.SetControllerReference(guest, frozen, r.Scheme); serr != nil {
 		return "", fmt.Errorf("set ownerRef on frozen intent ConfigMap %q: %w", frozenName, serr)
 	}
-	if cerr := r.Create(ctx, frozen); cerr != nil {
-		if apierrors.IsAlreadyExists(cerr) {
-			return frozenName, nil
-		}
-		return "", fmt.Errorf("create frozen intent ConfigMap %q: %w", frozenName, cerr)
+	// Immutable and ours: one someone else created under this name first is
+	// refused, never mounted.
+	if cerr := swiftguest.EnsureImmutableIntentConfigMap(ctx, r.Client, guest, frozen); cerr != nil {
+		return "", fmt.Errorf("ensure frozen intent ConfigMap %q: %w", frozenName, cerr)
 	}
 	return frozenName, nil
 }

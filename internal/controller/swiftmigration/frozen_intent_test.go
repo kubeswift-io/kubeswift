@@ -7,6 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -54,10 +55,7 @@ func TestForceLifecycleStart_MissingKey_Errors(t *testing.T) {
 func TestEnsureFrozenDstIntent_CreatesFrozenStartCM(t *testing.T) {
 	scheme := testScheme(t)
 	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"}}
-	live := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: "guest" + swiftguest.IntentConfigMapSuffix, Namespace: "default"},
-		Data:       map[string]string{swiftguest.IntentFile: `{"lifecycle":"stop","cpu":2}`},
-	}
+	live := liveIntentCM(guest)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, live).Build()
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme}
 	ctx := context.Background()
@@ -84,6 +82,9 @@ func TestEnsureFrozenDstIntent_CreatesFrozenStartCM(t *testing.T) {
 	}
 	if len(frozen.OwnerReferences) != 1 || frozen.OwnerReferences[0].Name != "guest" {
 		t.Errorf("frozen CM must be guest-owned; got %+v", frozen.OwnerReferences)
+	}
+	if frozen.Immutable == nil || !*frozen.Immutable {
+		t.Errorf("frozen CM must be immutable")
 	}
 	// Idempotent.
 	if _, err := r.ensureFrozenDstIntent(ctx, guest, "guest-mig-abcdef"); err != nil {
@@ -145,4 +146,48 @@ func intentVolumeCM(pod *corev1.Pod) string {
 		}
 	}
 	return ""
+}
+
+// liveIntentCM is the guest's live intent, controlled by the guest as the
+// SwiftGuest controller creates it.
+func liveIntentCM(guest *swiftv1alpha1.SwiftGuest) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: guest.Name + swiftguest.IntentConfigMapSuffix, Namespace: guest.Namespace,
+			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(guest,
+				schema.GroupVersionKind{Group: swiftv1alpha1.GroupName, Version: swiftv1alpha1.Version, Kind: "SwiftGuest"})},
+		},
+		Data: map[string]string{swiftguest.IntentFile: `{"lifecycle":"stop","cpu":2}`},
+	}
+}
+
+// The dst launcher is privileged: neither a live intent someone else created
+// nor a frozen one pre-created under the dst name is ever used.
+func TestEnsureFrozenDstIntent_RefusesConfigMapsItDoesNotControl(t *testing.T) {
+	scheme := testScheme(t)
+	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"}}
+	ctx := context.Background()
+
+	foreignLive := liveIntentCM(guest)
+	foreignLive.OwnerReferences = nil
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, foreignLive).Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme}
+	if _, err := r.ensureFrozenDstIntent(ctx, guest, "guest-mig-abcdef"); err == nil {
+		t.Error("a live intent the guest does not control was frozen into the dst launcher")
+	}
+
+	preset := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "guest-mig-abcdef" + swiftguest.IntentConfigMapSuffix, Namespace: "default"},
+		Data:       map[string]string{swiftguest.IntentFile: `{"lifecycle":"start","cpu":64}`},
+	}
+	c = fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, liveIntentCM(guest), preset).Build()
+	r = &SwiftMigrationReconciler{Client: c, Scheme: scheme}
+	if _, err := r.ensureFrozenDstIntent(ctx, guest, "guest-mig-abcdef"); err == nil {
+		t.Error("a pre-created frozen intent was accepted")
+	}
+	var got corev1.ConfigMap
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "default", Name: preset.Name}, &got)
+	if got.Data[swiftguest.IntentFile] != preset.Data[swiftguest.IntentFile] {
+		t.Error("someone else's ConfigMap was modified")
+	}
 }
