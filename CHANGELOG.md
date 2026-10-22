@@ -6,6 +6,17 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.19.1] — 2026-10-22
+
+A patch release for SwiftSandbox. Sandbox registries behind a private CA now work: images, models, artifacts, placements and output exports, given an administrator's CA. The output-export cleanup no longer leaves a finished pod behind.
+
+### Upgrade
+
+- No CRD changed; applying `crds/` is not needed.
+- One optional chart value is new: `sandboxMaterialize.registryCABundle` (PEM, default empty). Empty renders nothing and changes nothing. Set it only for a registry behind a private CA. Since #588 the chart rejects unknown values, so it needs this chart version.
+- Once a bundle is set, pods created after that carry it: sandbox init containers, placement pods and export Jobs. Pods that already exist (running sandboxes, warm-pool slots) don't, and are not restarted; replace a warm pool's slots if they must pull from such a registry.
+- No launcher pod is restarted by the upgrade. Spool cleanup is now a Job; a cleanup pod a v0.19.0 controller left running finishes and is removed when its sandbox is next cleaned. One whose sandbox is already gone: see Fixed.
+
 ### Added
 
 - SwiftSandbox registries behind a private CA (#839). The chart value `sandboxMaterialize.registryCABundle` (PEM) is trusted on top of the system roots by every sandbox registry connection: the controller's digest resolution and authorization, the rootfs, model and artifact init containers, SwiftArtifactPlacement, output export Jobs and cosign. Empty (the default) changes nothing. It is an administrator setting; a SwiftSandbox cannot add a CA.
