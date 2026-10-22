@@ -556,7 +556,7 @@ func exportJobName(sb *sandboxv1alpha1.SwiftSandbox, output string) string {
 	return names.JobName(string(sb.UID)+"-"+output, "-export")
 }
 
-func cleanupPodName(sb *sandboxv1alpha1.SwiftSandbox) string {
+func cleanupJobName(sb *sandboxv1alpha1.SwiftSandbox) string {
 	return names.JobName(string(sb.UID), "-out-clean")
 }
 
@@ -788,11 +788,17 @@ func (r *SwiftSandboxReconciler) cleanOutputs(ctx context.Context, sb *sandboxv1
 	if nodeGone || sb.Status.NodeName == "" {
 		return true, nil
 	}
-	name := cleanupPodName(sb)
-	var pod corev1.Pod
-	err := r.Get(ctx, client.ObjectKey{Namespace: r.SystemNamespace, Name: name}, &pod)
+	// A v0.19.0 controller ran the cleanup as a bare pod: one left over is
+	// removed (it holds nothing).
+	legacy := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: r.SystemNamespace, Name: cleanupJobName(sb)}}
+	if err := r.Delete(ctx, legacy); err != nil && !apierrors.IsNotFound(err) {
+		return false, err
+	}
+	name := cleanupJobName(sb)
+	var job batchv1.Job
+	err := r.Get(ctx, client.ObjectKey{Namespace: r.SystemNamespace, Name: name}, &job)
 	if apierrors.IsNotFound(err) {
-		if err := r.Create(ctx, buildCleanupPod(sb, name, r.SystemNamespace, SandboxMaterializeImage())); err != nil && !apierrors.IsAlreadyExists(err) {
+		if err := r.Create(ctx, buildCleanupJob(sb, name, r.SystemNamespace, SandboxMaterializeImage())); err != nil && !apierrors.IsAlreadyExists(err) {
 			return false, err
 		}
 		return false, nil
@@ -800,9 +806,19 @@ func (r *SwiftSandboxReconciler) cleanOutputs(ctx context.Context, sb *sandboxv1
 	if err != nil {
 		return false, err
 	}
+	// The Job is left for its TTL to remove, so a reconcile that runs from a
+	// stale copy of the sandbox after this one cannot leave anything behind
+	// (#838): it finds this Job, or creates one that removes itself.
+	complete, failed := false, false
+	for _, c := range job.Status.Conditions {
+		if c.Status == corev1.ConditionTrue {
+			complete = complete || c.Type == batchv1.JobComplete
+			failed = failed || c.Type == batchv1.JobFailed
+		}
+	}
 	switch {
-	case pod.Status.Phase == corev1.PodSucceeded:
-	case pod.Status.Phase == corev1.PodFailed || time.Since(pod.CreationTimestamp.Time) > outputCleanupTimeout:
+	case complete:
+	case failed || time.Since(job.CreationTimestamp.Time) > outputCleanupTimeout+time.Minute:
 		if r.Recorder != nil {
 			r.Recorder.Eventf(sb, corev1.EventTypeWarning, "OutputCleanupAbandoned",
 				"could not clean %s on node %s; remove it by hand", OutputSpoolPath(sb), sb.Status.NodeName)
@@ -810,42 +826,50 @@ func (r *SwiftSandboxReconciler) cleanOutputs(ctx context.Context, sb *sandboxv1
 	default:
 		return false, nil
 	}
-	if err := r.Delete(ctx, &pod); err != nil && !apierrors.IsNotFound(err) {
-		return false, err
-	}
 	return true, nil
 }
 
-// buildCleanupPod removes one sandbox's spool directory on its node.
-func buildCleanupPod(sb *sandboxv1alpha1.SwiftSandbox, name, namespace, image string) *corev1.Pod {
-	return &corev1.Pod{
+// outputCleanupTTL is how long a finished cleanup Job is kept.
+const outputCleanupTTL = 5 * time.Minute
+
+// buildCleanupJob removes one sandbox's spool directory on its node. A Job,
+// not a bare pod, so that it removes itself once finished.
+func buildCleanupJob(sb *sandboxv1alpha1.SwiftSandbox, name, namespace, image string) *batchv1.Job {
+	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name, Namespace: namespace,
 			Labels:      exportLabels(sb, exportComponentClean, ""),
 			Annotations: map[string]string{exportForAnnotation: sb.Namespace + "/" + sb.Name},
 		},
-		Spec: corev1.PodSpec{
-			RestartPolicy:                corev1.RestartPolicyNever,
-			NodeName:                     sb.Status.NodeName,
-			AutomountServiceAccountToken: ptr.To(false),
-			ActiveDeadlineSeconds:        ptr.To(int64(outputCleanupTimeout.Seconds())),
-			Containers: []corev1.Container{{
-				Name:  "clean",
-				Image: image,
-				Args:  []string{"clean-outputs", "--root=" + exportSpoolDir, "--sandbox-uid=" + string(sb.UID)},
-				SecurityContext: &corev1.SecurityContext{
-					RunAsUser:                ptr.To(int64(0)),
-					RunAsNonRoot:             ptr.To(false),
-					AllowPrivilegeEscalation: ptr.To(false),
-					ReadOnlyRootFilesystem:   ptr.To(true),
-					Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		Spec: batchv1.JobSpec{
+			BackoffLimit:            ptr.To(int32(2)),
+			ActiveDeadlineSeconds:   ptr.To(int64(outputCleanupTimeout.Seconds())),
+			TTLSecondsAfterFinished: ptr.To(int32(outputCleanupTTL.Seconds())),
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: exportLabels(sb, exportComponentClean, "")},
+				Spec: corev1.PodSpec{
+					RestartPolicy:                corev1.RestartPolicyNever,
+					NodeName:                     sb.Status.NodeName,
+					AutomountServiceAccountToken: ptr.To(false),
+					Containers: []corev1.Container{{
+						Name:  "clean",
+						Image: image,
+						Args:  []string{"clean-outputs", "--root=" + exportSpoolDir, "--sandbox-uid=" + string(sb.UID)},
+						SecurityContext: &corev1.SecurityContext{
+							RunAsUser:                ptr.To(int64(0)),
+							RunAsNonRoot:             ptr.To(false),
+							AllowPrivilegeEscalation: ptr.To(false),
+							ReadOnlyRootFilesystem:   ptr.To(true),
+							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+						},
+						VolumeMounts: []corev1.VolumeMount{{Name: "spool", MountPath: exportSpoolDir}},
+					}},
+					// The spool root, so the sandbox's directory itself goes too; the
+					// UID is the controller's, checked again by clean-outputs.
+					Volumes: []corev1.Volume{{Name: "spool", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
+						Path: OutputSpoolDir, Type: ptr.To(corev1.HostPathDirectoryOrCreate)}}}},
 				},
-				VolumeMounts: []corev1.VolumeMount{{Name: "spool", MountPath: exportSpoolDir}},
-			}},
-			// The spool root, so the sandbox's directory itself goes too; the
-			// UID is the controller's, checked again by clean-outputs.
-			Volumes: []corev1.Volume{{Name: "spool", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
-				Path: OutputSpoolDir, Type: ptr.To(corev1.HostPathDirectoryOrCreate)}}}},
+			},
 		},
 	}
 }
@@ -936,7 +960,8 @@ func (r *SwiftSandboxReconciler) finishOutputs(ctx context.Context, sb *sandboxv
 	return true, patchFinalizers(ctx, r.Client, sb, func() { controllerutil.RemoveFinalizer(sb, sandboxOutputsFinalizer) })
 }
 
-// exportObjectToSandbox maps an export Job or cleanup pod to its sandbox.
+// exportObjectToSandbox maps an export or cleanup Job, or one of their pods,
+// to its sandbox.
 func exportObjectToSandbox(_ context.Context, obj client.Object) []reconcile.Request {
 	c := obj.GetLabels()[exportComponentLabel]
 	if c != exportComponentJob && c != exportComponentClean {
