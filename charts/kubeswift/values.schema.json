@@ -67,7 +67,8 @@
             "minAge": { "type": "string" },
             "evictLegacy": { "type": "boolean" }
           }
-        }
+        },
+        "registryCABundle": { "type": "string" }
       }
     },
     "snapshotORAS": {

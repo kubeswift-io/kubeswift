@@ -2,11 +2,16 @@ package materialize
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
 	"net"
 	"net/http"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+
+	"github.com/kubeswift-io/kubeswift/internal/oci"
 )
 
 // Registry request bounds. go-containerregistry's default transport bounds
@@ -43,6 +48,31 @@ func (opts Options) remoteOptions() []remote.Option {
 		ctx = context.Background()
 	}
 	return []remote.Option{opts.authOption(), remote.WithContext(ctx), remote.WithTransport(registryTransport)}
+}
+
+// SetRegistryCA makes every registry request of this process, and every
+// cosign it runs, trust the PEM certificates in bundle on top of the system
+// roots (a registry behind a private CA, #839). Call it once at start,
+// before any registry request. An empty bundle changes nothing; one with no
+// certificate is an error.
+func SetRegistryCA(bundle string) error {
+	if bundle == "" {
+		return nil
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM([]byte(bundle)) {
+		return fmt.Errorf("the registry CA bundle holds no PEM certificate")
+	}
+	if err := oci.SetRegistryCA(bundle); err != nil {
+		return err
+	}
+	t := newRegistryTransport()
+	t.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	registryTransport = t
+	return nil
 }
 
 // RegistryTransport is the bounded transport every registry request uses.

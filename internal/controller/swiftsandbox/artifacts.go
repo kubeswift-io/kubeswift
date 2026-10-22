@@ -419,7 +419,7 @@ func artifactInits(sb *sandboxv1alpha1.SwiftSandbox, tokens bool) ([]corev1.Cont
 			Name:            artifactInitPrefix + r.spec.Name,
 			Image:           SandboxMaterializeImage(),
 			Args:            args,
-			Env:             env,
+			Env:             withRegistryCA(env),
 			SecurityContext: privileged(),
 			VolumeMounts:    mounts,
 			// A failed pull or signature check says why on the sandbox.

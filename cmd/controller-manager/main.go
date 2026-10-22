@@ -42,6 +42,7 @@ import (
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftsnapshotschedule"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftstoragelocation"
 	kubeswiftmetrics "github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
 	"github.com/kubeswift-io/kubeswift/internal/scheme"
 	"github.com/kubeswift-io/kubeswift/internal/version"
 	evictionwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/eviction"
@@ -119,6 +120,14 @@ func main() {
 			"replacement in a pool, up to 1h; the first slot that gets ready resets it. 0 never replaces one.")
 	klog.InitFlags(nil)
 	flag.Parse()
+
+	// Sandbox registries behind a private CA (#839): the controller's own
+	// requests (digest resolution, authorization) trust the bundle; the
+	// sandbox reconcilers pass it to every sandbox-materialize container.
+	if err := materialize.SetRegistryCA(os.Getenv(swiftsandbox.SandboxRegistryCAEnv)); err != nil {
+		klog.ErrorS(err, "invalid sandbox registry CA bundle", "env", swiftsandbox.SandboxRegistryCAEnv)
+		os.Exit(1)
+	}
 
 	crlog.SetLogger(klogr.New())
 

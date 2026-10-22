@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/oci"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
 )
 
@@ -28,6 +29,21 @@ const (
 	// a tree (virtio-fs source), never an ext4 — the guest mounts it read-only.
 	modelCacheDir = "/var/lib/kubeswift/sandbox-models"
 )
+
+// SandboxRegistryCAEnv is the controller's environment variable holding PEM
+// CA certificates every sandbox registry connection trusts on top of the
+// system roots (chart: sandboxMaterialize.registryCABundle). An
+// administrator's setting: tenants cannot add a CA (#839).
+const SandboxRegistryCAEnv = "KUBESWIFT_SANDBOX_REGISTRY_CA_BUNDLE"
+
+// withRegistryCA is env plus the registry CA bundle, when one is configured,
+// for a sandbox-materialize container.
+func withRegistryCA(env []corev1.EnvVar) []corev1.EnvVar {
+	if ca := os.Getenv(SandboxRegistryCAEnv); ca != "" {
+		return append(env, corev1.EnvVar{Name: oci.RegistryCAEnv, Value: ca})
+	}
+	return env
+}
 
 // SandboxMaterializeImage resolves the materialize init-container image (env
 // override, else the pinned default). Mirrors swiftsnapshot.SnapshotS3Image.

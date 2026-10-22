@@ -645,7 +645,7 @@ func buildExportJob(sb *sandboxv1alpha1.SwiftSandbox, o *sandboxv1alpha1.Sandbox
 						Name:  "export",
 						Image: image,
 						Args:  []string{"export-output", "--docker-config=" + exportAuthDir + "/config.json"},
-						Env:   []corev1.EnvVar{{Name: "KUBESWIFT_EXPORT_SPEC", Value: string(spec)}},
+						Env:   withRegistryCA([]corev1.EnvVar{{Name: "KUBESWIFT_EXPORT_SPEC", Value: string(spec)}}),
 						Resources: corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m"), corev1.ResourceMemory: resource.MustParse("64Mi")},
 							Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},

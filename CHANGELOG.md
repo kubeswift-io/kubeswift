@@ -6,6 +6,10 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- SwiftSandbox registries behind a private CA (#839). The chart value `sandboxMaterialize.registryCABundle` (PEM) is trusted on top of the system roots by every sandbox registry connection: the controller's digest resolution and authorization, the rootfs, model and artifact init containers, SwiftArtifactPlacement, output export Jobs and cosign. Empty (the default) changes nothing. It is an administrator setting; a SwiftSandbox cannot add a CA.
+
 ### Fixed
 
 - Sandbox output cleanup left a `Completed` `<uid>-out-clean` pod in the KubeSwift namespace when a reconcile ran from a stale copy of an already-cleaned sandbox (#838). The cleanup now runs as a Job that removes itself 5 minutes after it finishes. Pods already left behind by v0.19.0 hold nothing; remove them with `kubectl -n <kubeswift-namespace> delete pod -l app.kubernetes.io/component=sandbox-output-cleanup --field-selector=status.phase=Succeeded`.
