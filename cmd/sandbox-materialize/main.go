@@ -34,6 +34,14 @@ const (
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "export-output":
+			os.Exit(exportOutput(os.Args[2:]))
+		case "clean-outputs":
+			os.Exit(cleanOutputs(os.Args[2:]))
+		}
+	}
 	var (
 		image      = flag.String("image", "", "OCI image reference (a digest ref is strongly preferred)")
 		cacheDir   = flag.String("cache-dir", "/var/lib/kubeswift/sandbox-rootfs", "node-local rootfs cache root")

@@ -205,6 +205,13 @@ func (r *SwiftSandboxReconciler) handleDeletion(ctx context.Context, sb *sandbox
 			return res, err
 		}
 	}
+	// The launcher is stopped: its spool directory and any export Job go.
+	if controllerutil.ContainsFinalizer(sb, sandboxOutputsFinalizer) {
+		done, err := r.deleteOutputs(ctx, sb)
+		if err != nil || !done {
+			return ctrl.Result{RequeueAfter: exportPollInterval}, err
+		}
+	}
 	if controllerutil.ContainsFinalizer(sb, sandboxGPUFinalizer) {
 		held, pod, err := r.launcherMayHoldGPU(ctx, sb)
 		if err != nil {

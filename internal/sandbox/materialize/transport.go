@@ -44,3 +44,6 @@ func (opts Options) remoteOptions() []remote.Option {
 	}
 	return []remote.Option{opts.authOption(), remote.WithContext(ctx), remote.WithTransport(registryTransport)}
 }
+
+// RegistryTransport is the bounded transport every registry request uses.
+func RegistryTransport() http.RoundTripper { return registryTransport }

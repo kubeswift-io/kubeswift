@@ -297,6 +297,17 @@ var (
 		[]string{"result"},
 	)
 
+	// SandboxOutputExportsTotal counts SwiftSandbox outputs (spec.outputs)
+	// whose export ended, by result (exported | failed) and reason ("" when
+	// exported). Recorded once, when the export Job's result is recorded.
+	SandboxOutputExportsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_sandbox_output_exports_total",
+			Help: "SwiftSandbox output exports that ended, by result (exported | failed) and reason",
+		},
+		[]string{"result", "reason"},
+	)
+
 	// SandboxCheckoutsTotal counts SwiftSandbox pool checkouts by result:
 	// "hit" (claimed a pre-booted warm slot — the fast path) or "cold" (no warm
 	// slot available, or no command to inject — fell back to the cold
@@ -478,6 +489,7 @@ func init() {
 		DrainMigrationsTotal,
 		ImageImportTotal,
 		SandboxTotal,
+		SandboxOutputExportsTotal,
 		SandboxCheckoutsTotal,
 	)
 }
