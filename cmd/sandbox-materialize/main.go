@@ -34,6 +34,12 @@ const (
 )
 
 func main() {
+	// A registry behind a private CA: the administrator's bundle, passed by the
+	// controller (#839).
+	if err := materialize.SetRegistryCA(os.Getenv(oci.RegistryCAEnv)); err != nil {
+		fmt.Fprintln(os.Stderr, "sandbox-materialize:", err)
+		os.Exit(2)
+	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "export-output":

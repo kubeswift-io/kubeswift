@@ -508,6 +508,26 @@ A `SwiftSandboxPool` takes the same `spec.verifyKeySecretRef`; every warm slot
 is verified, so a pool never warms an unverified image. This mirrors
 `SwiftImage`'s `spec.source.oci.verifyKeySecretRef` for golden VM disks.
 
+## Registries behind a private CA
+
+Sandbox images, models, artifacts, placements and output exports are pulled
+and pushed over TLS, trusting the system CA roots. For a registry whose
+certificate comes from a private CA, give its CA to the chart:
+
+```yaml
+sandboxMaterialize:
+  registryCABundle: |
+    -----BEGIN CERTIFICATE-----
+    ...
+    -----END CERTIFICATE-----
+```
+
+It is added to the system roots, never replacing them, for the controller's
+own registry requests, every materialize init container, export Jobs and
+cosign. Only the administrator sets it: a SwiftSandbox cannot add a CA, since
+node caches are shared between namespaces. Snapshots use the storage
+location's CA bundle instead.
+
 ## Node caches
 
 A node keeps one copy of each root filesystem, model and artifact, by digest,

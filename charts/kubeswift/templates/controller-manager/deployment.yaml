@@ -74,6 +74,10 @@ spec:
             - name: KUBESWIFT_ARTIFACT_CACHE_EVICT_LEGACY
               value: {{ .evictLegacy | default false | quote }}
             {{- end }}
+            {{- with .Values.sandboxMaterialize.registryCABundle }}
+            - name: KUBESWIFT_SANDBOX_REGISTRY_CA_BUNDLE
+              value: {{ . | quote }}
+            {{- end }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

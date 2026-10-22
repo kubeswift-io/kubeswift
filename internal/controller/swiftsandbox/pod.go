@@ -384,7 +384,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		Name:            materializeInitName,
 		Image:           SandboxMaterializeImage(),
 		Args:            matArgs,
-		Env:             matEnv,
+		Env:             withRegistryCA(matEnv),
 		SecurityContext: privileged(),
 		VolumeMounts:    matMounts,
 	}}
@@ -424,7 +424,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 			Name:            modelMaterializeInitName,
 			Image:           SandboxMaterializeImage(),
 			Args:            modelArgs,
-			Env:             modelEnv,
+			Env:             withRegistryCA(modelEnv),
 			SecurityContext: privileged(),
 			VolumeMounts:    modelMounts,
 		})

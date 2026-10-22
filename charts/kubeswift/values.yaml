@@ -92,6 +92,11 @@ sandboxMaterialize:
     # launchers take no use locks), so a node already over the limit refuses
     # new artifacts. Set true once no pre-v0.17 sandbox launcher is running.
     evictLegacy: false
+  # PEM CA certificates every SwiftSandbox registry connection trusts on top
+  # of the system roots: sandbox images, models, artifacts, placements, output
+  # exports, and cosign. For registries behind a private CA. Set here only:
+  # tenants cannot add a CA. Empty: system roots only.
+  registryCABundle: ""
 
 # snapshot-oras: the uploader/downloader image for the oci (OCI registry / ORAS)
 # snapshot backend. The controller passes this to the per-snapshot push Job (and
