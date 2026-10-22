@@ -181,6 +181,15 @@ rules:
   - apiGroups: ["sandbox.kubeswift.io"]
     resources: ["swiftartifactverificationpolicies/status"]
     verbs: ["get", "update", "patch"]
+  # SwiftArtifactExportPolicy (cluster-scoped, administrator-owned): where
+  # sandbox outputs may be pushed and with which credential. Read-only, plus
+  # status.
+  - apiGroups: ["sandbox.kubeswift.io"]
+    resources: ["swiftartifactexportpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["sandbox.kubeswift.io"]
+    resources: ["swiftartifactexportpolicies/status"]
+    verbs: ["get", "update", "patch"]
   # SwiftSandbox restricted-mode NetworkPolicy (deny-ingress) on the launcher pod.
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
