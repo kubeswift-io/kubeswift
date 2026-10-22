@@ -957,16 +957,82 @@ impl SriovVfCursor {
     }
 }
 
-/// Load runtime intent from the canonical path.
-pub fn load_intent(path: &str) -> Result<RuntimeIntent, String> {
-    let contents = std::fs::read_to_string(path)
-        .map_err(|e| format!("failed to read intent from {}: {}", path, e))?;
-    serde_json::from_str(&contents).map_err(|e| format!("invalid intent JSON: {}", e))
+/// Carries the SHA-256 (hex) of the intent the launcher pod was built for. It
+/// is in the pod spec, which cannot change once the pod exists; the intent
+/// ConfigMap is a separate object. Unset: no check (launchers built before it).
+pub const INTENT_SHA256_ENV: &str = "KUBESWIFT_INTENT_SHA256";
+
+/// Why the intent could not be used.
+#[derive(Debug)]
+pub enum LoadError {
+    /// The intent is not the one the pod was built for.
+    Mismatch(String),
+    Other(String),
+}
+
+/// Load the intent and, when `expected` is set, refuse it unless its bytes
+/// hash to it. The bytes checked are the bytes parsed.
+pub fn load_intent_checked(path: &str, expected: Option<&str>) -> Result<RuntimeIntent, LoadError> {
+    let bytes = std::fs::read(path)
+        .map_err(|e| LoadError::Other(format!("failed to read intent from {}: {}", path, e)))?;
+    if let Some(want) = expected.map(str::trim).filter(|w| !w.is_empty()) {
+        let got = sha256_hex(&bytes);
+        if !got.eq_ignore_ascii_case(want) {
+            return Err(LoadError::Mismatch(format!(
+                "IntentMismatch: the runtime intent has sha256 {} but this launcher was built for {}; not starting",
+                got, want
+            )));
+        }
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|e| LoadError::Other(format!("invalid intent JSON: {}", e)))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_intent(dir: &std::path::Path, body: &str) -> String {
+        let p = dir.join("runtime-intent.json");
+        std::fs::write(&p, body).unwrap();
+        p.to_str().unwrap().to_string()
+    }
+
+    const MIN_INTENT: &str = r#"{"rootDisk":{"path":"","format":""},"seedPath":"","cpu":1,"memory":512,"lifecycle":"start","guestId":"ns/a","network":false}"#;
+
+    #[test]
+    fn intent_digest_matches() {
+        let dir = std::env::temp_dir().join(format!("swl-intent-ok-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = write_intent(&dir, MIN_INTENT);
+        let want = sha256_hex(MIN_INTENT.as_bytes());
+        assert!(load_intent_checked(&p, Some(&want)).is_ok());
+        assert!(load_intent_checked(&p, Some(&want.to_uppercase())).is_ok());
+        // No expectation (a launcher built before the check): accepted.
+        assert!(load_intent_checked(&p, None).is_ok());
+        assert!(load_intent_checked(&p, Some("")).is_ok());
+    }
+
+    // A ConfigMap someone else wrote is refused, however valid it is.
+    #[test]
+    fn intent_digest_mismatch_is_refused() {
+        let dir = std::env::temp_dir().join(format!("swl-intent-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = write_intent(&dir, MIN_INTENT);
+        let other = sha256_hex(b"something else");
+        match load_intent_checked(&p, Some(&other)) {
+            Err(LoadError::Mismatch(m)) => assert!(m.starts_with("IntentMismatch:"), "{}", m),
+            other => panic!("expected Mismatch, got {:?}", other.map(|_| ())),
+        }
+    }
 
     // NICs on two SR-IOV resources: each takes its own resource's first VF.
     // A single shared counter asked the second resource for index 1 of its

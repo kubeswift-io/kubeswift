@@ -31,6 +31,9 @@ const (
 	// annKernelError is swiftletd's report that the kernel's bridge lacks a
 	// feature the sandbox needs (bridge-features next to the kernel).
 	annKernelError = "kubeswift.io/sandbox-kernel-error"
+	// annIntentError is swiftletd's report that the intent it was given is not
+	// the one its pod was built for (EnvIntentSHA256), so it did not start.
+	annIntentError = "kubeswift.io/launcher-intent-error"
 )
 
 // secretFileRefs lists spec.secretFiles item by item, with each file's mode
@@ -142,6 +145,12 @@ func checkSecretEnv(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.Sw
 }
 
 // kernelError is swiftletd's report that the kernel's bridge lacks a feature.
+// intentError is swiftletd's report that it refused its intent.
+func intentError(pod *corev1.Pod) (string, bool) {
+	msg, ok := pod.Annotations[annIntentError]
+	return msg, ok
+}
+
 func kernelError(pod *corev1.Pod) (string, bool) {
 	msg, ok := pod.Annotations[annKernelError]
 	return msg, ok

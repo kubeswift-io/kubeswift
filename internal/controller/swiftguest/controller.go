@@ -458,6 +458,20 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 		if err := r.Create(ctx, desiredIntentCM); err != nil {
 			return ctrl.Result{}, err
 		}
+	} else if !metav1.IsControlledBy(&existingIntentCM, &guest) {
+		// The launcher reads its configuration from this ConfigMap. One the guest
+		// does not control was created by someone else: it is neither adopted
+		// nor rewritten, and no launcher is started until it is removed.
+		conflict := &IntentConflictError{Name: intentConfigMapName}
+		SetResolvedCondition(status, false, conflict.Error())
+		if status.Phase == "" {
+			status.Phase = swiftv1alpha1.SwiftGuestPhasePending
+		}
+		if err := r.patchStatus(ctx, &guest, status); err != nil {
+			return ctrl.Result{}, err
+		}
+		logger.Info("intent ConfigMap is not this guest's; not starting a launcher", "configMap", intentConfigMapName)
+		return ctrl.Result{RequeueAfter: resolutionRetry}, nil
 	} else {
 		if !equality.Semantic.DeepEqual(existingIntentCM.Data, desiredIntentCM.Data) {
 			existingIntentCM.Data = desiredIntentCM.Data
