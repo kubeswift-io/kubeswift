@@ -263,10 +263,13 @@ setup_secondary_nad_nic() {
         exit 1
     fi
 
+    # A NAD without IPAM (e.g. a plain bridge NAD where the guest configures itself)
+    # leaves the interface without an IP: there is nothing to hand off, so just bridge it.
     nad_cidr=$(ip -4 addr show "$multus_iface" 2>/dev/null | awk '/inet /{print $2; exit}')
     if [ -z "$nad_cidr" ]; then
-        echo "ERROR: secondary NAD interface $multus_iface has no IPv4 address (NAD IPAM did not assign one)" >&2
-        exit 1
+        echo "Secondary NAD interface $multus_iface has no IPv4 address (no NAD IPAM); falling back to a plain bridge"
+        setup_secondary_nic "$bridge" "$tap" "$multus_iface"
+        return 0
     fi
     nad_ip="${nad_cidr%/*}"
     nad_prefix="${nad_cidr#*/}"
@@ -599,6 +602,7 @@ for nic in nics:
             # Secondary-on-NAD: the NIC rides a Multus NAD and must carry the NAD's
             # IP into the guest (e.g. a routable node-datapath interface). Hand it
             # over the same way the primary-on-NAD path does, minus the default route.
+            # A NAD with no IPAM falls back to the plain bridge inside the function.
             setup_secondary_nad_nic "$bridge" "$tap" "$multus" "$mac"
         else
             setup_secondary_nic "$bridge" "$tap" "$multus"
