@@ -68,6 +68,19 @@ type ExportCredentialsReference struct {
 // ExportCredentialsLabel must be "true" on a Secret an export policy names.
 const ExportCredentialsLabel = "kubeswift.io/export-credentials"
 
+// The export policy's Ready condition and its reasons.
+const (
+	ExportPolicyConditionReady = "Ready"
+	ExportPolicyReasonValid    = "Valid"
+	// ExportPolicyReasonInvalid: the spec does not compile; namespaces it
+	// selects have their outputs refused.
+	ExportPolicyReasonInvalid = "Invalid"
+	// ExportPolicyReasonCredentialsMissing: the credential Secret is absent
+	// from the KubeSwift namespace, not labelled for exports, or not a
+	// docker config.
+	ExportPolicyReasonCredentialsMissing = "CredentialsMissing"
+)
+
 // SwiftArtifactExportPolicyStatus reports whether the policy is usable.
 type SwiftArtifactExportPolicyStatus struct {
 	// ObservedGeneration is the generation the status describes.
