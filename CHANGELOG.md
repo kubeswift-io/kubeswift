@@ -6,16 +6,47 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.19.0] — 2026-10-22
+
+A minor release: trusted output export for SwiftSandbox. A workload can write files to a directory it declares in `spec.outputs`. When it exits 0, KubeSwift collects that directory, packages it deterministically and pushes it as an OCI artifact. The digest and metadata are reported in `status.outputs`. The push uses a credential the platform holds; the guest never sees it. Where an output may go, with which credential and up to what size, is an administrator's decision, made in a new cluster-scoped policy. Nothing changes for a sandbox without `spec.outputs`.
+
+### Upgrade
+
+- **Apply `crds/`.** One CRD is new (`swiftartifactexportpolicies.sandbox.kubeswift.io`, now 20 CRDs) and `swiftsandboxes` changed (`spec.outputs`, `status.outputs`, phase `Exporting`). An older CRD silently drops `spec.outputs`.
+- No chart value changed. The controller's ClusterRole gains read access to SwiftArtifactExportPolicies; it is part of the chart.
+- No running guest, sandbox or warm slot is restarted. Existing manifests behave as before.
+- Outputs need the `kernels/sandbox:6.6.17` or `kernels/gpu-sandbox:6.6.6` kernel (bridge feature `outputs`). On an older kernel a sandbox with outputs fails with `KernelUnsupported`. Kernels are not part of the chart: update your SwiftKernels to use outputs.
+- Outputs are refused until an administrator creates a SwiftArtifactExportPolicy and a push credential Secret in the KubeSwift namespace labelled `kubeswift.io/export-credentials=true`. See docs/sandbox/outputs.md.
+
 ### Added
 
-- SwiftSandbox `spec.outputs` (#791): a workload's output directory is
-  collected after it exits 0, packaged deterministically and pushed as an OCI
-  artifact by an export Job with a platform credential the guest never sees.
-  Destinations, credentials and limits come from the new cluster-scoped
-  SwiftArtifactExportPolicy (`saep`, 20 CRDs). New phase `Exporting`;
-  results in `status.outputs`. Needs `kernels/sandbox:6.6.17` /
-  `kernels/gpu-sandbox:6.6.6` (bridge feature `outputs`). See
-  docs/sandbox/outputs.md.
+- **`spec.outputs`** (#791; #829, #830, #831, #832, #835). Up to 4 outputs per sandbox, each a guest directory with optional repository, `maxSize`, `maxEntries`, `artifactType` and annotations.
+  - The launcher gives each output an empty, size-capped filesystem shared into the guest.
+  - Only after the workload exits 0 and the microVM is off, the output is packaged as a canonical tar. Only regular files and directories are kept; symlinks, devices, FIFOs and sockets refuse the output. Owners, extra mode bits and timestamps are dropped. The same files give the same digest.
+  - The sandbox is `Exporting` while an export Job pushes each output from the node. `spec.timeout` and liveness no longer apply at that point.
+  - The result is an OCI image manifest with an empty config, one `tar+gzip` layer and no timestamp. It mounts with `spec.artifacts` (`layout: unpacked`) and can be prepared by a SwiftArtifactPlacement.
+  - Outputs are required: if one is not exported the sandbox fails, with the reason on the output (`OutputTooLarge`, `OutputInvalidEntry`, `RegistryUnauthorized`, `RegistryUnavailable`, `UploadTimeout`, `OutputDestinationDenied`, …).
+  - A sandbox with outputs boots cold even with `poolRef`.
+- **SwiftArtifactExportPolicy** (`saep`, cluster-scoped). It selects namespaces and lists the repositories they may push to, with a literal host and a `{namespace}` path segment, so each namespace gets its own path. It also sets the default repository, the credential Secret, size and entry ceilings, and the upload timeout.
+  - The destination is resolved before anything runs and recorded with the policy's UID.
+  - It is checked again just before the push: a changed policy fails the export (`OutputDestinationRevoked`), it never redirects it.
+  - Its status reports `Ready` (`Valid`, `Invalid`, `CredentialsMissing`, with the reason) and the number of namespaces it selects; a policy that becomes unusable raises a Warning Event (#835).
+- Controller flag `--max-concurrent-exports` (default 4) and metric `kubeswift_sandbox_output_exports_total{result,reason}`.
+- `test/sandbox/outputs.sh`: a round trip, 16 security cases, a compile-and-run fixture and per-stage timings, on a real cluster.
+
+### Security
+
+- Only the export Job mounts the push credential. It runs in the KubeSwift namespace on the sandbox's node, with no service account token, a read-only root and no capabilities. It reads only that sandbox's packaged output, pushes over HTTPS only, and takes every destination and limit from the controller. The guest, the launcher pod and tenants never see the credential.
+- The package is checked twice: by the launcher when it writes it, and by the export Job before it pushes.
+- KubeSwift does not sign exports. To consume one as trusted, have a separate signer sign its digest and require that signature with a SwiftArtifactVerificationPolicy.
+
+### Known limitations
+
+- The export push and artifact pulls trust the system CA roots only: a registry with a private CA is not supported yet.
+
+### Docs
+
+- docs/sandbox/outputs.md: the feature, the policy, credentials, status reasons, timings and testing.
 
 ## [v0.18.2] — 2026-10-22
 
