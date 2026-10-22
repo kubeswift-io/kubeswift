@@ -413,6 +413,25 @@ pub async fn report_secret_error(namespace: &str, name: &str, msg: &str) -> Resu
         .map_err(|e| e.to_string())
 }
 
+/// Reports spec.outputs results (kubeswift.io/sandbox-outputs). The
+/// controller treats it as a hint: the export Job re-verifies the package.
+pub async fn report_outputs(
+    namespace: &str,
+    name: &str,
+    reports: &[crate::outputs::Report],
+) -> Result<(), String> {
+    let client = crate::kube_client::create_client()
+        .await
+        .map_err(|e| e.to_string())?;
+    let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client, namespace);
+    let value = serde_json::to_string(reports).map_err(|e| e.to_string())?;
+    let patch = json!({"metadata": {"annotations": {"kubeswift.io/sandbox-outputs": value}}});
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// Tells the controller the launcher refused its runtime intent.
 pub async fn report_intent_error(namespace: &str, name: &str, msg: &str) -> Result<(), String> {
     let client = crate::kube_client::create_client()

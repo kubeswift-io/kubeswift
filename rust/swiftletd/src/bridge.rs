@@ -44,6 +44,7 @@ pub fn require(feature: &str, what: &str) -> Result<(), String> {
 fn minimum_kernels(feature: &str) -> (&'static str, &'static str) {
     match feature {
         "warm-mounts" => ("6.6.15", "6.6.4"),
+        "outputs" => ("6.6.17", "6.6.6"),
         _ => ("6.6.14", "6.6.3"),
     }
 }

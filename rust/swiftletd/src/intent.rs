@@ -117,6 +117,10 @@ pub struct RuntimeIntent {
     /// Hypervisor, then passes CH `--fs tag=<tag>,socket=<socket_path>`.
     #[serde(default)]
     pub filesystems: Option<Vec<FilesystemIntent>>,
+    /// spec.outputs (sandboxes): guest directories exported after the
+    /// workload exits 0 (outputs.rs). swiftletd makes their shares itself.
+    #[serde(default)]
+    pub outputs: Option<Vec<OutputIntent>>,
     /// Operator-backed vhost-user devices: vhost-user-blk disks and generic
     /// vhost-user devices. swiftletd hands each to CH (--disk vhost_user=on
     /// for blk; --generic-vhost-user for generic). CH path only.
@@ -386,6 +390,24 @@ pub struct FilesystemIntent {
     /// exists (optional_shares.rs).
     #[serde(default)]
     pub optional_token: String,
+    /// Set (to the output's maxEntries) only for an output share, which
+    /// swiftletd builds itself (outputs.rs) and serves with hardened virtiofsd
+    /// arguments. Never read from the intent.
+    #[serde(skip)]
+    pub output: Option<u64>,
+}
+
+/// One spec.outputs entry, as the controller resolved it.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputIntent {
+    pub name: String,
+    /// virtio-fs tag, sbxout<index>.
+    pub tag: String,
+    /// Guest path (the bridge mounts the share there; from the cmdline).
+    pub path: String,
+    pub max_bytes: u64,
+    pub max_entries: u64,
 }
 
 /// An operator-backed vhost-user device (blk or generic). swiftletd hands the

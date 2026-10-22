@@ -70,11 +70,11 @@ understands beyond argv/env/cwd (`make build` writes it from `BRIDGE_FEATURES`).
 
 ```
 cd output/images                # or output-gpu-sandbox/images for the gpu profile
-oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.16 \
+oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.17 \
   bzImage:application/vnd.kubeswift.kernel.binary \
   rootfs.cpio.gz:application/vnd.kubeswift.initramfs.binary \
   bridge-features:text/plain
-# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.5 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain
+# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.6 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain
 ```
 
 Then `kubectl apply -f config/samples/sandbox/swiftkernel-sandbox.yaml` (or
@@ -98,6 +98,11 @@ The SwiftSandbox controller appends to the kernel cmdline:
   its path (spec.artifacts). Feature `mounts`.
 - `kubeswift.stage=<tag>` (warm-pool slots): mount the tag read-only, nosuid,
   nodev at `/run/kubeswift-stage`, outside the new root. Feature `warm-mounts`.
+- `kubeswift.outputs=<tag>:<path>[,...]` — mount each virtio-fs tag read-write,
+  nosuid, nodev at its path (spec.outputs). When the workload exits, the bridge
+  stops every other process, syncs and unmounts the outputs, and only then
+  prints the exit code, so a present exit code means the outputs are complete
+  on the host. Feature `outputs` (kernels/sandbox 6.6.17, gpu-sandbox 6.6.6).
 
 The config disk is a raw blob: `KUBESWIFT-EXEC-V1`, then one TAB-separated line
 per item, then `KUBESWIFT-EXEC-END`, NUL-padded. Values are base64.

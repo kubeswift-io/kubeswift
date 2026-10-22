@@ -34,13 +34,19 @@ fn spawn_virtiofsd(
     // virtiofsd refuses to bind an existing socket file; remove any stale one
     // (a prior SIGKILL leaves it behind — same hazard as the CH api-socket).
     let _ = std::fs::remove_file(socket_path);
-    std::process::Command::new(&binary)
-        .arg(format!("--socket-path={}", socket_path))
-        .arg(format!("--shared-dir={}", fs.source_path))
-        .arg("--sandbox")
-        .arg("none")
-        .args(virtiofsd_extra_args(fs))
-        .spawn()
+    let mut cmd = std::process::Command::new(&binary);
+    cmd.arg(format!("--socket-path={}", socket_path))
+        .arg(format!("--shared-dir={}", fs.source_path));
+    match fs.output {
+        // An output share is written by the guest: its arguments are fixed by
+        // outputs.rs, whatever the intent says.
+        Some(max_entries) => cmd.args(crate::outputs::virtiofsd_args(max_entries)),
+        None => cmd
+            .arg("--sandbox")
+            .arg("none")
+            .args(virtiofsd_extra_args(fs)),
+    };
+    cmd.spawn()
         .map_err(|e| format!("spawn virtiofsd ({}) for {}: {}", binary, fs.name, e))
 }
 
