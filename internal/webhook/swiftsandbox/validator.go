@@ -86,6 +86,9 @@ func validateSpec(s *sandboxv1alpha1.SwiftSandboxSpec) error {
 	if err := ValidateArtifacts(s); err != nil {
 		return err
 	}
+	if err := ValidateOutputs(s); err != nil {
+		return err
+	}
 	if err := ValidateTermination(s.Termination); err != nil {
 		return err
 	}

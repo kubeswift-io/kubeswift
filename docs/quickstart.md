@@ -57,12 +57,12 @@ Verify CRDs are installed:
 
 ```bash
 kubectl get crd | grep kubeswift.io
-# Expected (19 CRDs): swiftguests, swiftguestclasses, swiftguestpools,
+# Expected (20 CRDs): swiftguests, swiftguestclasses, swiftguestpools,
 #   swiftimages, swiftseedprofiles, swiftkernels,
 #   swiftgpuprofiles, swiftgpunodes,
 #   swiftsnapshots, swiftrestores, swiftsnapshotschedules,
 #   swiftmigrations, swiftsandboxes, swiftsandboxpools, swiftartifactplacements,
-#   swiftartifactverificationpolicies, clusters,
+#   swiftartifactverificationpolicies, swiftartifactexportpolicies, clusters,
 #   swiftstoragelocations, swiftclusterstoragelocations
 ```
 

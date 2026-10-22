@@ -188,6 +188,19 @@ type SwiftSandboxSpec struct {
 	// +optional
 	Artifacts []SandboxArtifact `json:"artifacts,omitempty"`
 
+	// Outputs are directories the workload writes and KubeSwift exports, when
+	// the workload exits 0, as OCI artifacts pushed with platform credentials
+	// to a repository a SwiftArtifactExportPolicy allows. The sandbox is
+	// Exporting until every output is pushed, then Completed; a failed export
+	// fails it. A sandbox with outputs always boots cold (a warm slot has no
+	// output share). See docs/sandbox/outputs.md.
+	// +kubebuilder:validation:MaxItems=4
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec.outputs is immutable"
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Outputs []SandboxOutput `json:"outputs,omitempty"`
+
 	// PodMetadata adds labels and annotations to the launcher pod, for example
 	// so a Service selects the sandbox. Keys under kubeswift.io or any
 	// *.kubeswift.io domain are refused, as are the pod-network annotations
@@ -719,7 +732,7 @@ type SandboxEgressAllowed struct {
 }
 
 // SwiftSandboxPhase is the lifecycle phase.
-// +kubebuilder:validation:Enum=Pending;Materializing;Running;Completed;Failed
+// +kubebuilder:validation:Enum=Pending;Materializing;Running;Exporting;Completed;Failed
 type SwiftSandboxPhase string
 
 const (
@@ -729,6 +742,9 @@ const (
 	SwiftSandboxMaterializing SwiftSandboxPhase = "Materializing"
 	// SwiftSandboxRunning — the guest is up.
 	SwiftSandboxRunning SwiftSandboxPhase = "Running"
+	// SwiftSandboxExporting — the workload exited 0 and spec.outputs are being
+	// collected and pushed. Only a sandbox with outputs reaches it.
+	SwiftSandboxExporting SwiftSandboxPhase = "Exporting"
 	// SwiftSandboxCompleted — the workload exited 0 (terminal).
 	SwiftSandboxCompleted SwiftSandboxPhase = "Completed"
 	// SwiftSandboxFailed — boot/materialize failure, non-zero exit, or timeout
@@ -888,6 +904,9 @@ type SwiftSandboxStatus struct {
 	// mounted and where.
 	// +optional
 	Artifacts []SandboxArtifactStatus `json:"artifacts,omitempty"`
+	// Outputs reports each spec.outputs entry's export.
+	// +optional
+	Outputs []SandboxOutputStatus `json:"outputs,omitempty"`
 	// StartedAt is when the guest began running.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`

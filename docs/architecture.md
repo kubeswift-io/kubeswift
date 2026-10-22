@@ -316,7 +316,7 @@ Key facts:
 | `fleet.kubeswift.io/v1alpha1` | Cluster | Member cluster federated by the gateway hub |
 | `storage.kubeswift.io/v1alpha1` | SwiftClusterStorageLocation, SwiftStorageLocation | Where pushed artifacts are kept: the cluster's registry and a namespace's own |
 
-19 CRDs across 10 API groups, all `v1alpha1`.
+20 CRDs across 10 API groups, all `v1alpha1`.
 
 ## Design principles
 

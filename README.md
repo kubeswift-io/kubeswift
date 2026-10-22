@@ -60,7 +60,7 @@ Boot your first VM → [Quickstart](docs/quickstart.md).
 | SwiftClusterStorageLocation | `csloc` | `storage.kubeswift.io` | Cluster | Registry for pushed artifacts, set once for the cluster |
 | SwiftStorageLocation | `sloc` | `storage.kubeswift.io` | Namespaced | A namespace's own registry, overriding the cluster's |
 
-19 CRDs, all `v1alpha1`.
+20 CRDs, all `v1alpha1`.
 
 ## Documentation
 
