@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -62,6 +63,12 @@ type SwiftSandboxReconciler struct {
 	registryFailures sync.Map
 	// policies evaluates SwiftArtifactVerificationPolicies (artifact_policy.go).
 	policies artifactPolicies
+
+	// SystemNamespace is where export credentials live and export Jobs run
+	// (export.go). Empty refuses spec.outputs.
+	SystemNamespace string
+	// MaxConcurrentExports caps running export Jobs; DefaultMaxConcurrentExports when 0.
+	MaxConcurrentExports int
 }
 
 func isTerminal(p sandboxv1alpha1.SwiftSandboxPhase) bool {
@@ -92,7 +99,14 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if res, err := r.releaseGPUWhenDone(ctx, &sb); err != nil || res.RequeueAfter > 0 {
 			return res, err
 		}
+		if done, err := r.finishOutputs(ctx, &sb); err != nil || !done {
+			return ctrl.Result{RequeueAfter: exportPollInterval}, err
+		}
 		return r.handleRetention(ctx, &sb)
+	}
+	// The workload exited 0 and its outputs are packaged: push them.
+	if exportingOutputs(&sb) {
+		return r.reconcileExport(ctx, &sb)
 	}
 	// Nothing below can be built in a namespace being deleted. The sandbox is
 	// deleted next, and handleDeletion above takes it apart.
@@ -103,6 +117,22 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// handleDeletion (drain, then the microVM), not through garbage collection.
 	if err := r.ensureTerminationFinalizer(ctx, &sb); err != nil {
 		return ctrl.Result{}, err
+	}
+	// spec.outputs: destinations resolved and recorded before anything is
+	// created (and before a GPU is reserved), or the sandbox fails.
+	if len(sb.Spec.Outputs) > 0 && len(sb.Status.Outputs) == 0 {
+		if err := sandboxwebhook.ValidateOutputs(&sb.Spec); err != nil {
+			return r.fail(ctx, &sb, "InvalidOutputs", err.Error())
+		}
+		reason, msg, err := r.admitOutputs(ctx, &sb)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if reason != "" {
+			r.markOutputs(&sb, sandboxv1alpha1.SandboxOutputFailed, reason, msg)
+			return r.fail(ctx, &sb, reason, msg)
+		}
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	if err := swiftguest.EnsureLauncherRBAC(ctx, r.Client, sb.Namespace, swiftguest.SandboxLauncher); err != nil {
@@ -160,17 +190,6 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	kernelName := resolveKernelProfile(&sb)
-
-	// spec.outputs: checked before either path creates anything. Export is
-	// not wired yet, so a sandbox that asks for it fails instead of running
-	// and silently exporting nothing.
-	if len(sb.Spec.Outputs) > 0 {
-		if err := sandboxwebhook.ValidateOutputs(&sb.Spec); err != nil {
-			return r.fail(ctx, &sb, "InvalidOutputs", err.Error())
-		}
-		return r.fail(ctx, &sb, sandboxv1alpha1.OutputReasonNotSupported,
-			"spec.outputs: this KubeSwift version does not export outputs")
-	}
 
 	// spec.poolRef: claim a warm slot from a SwiftSandboxPool (sub-second checkout) and
 	// inject the workload over vsock, else cold-fallback. Own path (its pod is a re-parented
@@ -348,7 +367,21 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	if len(sb.Spec.Artifacts) > 0 {
 		r.recordArtifactStatuses(sb, arts.statuses, "cold")
 	}
-	intent := buildIntent(sb, kernelName, ri.RootfsPath, modelPath, ri.Exec, false)
+	// The launcher is built with each output's limits as resolved now
+	// (policy ceilings applied); the destination must still be the recorded one.
+	launch := sb
+	if len(sb.Spec.Outputs) > 0 {
+		dests, reason, msg, err := r.launchDestinations(ctx, sb)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if reason != "" {
+			r.markOutputs(sb, sandboxv1alpha1.SandboxOutputFailed, reason, msg)
+			return r.fail(ctx, sb, reason, msg)
+		}
+		launch = withOutputLimits(sb, dests)
+	}
+	intent := buildIntent(launch, kernelName, ri.RootfsPath, modelPath, ri.Exec, false)
 	intentJSON, err := runtimeintent.Serialize(intent)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -364,7 +397,7 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		}
 		return ctrl.Result{}, err
 	}
-	pod := buildPod(sb, kernelName)
+	pod := buildPod(launch, kernelName)
 	swiftguest.SetIntentDigest(pod, intentJSON)
 	if err := addArtifactRequirements(pod, decisionsByName(sb, decisions)); err != nil {
 		return ctrl.Result{}, err
@@ -419,6 +452,13 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 }
 
 func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) (ctrl.Result, error) {
+	// A workload that exited 0 is past spec.timeout and liveness: what is
+	// left is packaging its outputs.
+	if len(sb.Status.Outputs) > 0 {
+		if handled, res, err := r.observeOutputs(ctx, sb, pod); handled || err != nil {
+			return res, err
+		}
+	}
 	// Run cap.
 	if sb.Status.StartedAt != nil && sb.Spec.Timeout != nil &&
 		time.Since(sb.Status.StartedAt.Time) > sb.Spec.Timeout.Duration {
@@ -531,6 +571,11 @@ func (r *SwiftSandboxReconciler) finishTerminal(ctx context.Context, sb *sandbox
 	if pod.Status.Phase == corev1.PodFailed {
 		return r.terminal(ctx, sb, sandboxv1alpha1.SwiftSandboxFailed, "GuestFailed", podFailureMessage(pod))
 	}
+	// Without the exit line the outputs may be incomplete: never export
+	// them, and never report the sandbox Completed.
+	if len(sb.Spec.Outputs) > 0 {
+		return r.fail(ctx, sb, reasonOutputCollectionFailed, "the workload's exit code was not reported, so its outputs are not exported")
+	}
 	return r.terminal(ctx, sb, sandboxv1alpha1.SwiftSandboxCompleted, "Completed", "workload exited")
 }
 
@@ -559,6 +604,10 @@ func (r *SwiftSandboxReconciler) terminal(ctx context.Context, sb *sandboxv1alph
 	}
 	sb.Status.Phase = phase
 	sb.Status.Message = msg
+	// An output not yet exported when the sandbox fails never will be.
+	if phase == sandboxv1alpha1.SwiftSandboxFailed {
+		r.markOutputs(sb, sandboxv1alpha1.SandboxOutputSkipped, reason, "the sandbox failed: "+truncate(msg, 400))
+	}
 	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
 		Type: sandboxv1alpha1.SwiftSandboxConditionGuestRunning, Status: metav1.ConditionFalse,
 		Reason: reason, Message: msg, ObservedGeneration: sb.Generation,
@@ -629,6 +678,10 @@ func (r *SwiftSandboxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&networkingv1.NetworkPolicy{}).
+		// Export Jobs and spool cleanup pods live in the KubeSwift namespace
+		// and are matched to their sandbox by annotation (export.go).
+		Watches(&batchv1.Job{}, handler.EnqueueRequestsFromMapFunc(exportObjectToSandbox)).
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(exportObjectToSandbox)).
 		WatchesRawSource(source.Channel(r.resolved, &handler.EnqueueRequestForObject{})).
 		Complete(r)
 }

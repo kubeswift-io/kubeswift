@@ -111,6 +111,8 @@ func main() {
 		"Fraction of --artifact-authorization-ttl after which a lookup answered from the cache also "+
 			"asks the registry again in the background, so a reference in use is renewed before it "+
 			"expires and no checkout waits for the registry. 0 disables renewal. At least 0, below 1.")
+	maxConcurrentExports := flag.Int("max-concurrent-exports", swiftsandbox.DefaultMaxConcurrentExports,
+		"Export Jobs (SwiftSandbox spec.outputs) running at once, cluster-wide.")
 	slotReadyTimeout := flag.Duration("warm-slot-ready-timeout", swiftsandbox.DefaultSlotReadyTimeout,
 		"How long after its launcher starts a warm SwiftSandboxPool slot may wait for its guest agent "+
 			"before it is deleted and replaced (Warning Event SlotNotReady). Doubles with each consecutive "+
@@ -391,6 +393,9 @@ func main() {
 		APIReader: mgr.GetAPIReader(),
 		Scheme:    mgr.GetScheme(),
 		Recorder:  mgr.GetEventRecorderFor("swiftsandbox-controller"),
+		// Export credentials live, and export Jobs run, in the controller's namespace.
+		SystemNamespace:      leaderElectionNS,
+		MaxConcurrentExports: *maxConcurrentExports,
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftSandbox controller")
 		os.Exit(1)
