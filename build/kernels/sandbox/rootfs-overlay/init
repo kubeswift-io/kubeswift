@@ -43,6 +43,8 @@ MOUNTS=""
 # boot, where the host projects a checkout's artifacts. Mounted outside the new
 # root; the guest agent binds each artifact into it on the checkout's exec.
 STAGE=""
+OUTPUTS=""
+OUTPUT_PATHS=""
 # WORKDIR is only assigned from the config-disk CWD line (spec.workingDir). Init it
 # here so the `set -u` reference below is safe when no workingDir is set — the
 # common case (a missing init was a regression that panicked PID 1: "WORKDIR:
@@ -59,6 +61,7 @@ for arg in $(cat /proc/cmdline); do
 		kubeswift.modelpath=*)  MODEL_PATH="${arg#kubeswift.modelpath=}" ;;
 		kubeswift.mounts=*)     MOUNTS="${arg#kubeswift.mounts=}" ;;
 		kubeswift.stage=*)      STAGE="${arg#kubeswift.stage=}" ;;
+		kubeswift.outputs=*)    OUTPUTS="${arg#kubeswift.outputs=}" ;;
 	esac
 done
 
@@ -66,7 +69,7 @@ done
 # same list to the artifact's bridge-features file, which swiftletd checks
 # before it asks for any of them: an older bridge ignores what it does not
 # know, and would run the workload without its files or mounts.
-BRIDGE_FEATURES="files mounts warm-mounts"
+BRIDGE_FEATURES="files mounts warm-mounts outputs"
 echo "sandbox-bridge: features: $BRIDGE_FEATURES"
 
 # fail ends the sandbox. It reports an exit code first (125), as a workload
@@ -159,6 +162,33 @@ if [ -n "$MOUNTS" ]; then
 			sleep 1
 		done
 		echo "sandbox-bridge: $tag mounted read-only at ${mp}"
+	done
+	IFS=$oldifs
+fi
+
+# --- output shares (kubeswift.outputs, feature outputs, spec.outputs) ---
+# Each tag mounted READ-WRITE at its path: the host collects what the workload
+# leaves there after the microVM has powered off. nosuid,nodev: nothing written
+# there runs with privileges or opens a device, in the guest either.
+if [ -n "$OUTPUTS" ]; then
+	oldifs=$IFS
+	IFS=','
+	for m in $OUTPUTS; do
+		tag=${m%%:*}
+		mp=${m#*:}
+		case "$tag" in
+			''|*[!a-z0-9]*) fail "kubeswift.outputs: '$tag' is not a plain tag" ;;
+		esac
+		safe_path "$mp" || fail "kubeswift.outputs: '$mp' is not a clean absolute path"
+		mkdir -p "/newroot${mp}"
+		n=0
+		until mount -t virtiofs -o rw,nosuid,nodev "$tag" "/newroot${mp}" 2>/dev/null; do
+			n=$((n + 1))
+			[ "$n" -ge 30 ] && fail "cannot mount output tag '$tag' at ${mp} after ${n}s"
+			sleep 1
+		done
+		OUTPUT_PATHS="$OUTPUT_PATHS ${mp}"
+		echo "sandbox-bridge: output $tag mounted read-write at ${mp}"
 	done
 	IFS=$oldifs
 fi
@@ -308,6 +338,19 @@ else
 	chroot /newroot "$@"
 fi
 code=$?
+# Outputs: nothing may write them after this point, and what was written must
+# reach the host before the exit line does. Stop every other process (the
+# workload's leftovers keep files open), flush, unmount. The exit line is
+# printed only after, so its presence means the output is complete.
+if [ -n "$OUTPUT_PATHS" ]; then
+	kill -KILL -1 2>/dev/null
+	sleep 1
+	sync
+	for mp in $OUTPUT_PATHS; do
+		umount "/newroot${mp}" 2>/dev/null || echo "sandbox-bridge: output at ${mp} still busy; synced"
+	done
+	sync
+fi
 printf 'KUBESWIFT-EXIT-CODE=%s\n' "$code" >/dev/console 2>/dev/null
 # Let CH flush the exit line to the host console file before we power off (swiftletd
 # reads it after CH exits to recover the workload's exit code).

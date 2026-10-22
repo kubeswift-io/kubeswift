@@ -8,6 +8,7 @@ mod launch;
 mod lease;
 mod migconn;
 mod optional_shares;
+mod outputs;
 mod podwatch;
 mod probe;
 mod report;
@@ -254,6 +255,43 @@ fn main() {
                         log::error!("{}", msg);
                         if let (Some(ns), Some(n)) = (&namespace, &name) {
                             let _ = rt.block_on(report::report_kernel_error(ns, n, &msg));
+                        }
+                        std::process::exit(1);
+                    }
+                }
+            }
+
+            // spec.outputs: a bridge without the feature would run the
+            // workload with nowhere to write them. Each output gets its own
+            // bounded staging filesystem, shared read-write (outputs.rs).
+            let mut prepared_outputs: Vec<outputs::Prepared> = Vec::new();
+            if let Some(outs) = intent.outputs.clone().filter(|o| !o.is_empty()) {
+                if let Err(msg) = bridge::require("outputs", "spec.outputs") {
+                    log::error!("{}", msg);
+                    if let (Some(ns), Some(n)) = (&namespace, &name) {
+                        let _ = rt.block_on(report::report_kernel_error(ns, n, &msg));
+                    }
+                    std::process::exit(1);
+                }
+                match outputs::prepare(&outs, Path::new(outputs::STAGING_DIR)) {
+                    Ok(p) => {
+                        let fsl = intent.filesystems.get_or_insert_with(Vec::new);
+                        for o in &p {
+                            fsl.push(outputs::share(o));
+                        }
+                        log::info!("outputs_prepared count={}", p.len());
+                        prepared_outputs = p;
+                    }
+                    Err(e) => {
+                        log::error!("outputs_prepare_failed: {}", e);
+                        if let (Some(ns), Some(n)) = (&namespace, &name) {
+                            let reports: Vec<outputs::Report> = outs
+                                .iter()
+                                .map(|o| {
+                                    outputs::Report::skipped(&o.name, "OutputStagingFailed", &e)
+                                })
+                                .collect();
+                            let _ = rt.block_on(report::report_outputs(ns, n, &reports));
                         }
                         std::process::exit(1);
                     }
@@ -625,6 +663,53 @@ fn main() {
                                 Err(e) => {
                                     log::warn!("sandbox console read failed {}: {}", console, e)
                                 }
+                            }
+                        }
+                    }
+                    // spec.outputs: the microVM and its virtiofsd are gone, so the
+                    // guest can no longer write them. Collect only after a
+                    // workload exit 0 the bridge reported (it prints the marker
+                    // after syncing the outputs).
+                    if !prepared_outputs.is_empty() {
+                        let console = format!("{}.log", serial_socket_path);
+                        let code =
+                            report::read_console_tail(&console, report::SANDBOX_CONSOLE_TAIL_BYTES)
+                                .ok()
+                                .and_then(|t| report::parse_sandbox_exit_code(&t));
+                        let reports: Vec<outputs::Report> = prepared_outputs
+                            .iter()
+                            .map(|p| match code {
+                                _ if shutdown::terminating() => outputs::Report::skipped(
+                                    &p.intent.name,
+                                    "Deleted",
+                                    "the sandbox was deleted before the workload finished",
+                                ),
+                                Some(0) => outputs::collect(p, Path::new(outputs::SPOOL_DIR), &shutdown::terminating),
+                                Some(c) => outputs::Report::skipped(
+                                    &p.intent.name,
+                                    "WorkloadFailed",
+                                    &format!("the workload exited {}; nothing is exported", c),
+                                ),
+                                None => outputs::Report::skipped(
+                                    &p.intent.name,
+                                    "OutputCollectionFailed",
+                                    "no workload exit code: the output may be incomplete, so nothing is exported",
+                                ),
+                            })
+                            .collect();
+                        for r in &reports {
+                            log::info!(
+                                "output name={} state={} reason={} bytes={} entries={}",
+                                r.name,
+                                r.state,
+                                r.reason,
+                                r.content_bytes,
+                                r.entries
+                            );
+                        }
+                        if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
+                            if let Err(e) = rt.block_on(report::report_outputs(ns, n, &reports)) {
+                                log::error!("report_outputs_failed: {}", e);
                             }
                         }
                     }

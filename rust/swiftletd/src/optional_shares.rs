@@ -101,6 +101,7 @@ mod tests {
             ),
             read_only: true,
             optional_token: token.into(),
+            output: None,
         }
     }
 

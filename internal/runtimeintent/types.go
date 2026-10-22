@@ -68,6 +68,10 @@ type RuntimeIntent struct {
 	// Cloud Hypervisor and passes CH `--fs tag=<Tag>,socket=<SocketPath>`.
 	// CH path only.
 	Filesystems []FilesystemIntent `json:"filesystems,omitempty"`
+	// Outputs are a sandbox's spec.outputs: swiftletd makes each one's
+	// bounded staging filesystem and read-write share itself, and packages it
+	// after the workload exits 0.
+	Outputs []OutputIntent `json:"outputs,omitempty"`
 	// Restore is set when this launcher pod is meant to bring up the VM
 	// from a Tier B local snapshot via Cloud Hypervisor's --restore.
 	// When non-nil, swiftletd skips seed.iso construction and the normal
@@ -129,6 +133,17 @@ type VsockIntent struct {
 // FilesystemIntent is one virtiofs share. swiftletd runs a virtiofsd
 // backend on SourcePath listening at SocketPath, then hands CH
 // `--fs tag=<Tag>,socket=<SocketPath>`.
+// OutputIntent is one spec.outputs entry with its effective limits.
+type OutputIntent struct {
+	Name string `json:"name"`
+	// Tag is the virtio-fs tag, sbxout<index>.
+	Tag string `json:"tag"`
+	// Path is the guest directory (the bridge mounts the share there).
+	Path       string `json:"path"`
+	MaxBytes   int64  `json:"maxBytes"`
+	MaxEntries int64  `json:"maxEntries"`
+}
+
 type FilesystemIntent struct {
 	// Name is the per-guest identifier (drives socket/source naming).
 	Name string `json:"name"`

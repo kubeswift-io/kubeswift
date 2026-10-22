@@ -190,6 +190,14 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 		filesystems = append(filesystems, warmStageIntent())
 		cmdline += " kubeswift.stage=" + warmStageTag
 	}
+	// spec.outputs: read-write shares swiftletd builds (feature "outputs").
+	// Never on a warm slot: a sandbox with outputs boots cold.
+	outputs, outputMounts := outputIntents(sb)
+	if outputMounts != "" && !idle {
+		cmdline += " kubeswift.outputs=" + outputMounts
+	} else {
+		outputs = nil
+	}
 
 	ri := &runtimeintent.RuntimeIntent{
 		KernelBoot: &runtimeintent.KernelBootSpec{
@@ -197,6 +205,7 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 			InitramfsPath: kernelDir + "/rootfs.cpio.gz",
 			Cmdline:       cmdline,
 		},
+		Outputs:       outputs,
 		SandboxRootfs: sandboxRootfs,
 		Filesystems:   filesystems,
 		SandboxExec:   sandboxExec,
@@ -652,6 +661,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		}
 	}
 	applyPodMetadata(pod, sb.Spec.PodMetadata)
+	addOutputVolumes(pod, sb)
 	if usesSecrets(sb) {
 		// The config disk carries the resolved secret values: keep it in
 		// memory, never on the node's disk (the run dir is a disk emptyDir).

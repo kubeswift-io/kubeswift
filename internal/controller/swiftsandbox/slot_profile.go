@@ -129,6 +129,9 @@ func slotMismatches(pool *sandboxv1alpha1.SwiftSandboxPool, sb *sandboxv1alpha1.
 	if sb.Spec.ScratchDisk != nil {
 		out = append(out, "scratchDisk (warm slots have none)")
 	}
+	if len(sb.Spec.Outputs) > 0 {
+		out = append(out, "outputs (warm slots have no output share)")
+	}
 	return out
 }
 
