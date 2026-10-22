@@ -40,6 +40,10 @@ A minor release: trusted output export for SwiftSandbox. A workload can write fi
 - The package is checked twice: by the launcher when it writes it, and by the export Job before it pushes.
 - KubeSwift does not sign exports. To consume one as trusted, have a separate signer sign its digest and require that signature with a SwiftArtifactVerificationPolicy.
 
+### Fixed
+
+- A guest with a secondary NIC on a NetworkAttachmentDefinition without IPAM (a plain bridge NAD, the guest configuring itself) failed to start: network-init exited when the NAD interface had no IPv4 address, a regression from #419. It now bridges the interface as before and logs the fallback; a NAD with IPAM keeps the address hand-off (#833, #834, thanks @thebhdn). The fix is in the launcher image, so it applies to guests started after the upgrade.
+
 ### Known limitations
 
 - The export push and artifact pulls trust the system CA roots only: a registry with a private CA is not supported yet.
