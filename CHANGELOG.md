@@ -6,6 +6,17 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- SwiftSandbox `spec.outputs` (#791): a workload's output directory is
+  collected after it exits 0, packaged deterministically and pushed as an OCI
+  artifact by an export Job with a platform credential the guest never sees.
+  Destinations, credentials and limits come from the new cluster-scoped
+  SwiftArtifactExportPolicy (`saep`, 20 CRDs). New phase `Exporting`;
+  results in `status.outputs`. Needs `kernels/sandbox:6.6.17` /
+  `kernels/gpu-sandbox:6.6.6` (bridge feature `outputs`). See
+  docs/sandbox/outputs.md.
+
 ## [v0.18.2] — 2026-10-22
 
 A security patch release. A launcher takes its runtime configuration from a ConfigMap named after its sandbox, warm-pool slot or migration destination. The controllers accepted an existing ConfigMap of that name without checking who had created it or what it held. Launchers are privileged, so a ConfigMap they read must be one KubeSwift created. Now it is.

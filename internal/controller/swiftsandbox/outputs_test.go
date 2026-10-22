@@ -123,6 +123,9 @@ func TestReconcile_OutputsRefused(t *testing.T) {
 			if got.Status.Phase != sandboxv1alpha1.SwiftSandboxFailed || guestRunningReason(t, c) != tc.reason {
 				t.Errorf("%s (pooled=%v): phase %s reason %q, want Failed/%s", tc.name, pooled, got.Status.Phase, guestRunningReason(t, c), tc.reason)
 			}
+			if len(got.Status.Outputs) != 1 || got.Status.Outputs[0].State != sandboxv1alpha1.SandboxOutputFailed || got.Status.Outputs[0].Reason != tc.reason {
+				t.Errorf("%s (pooled=%v): status.outputs %+v, want the output Failed/%s", tc.name, pooled, got.Status.Outputs, tc.reason)
+			}
 			if err := c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "sb"}, &corev1.Pod{}); !apierrors.IsNotFound(err) {
 				t.Errorf("%s (pooled=%v): a launcher was created (err %v)", tc.name, pooled, err)
 			}
@@ -138,6 +141,9 @@ func TestReconcile_InvalidOutputs(t *testing.T) {
 	reconcileSB(t, r, "sb")
 	if got := guestRunningReason(t, c); got != "InvalidOutputs" {
 		t.Errorf("reason %q, want InvalidOutputs", got)
+	}
+	if o := getSandbox(t, c, "sb").Status.Outputs; len(o) != 1 || o[0].Reason != "InvalidOutputs" {
+		t.Errorf("status.outputs %+v", o)
 	}
 }
 
@@ -361,6 +367,7 @@ func TestReconcile_ExportFailures(t *testing.T) {
 		{"archive refused", batchv1.JobComplete, "", &export.Result{Reason: export.ReasonInvalidEntry, Message: "symlink"}, export.ReasonInvalidEntry},
 		{"registry unreachable", batchv1.JobFailed, "BackoffLimitExceeded", &export.Result{Message: "dial tcp: connection refused"}, reasonOutputRegistryUnavailable},
 		{"upload timeout", batchv1.JobFailed, "DeadlineExceeded", nil, reasonOutputUploadTimeout},
+		{"upload timeout after errors", batchv1.JobFailed, "DeadlineExceeded", &export.Result{Message: "no such host"}, reasonOutputUploadTimeout},
 	} {
 		sb := exportingSandbox()
 		r, c := exportFixture(t, sb, endedLauncher(sb, "0", packagedReport))
@@ -374,6 +381,9 @@ func TestReconcile_ExportFailures(t *testing.T) {
 		o := got.Status.Outputs[0]
 		if got.Status.Phase != sandboxv1alpha1.SwiftSandboxFailed || o.State != sandboxv1alpha1.SandboxOutputFailed || o.Reason != tc.reason {
 			t.Errorf("%s: phase %s output %+v, want Failed/%s", tc.name, got.Status.Phase, o, tc.reason)
+		}
+		if tc.rep != nil && tc.rep.Message != "" && !strings.Contains(o.Message, tc.rep.Message) {
+			t.Errorf("%s: message %q does not carry the Job's error %q", tc.name, o.Message, tc.rep.Message)
 		}
 	}
 }

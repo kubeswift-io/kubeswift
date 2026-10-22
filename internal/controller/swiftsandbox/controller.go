@@ -122,6 +122,7 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// created (and before a GPU is reserved), or the sandbox fails.
 	if len(sb.Spec.Outputs) > 0 && len(sb.Status.Outputs) == 0 {
 		if err := sandboxwebhook.ValidateOutputs(&sb.Spec); err != nil {
+			refuseOutputs(&sb, "InvalidOutputs", err.Error())
 			return r.fail(ctx, &sb, "InvalidOutputs", err.Error())
 		}
 		reason, msg, err := r.admitOutputs(ctx, &sb)
@@ -129,7 +130,7 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, err
 		}
 		if reason != "" {
-			r.markOutputs(&sb, sandboxv1alpha1.SandboxOutputFailed, reason, msg)
+			refuseOutputs(&sb, reason, msg)
 			return r.fail(ctx, &sb, reason, msg)
 		}
 		return ctrl.Result{Requeue: true}, nil

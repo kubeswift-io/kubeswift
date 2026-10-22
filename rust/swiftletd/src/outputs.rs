@@ -185,16 +185,20 @@ pub fn share(p: &Prepared) -> FilesystemIntent {
 }
 
 /// virtiofsd arguments for an output share, fixed here. The daemon runs in
-/// its own mount, pid and net namespaces with guest uids mapped to an
+/// its own mount, pid and net namespaces with guest uids translated to an
 /// unprivileged host range, no xattrs or ACLs, no file handles, and an
 /// open-file limit sized to the share.
+///
+/// --translate-uid/gid, not --uid-map/--gid-map: virtiofsd runs as root here
+/// and refuses a user-namespace map unless it is unprivileged. Translation
+/// is done by virtiofsd itself and works as root.
 pub fn virtiofsd_args(max_entries: u64) -> Vec<String> {
-    let map = format!(":0:{}:{}:", MAPPED_ID_BASE, MAPPED_ID_COUNT);
+    let map = format!("map:0:{}:{}", MAPPED_ID_BASE, MAPPED_ID_COUNT);
     vec![
         "--sandbox".into(),
         "namespace".into(),
-        format!("--uid-map={}", map),
-        format!("--gid-map={}", map),
+        format!("--translate-uid={}", map),
+        format!("--translate-gid={}", map),
         "--inode-file-handles=never".into(),
         "--seccomp=kill".into(),
         format!("--rlimit-nofile={}", max_entries + 4096),
