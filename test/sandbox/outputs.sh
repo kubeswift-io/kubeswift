@@ -27,7 +27,7 @@
 #    9 refused credential: RegistryUnauthorized
 #   10 unresolvable registry: RegistryUnavailable
 #   11 registry that never answers: UploadTimeout
-#   12 sandbox deleted while uploading: Job, spool and tag gone
+#   12 sandbox deleted while uploading: export Job, spool and tag gone
 #   13 controller restarted while uploading: exported once (RESTART_CONTROLLER=1)
 #   14 the guest, with open egress, finds no push credential and cannot read
 #      the Secret; the launcher pod does not reference it
@@ -312,10 +312,10 @@ case12() {
   wait_uploading c12-delete
   node=$(field c12-delete "$NS" '{.status.nodeName}')
   kubectl -n "$NS" delete swiftsandbox c12-delete --timeout=120s >/dev/null
-  if [ -z "$(kubectl -n "$SYSTEM_NS" get jobs,pods -l "sandbox.kubeswift.io/export-sandbox-uid=$uid" -o name)" ]; then
-    pass "c12-delete: export Job and cleanup pod gone with the sandbox"
+  if [ -z "$(kubectl -n "$SYSTEM_NS" get jobs,pods -l "sandbox.kubeswift.io/export-sandbox-uid=$uid,app.kubernetes.io/component=sandbox-export" -o name)" ]; then
+    pass "c12-delete: export Job gone with the sandbox (the cleanup Job removes itself after its TTL)"
   else
-    fail "c12-delete: export objects left for $uid"
+    fail "c12-delete: export Job left for $uid"
   fi
   kubectl -n "$NS" run c12-spool --restart=Never --image="$IMAGE" --overrides="{\"spec\":{\"nodeName\":\"$node\",\"containers\":[{\"name\":\"c\",\"image\":\"$IMAGE\",\"command\":[\"sh\",\"-c\",\"test ! -e /spool/$uid\"],\"volumeMounts\":[{\"name\":\"s\",\"mountPath\":\"/spool\",\"readOnly\":true}]}],\"volumes\":[{\"name\":\"s\",\"hostPath\":{\"path\":\"/var/lib/kubeswift/sandbox-outputs\"}}]}}" >/dev/null
   if kubectl -n "$NS" wait --for=jsonpath='{.status.phase}'=Succeeded pod/c12-spool --timeout=120s >/dev/null 2>&1; then

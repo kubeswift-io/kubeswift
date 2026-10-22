@@ -6,6 +6,10 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Sandbox output cleanup left a `Completed` `<uid>-out-clean` pod in the KubeSwift namespace when a reconcile ran from a stale copy of an already-cleaned sandbox (#838). The cleanup now runs as a Job that removes itself 5 minutes after it finishes. Pods already left behind by v0.19.0 hold nothing; remove them with `kubectl -n <kubeswift-namespace> delete pod -l app.kubernetes.io/component=sandbox-output-cleanup --field-selector=status.phase=Succeeded`.
+
 ## [v0.19.0] — 2026-10-22
 
 A minor release: trusted output export for SwiftSandbox. A workload can write files to a directory it declares in `spec.outputs`. When it exits 0, KubeSwift collects that directory, packages it deterministically and pushes it as an OCI artifact. The digest and metadata are reported in `status.outputs`. The push uses a credential the platform holds; the guest never sees it. Where an output may go, with which credential and up to what size, is an administrator's decision, made in a new cluster-scoped policy. Nothing changes for a sandbox without `spec.outputs`.

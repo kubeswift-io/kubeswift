@@ -262,17 +262,20 @@ func finishJob(t *testing.T, c client.Client, job *batchv1.Job, cond batchv1.Job
 func finishCleanup(t *testing.T, c client.Client) {
 	t.Helper()
 	ctx := context.Background()
-	var pod corev1.Pod
-	key := client.ObjectKey{Namespace: testSystemNS, Name: cleanupPodName(&sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{UID: testSBUID}})}
-	if err := c.Get(ctx, key, &pod); err != nil {
-		t.Fatalf("cleanup pod: %v", err)
+	var job batchv1.Job
+	key := client.ObjectKey{Namespace: testSystemNS, Name: cleanupJobName(&sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{UID: testSBUID}})}
+	if err := c.Get(ctx, key, &job); err != nil {
+		t.Fatalf("cleanup Job: %v", err)
 	}
-	if pod.Spec.Containers[0].Args[2] != "--sandbox-uid="+testSBUID {
-		t.Errorf("cleanup args %v", pod.Spec.Containers[0].Args)
+	if args := job.Spec.Template.Spec.Containers[0].Args; args[2] != "--sandbox-uid="+testSBUID {
+		t.Errorf("cleanup args %v", args)
 	}
-	pod.Status.Phase = corev1.PodSucceeded
-	if err := c.Status().Update(ctx, &pod); err != nil {
-		if err := c.Update(ctx, &pod); err != nil {
+	if job.Spec.TTLSecondsAfterFinished == nil || *job.Spec.TTLSecondsAfterFinished <= 0 {
+		t.Errorf("cleanup Job has no TTL: a finished one would be left behind (#838)")
+	}
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(ctx, &job); err != nil {
+		if err := c.Update(ctx, &job); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -403,7 +406,7 @@ func TestReconcile_ExportPolicyChangedBeforePush(t *testing.T) {
 		t.Errorf("output %+v, want Failed/%s", o, reasonOutputDestinationRevoked)
 	}
 	var jobs batchv1.JobList
-	_ = c.List(context.Background(), &jobs, client.InNamespace(testSystemNS))
+	_ = c.List(context.Background(), &jobs, client.InNamespace(testSystemNS), client.MatchingLabels{exportComponentLabel: exportComponentJob})
 	if len(jobs.Items) != 0 {
 		t.Errorf("an export Job was created: %v", jobs.Items[0].Name)
 	}
@@ -439,7 +442,7 @@ func TestReconcile_OutputsNotExported(t *testing.T) {
 		t.Errorf("no report: phase %s outputs %+v", got.Status.Phase, got.Status.Outputs)
 	}
 	var jobs batchv1.JobList
-	_ = c.List(context.Background(), &jobs, client.InNamespace(testSystemNS))
+	_ = c.List(context.Background(), &jobs, client.InNamespace(testSystemNS), client.MatchingLabels{exportComponentLabel: exportComponentJob})
 	if len(jobs.Items) != 0 {
 		t.Errorf("an export Job was created")
 	}
@@ -473,12 +476,12 @@ func TestReconcile_DeletedDuringExport(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKey{Namespace: "default", Name: "sb"}, &pod); err == nil {
 		_ = c.Delete(ctx, &pod)
 	}
-	cleanup := client.ObjectKey{Namespace: testSystemNS, Name: cleanupPodName(sb)}
+	cleanup := client.ObjectKey{Namespace: testSystemNS, Name: cleanupJobName(sb)}
 	for i := 0; i < 10; i++ {
 		if _, err := r.Reconcile(ctx, ctrlRequest("sb")); err != nil {
 			t.Fatal(err)
 		}
-		if err := c.Get(ctx, cleanup, &corev1.Pod{}); err == nil {
+		if err := c.Get(ctx, cleanup, &batchv1.Job{}); err == nil {
 			break
 		}
 		if err := c.Get(ctx, client.ObjectKey{Namespace: "default", Name: "sb"}, &pod); err == nil {
@@ -542,5 +545,33 @@ func TestExportObjectToSandbox(t *testing.T) {
 	job.Labels = nil
 	if reqs := exportObjectToSandbox(context.Background(), job); len(reqs) != 0 {
 		t.Errorf("an unlabelled object mapped: %v", reqs)
+	}
+}
+
+// A reconcile from a stale copy of a cleaned sandbox (#838): the cleanup it
+// starts is a Job that removes itself; a v0.19.0 bare cleanup pod is removed.
+func TestReconcile_StaleCleanupLeavesNothing(t *testing.T) {
+	sb := exportingSandbox()
+	sb.Status.Phase = sandboxv1alpha1.SwiftSandboxCompleted
+	sb.Status.Outputs[0].State = sandboxv1alpha1.SandboxOutputExported
+	launcher := endedLauncher(sb, "0", packagedReport)
+	legacy := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: cleanupJobName(sb), Namespace: testSystemNS},
+		Status: corev1.PodStatus{Phase: corev1.PodSucceeded}}
+	r, c := exportFixture(t, sb, launcher, legacy)
+	reconcileSB(t, r, "sb")
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(legacy), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Errorf("legacy cleanup pod kept: %v", err)
+	}
+	finishCleanup(t, c)
+	reconcileSB(t, r, "sb")
+	got := getSandbox(t, c, "sb")
+	if controllerutilContains(got.Finalizers, sandboxOutputsFinalizer) {
+		t.Errorf("finalizer kept after cleanup: %v", got.Finalizers)
+	}
+	// The finished Job is not deleted by the controller: its TTL does it, so a
+	// later stale reconcile finds it instead of starting an orphan.
+	var job batchv1.Job
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: testSystemNS, Name: cleanupJobName(sb)}, &job); err != nil {
+		t.Errorf("cleanup Job: %v", err)
 	}
 }

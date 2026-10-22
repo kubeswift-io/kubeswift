@@ -164,8 +164,8 @@ Deleting a sandbox while it exports stops the push and removes the package.
 
 ## Operating
 
-- Export Jobs and spool cleanup pods run in the KubeSwift namespace, named
-  after the sandbox UID. `--max-concurrent-exports` (default 4) caps the Jobs
+- Export Jobs and spool cleanup Jobs run in the KubeSwift namespace, named
+  after the sandbox UID. A finished cleanup Job removes itself after 5 minutes. `--max-concurrent-exports` (default 4) caps the Jobs
   running at once.
 - Packages wait under `/var/lib/kubeswift/sandbox-outputs/<sandbox UID>/` on
   the node until pushed.
