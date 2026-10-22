@@ -340,7 +340,7 @@ setup_secondary_nad_nic() {
 # Residual caveat: the helper IP is a .254 heuristic (step 5 / below) and the
 # dnsmasq is redundant when the NAD's own segment already serves DHCP.
 setup_primary_nad_nic() {
-    bridge="$1"; tap="$2"; multus_iface="$3"; guest_mac="$4"
+    bridge="$1"; tap="$2"; multus_iface="$3"; guest_mac="$4"; ipam_gw="$5"
 
     attempts=0
     while [ $attempts -lt 30 ]; do
@@ -361,6 +361,9 @@ setup_primary_nad_nic() {
     nad_prefix="${nad_cidr#*/}"
     nad_gw=$(ip route show default 2>/dev/null | awk -v d="$multus_iface" '$0 ~ ("dev "d){print $3; exit}')
     [ -z "$nad_gw" ] && nad_gw=$(ip route show dev "$multus_iface" 2>/dev/null | awk '/default/{print $3; exit}')
+    # An IPAM that installs no default route (e.g. whereabouts without routes) still
+    # declares its gateway; without it dnsmasq would advertise the helper IP as router.
+    [ -z "$nad_gw" ] && nad_gw="$ipam_gw"
 
     # The NAD interface's MTU (set by the CNI -- e.g. 1450 on a VXLAN overlay).
     # Handed to the guest via DHCP so an overlay's encapsulation overhead does not
@@ -573,8 +576,9 @@ for nic in nics:
     tap = nic.get('tapDevice', '')
     bridge = nic.get('bridge', '')
     mac = nic.get('mac', '')
-    print(f\"{nic_type}|{tap}|{bridge}|{primary}|{multus}|{mac}|{nic['name']}\")
-" | while IFS='|' read -r nic_type tap bridge primary multus mac name; do
+    gateway = nic.get('gateway', '')
+    print(f\"{nic_type}|{tap}|{bridge}|{primary}|{multus}|{mac}|{nic['name']}|{gateway}\")
+" | while IFS='|' read -r nic_type tap bridge primary multus mac name gateway; do
         if [ "$nic_type" = "sriov" ]; then
             echo "Skipping SR-IOV interface $name -- VFIO passthrough handled by swiftletd"
             continue
@@ -589,7 +593,7 @@ for nic in nics:
         if [ "$primary" = "1" ] && [ -n "$multus" ]; then
             # Primary-on-NAD (multi-node L2): the primary rides a Multus NAD
             # instead of the node-local bridge.
-            setup_primary_nad_nic "$bridge" "$tap" "$multus" "$mac"
+            setup_primary_nad_nic "$bridge" "$tap" "$multus" "$mac" "$gateway"
         elif [ "$primary" = "1" ] && [ -n "$PRIMARY_UDN_IFACE" ]; then
             # Model A: the primary rides the namespace primary OVN-K UDN (ovn-udn1).
             # The resolver only sets the signal for a node-local primary, so a
