@@ -161,6 +161,17 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	kernelName := resolveKernelProfile(&sb)
 
+	// spec.outputs: checked before either path creates anything. Export is
+	// not wired yet, so a sandbox that asks for it fails instead of running
+	// and silently exporting nothing.
+	if len(sb.Spec.Outputs) > 0 {
+		if err := sandboxwebhook.ValidateOutputs(&sb.Spec); err != nil {
+			return r.fail(ctx, &sb, "InvalidOutputs", err.Error())
+		}
+		return r.fail(ctx, &sb, sandboxv1alpha1.OutputReasonNotSupported,
+			"spec.outputs: this KubeSwift version does not export outputs")
+	}
+
 	// spec.poolRef: claim a warm slot from a SwiftSandboxPool (sub-second checkout) and
 	// inject the workload over vsock, else cold-fallback. Own path (its pod is a re-parented
 	// pool slot, or a cold pod named sb.Name — see reconcilePooled).

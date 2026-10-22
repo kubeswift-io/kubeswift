@@ -1,6 +1,6 @@
 # CRD Reference
 
-All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **19 CRDs across 10 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, sandbox, fleet, and storage-location CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
+All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **20 CRDs across 10 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, sandbox, fleet, and storage-location CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
 
 | CRD | Short | API group | Scope | Reference |
 |-----|-------|-----------|-------|-----------|
@@ -20,6 +20,7 @@ All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **19 CRDs across 10 API group
 | SwiftSandboxPool | `sboxpool` | `sandbox.kubeswift.io` | Namespaced | [below](#swiftsandboxpool) |
 | SwiftArtifactPlacement | `sap` | `sandbox.kubeswift.io` | Namespaced | [below](#swiftartifactplacement) |
 | SwiftArtifactVerificationPolicy | `savp` | `sandbox.kubeswift.io` | Cluster | [below](#swiftartifactverificationpolicy) |
+| SwiftArtifactExportPolicy | `saep` | `sandbox.kubeswift.io` | Cluster | [below](#swiftartifactexportpolicy) |
 | Cluster | `ksc` | `fleet.kubeswift.io` | Namespaced | [below](#cluster) |
 | SwiftClusterStorageLocation | `csloc` | `storage.kubeswift.io` | Cluster | [below](#swiftclusterstoragelocation-and-swiftstoragelocation) |
 | SwiftStorageLocation | `sloc` | `storage.kubeswift.io` | Namespaced | [below](#swiftclusterstoragelocation-and-swiftstoragelocation) |
@@ -668,6 +669,34 @@ SwiftSandbox and SwiftArtifactPlacement artifacts gain `claims` (expected
 values for `fromArtifact` claims) and `requirePlatformVerification`.
 
 Full reference: [Artifact verification policy](sandbox/artifact-verification-policy.md).
+
+---
+
+## SwiftArtifactExportPolicy
+
+**Group:** `sandbox.kubeswift.io/v1alpha1`
+**Scope:** Cluster
+**Short name:** `saep`
+**Subresource:** status
+
+An administrator's rule for SwiftSandbox `spec.outputs`: which namespaces may
+export, to which repositories, and with which push credential. A workload
+never names a credential. No policy: outputs are refused.
+
+| Key field | Type | Description |
+|-----------|------|--------------|
+| `namespaceSelector` | LabelSelector | Namespaces that may export. Use labels only administrators set. |
+| `repositories[]` | list (1-16) | Globs over the canonical repository. The host is literal; a segment that is exactly `{namespace}` is the sandbox's namespace. |
+| `defaultRepository` | string | Where an output without `repository` goes (`/<output name>` appended). No globs; may contain `{namespace}`. |
+| `credentialsSecretRef.name` | string | A dockerconfigjson Secret in the KubeSwift namespace labelled `kubeswift.io/export-credentials=true`. Only the export Job mounts it. |
+| `maxSize` / `maxEntries` | quantity / int | Default and ceiling per output (1Gi / 100000; at most 10Gi / 1048576). |
+| `uploadTimeout` | duration | Per output push (default 10m, at most 1h). |
+
+SwiftSandbox gains `spec.outputs[]` (`name`, `path`, `repository`, `maxSize`,
+`maxEntries`, `artifactType`, `annotations`; at most 4, immutable),
+`status.outputs[]` and the phase `Exporting`.
+
+Full reference: [Sandbox outputs](sandbox/outputs.md).
 
 ---
 

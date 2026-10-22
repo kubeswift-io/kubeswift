@@ -939,6 +939,88 @@ spec:
                 description: NodeSelector constrains the sandbox to matching (kernel)
                   nodes.
                 type: object
+              outputs:
+                description: |-
+                  Outputs are directories the workload writes and KubeSwift exports, when
+                  the workload exits 0, as OCI artifacts pushed with platform credentials
+                  to a repository a SwiftArtifactExportPolicy allows. The sandbox is
+                  Exporting until every output is pushed, then Completed; a failed export
+                  fails it. A sandbox with outputs always boots cold (a warm slot has no
+                  output share). See docs/sandbox/outputs.md.
+                items:
+                  description: |-
+                    SandboxOutput is a directory the workload writes and KubeSwift exports, after
+                    the workload exits 0, as an OCI artifact: pushed with platform credentials
+                    (the guest never sees them) to a repository a SwiftArtifactExportPolicy
+                    allows, and reported by digest in status.outputs. Export creates an immutable
+                    artifact; it does not make its content trusted. See docs/sandbox/outputs.md.
+                  properties:
+                    annotations:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Annotations copied onto the manifest. They are the workload author's
+                        statements, not facts KubeSwift checked: a signer must not trust them.
+                        Keys under org.opencontainers.image. and io.kubeswift. are reserved.
+                      maxProperties: 8
+                      type: object
+                    artifactType:
+                      description: |-
+                        ArtifactType is the manifest's artifactType (a media type). Default
+                        application/vnd.kubeswift.sandbox-output.v1.
+                      maxLength: 127
+                      type: string
+                    maxEntries:
+                      description: |-
+                        MaxEntries caps the files and directories exported. Default and
+                        ceiling: the policy's maxEntries.
+                      format: int64
+                      maximum: 1048576
+                      minimum: 1
+                      type: integer
+                    maxSize:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      description: |-
+                        MaxSize caps the bytes of the exported files (sum of regular file
+                        sizes). Default and ceiling: the policy's maxSize.
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    name:
+                      description: 'Name identifies the output: a DNS label of at
+                        most 40 characters.'
+                      maxLength: 40
+                      minLength: 1
+                      type: string
+                    path:
+                      description: |-
+                        Path is the guest directory exported, absolute, of letters, digits and
+                        . _ - /. It must not be /, a directory the guest itself owns (/proc,
+                        /sys, /dev, ...), or overlap another output, an artifact mountPath or
+                        the model. The workload finds it empty and writable.
+                      maxLength: 255
+                      minLength: 2
+                      type: string
+                    repository:
+                      description: |-
+                        Repository receives the artifact: registry host and path, no tag or
+                        digest. Unset: the selecting policy's defaultRepository followed by
+                        /<name>. Either way a SwiftArtifactExportPolicy must allow it.
+                      maxLength: 255
+                      type: string
+                  required:
+                  - name
+                  - path
+                  type: object
+                maxItems: 4
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+                x-kubernetes-validations:
+                - message: spec.outputs is immutable
+                  rule: self == oldSelf
               podMetadata:
                 description: |-
                   PodMetadata adds labels and annotations to the launcher pod, for example
@@ -1614,12 +1696,95 @@ spec:
                 type: object
               nodeName:
                 type: string
+              outputs:
+                description: Outputs reports each spec.outputs entry's export.
+                items:
+                  description: SandboxOutputStatus reports one spec.outputs entry.
+                  properties:
+                    contentBytes:
+                      description: ContentBytes is the sum of the exported files'
+                        sizes.
+                      format: int64
+                      type: integer
+                    contentDigest:
+                      description: |-
+                        ContentDigest is the sha256 of the uncompressed archive of the
+                        directory; the same files give the same content digest.
+                      type: string
+                    digest:
+                      description: 'Digest is the manifest digest: the artifact''s
+                        immutable identity.'
+                      type: string
+                    entries:
+                      description: Entries is the files and directories exported.
+                      format: int64
+                      type: integer
+                    exportedAt:
+                      description: ExportedAt is when the push completed.
+                      format: date-time
+                      type: string
+                    message:
+                      type: string
+                    name:
+                      type: string
+                    packagedAt:
+                      description: PackagedAt is when the launcher finished packaging.
+                      format: date-time
+                      type: string
+                    policy:
+                      description: Policy is the SwiftArtifactExportPolicy that allowed
+                        the destination.
+                      properties:
+                        name:
+                          type: string
+                        uid:
+                          description: |-
+                            UID is a type that holds unique ID values, including UUIDs.  Because we
+                            don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                            intent and helps make sure that UIDs and names do not get conflated.
+                          type: string
+                      required:
+                      - name
+                      - uid
+                      type: object
+                    reason:
+                      description: Reason is a CamelCase word when Skipped or Failed.
+                      type: string
+                    reference:
+                      description: Reference is repository@digest once Exported.
+                      type: string
+                    repository:
+                      description: Repository the output is pushed to, fixed when
+                        the sandbox is admitted.
+                      type: string
+                    size:
+                      description: Size is the bytes of the pushed layer.
+                      format: int64
+                      type: integer
+                    state:
+                      description: SandboxOutputState is where an output is in its
+                        export.
+                      enum:
+                      - Pending
+                      - Collecting
+                      - Packaged
+                      - Uploading
+                      - Exported
+                      - Skipped
+                      - Failed
+                      type: string
+                  required:
+                  - name
+                  - state
+                  type: object
+                type: array
               phase:
                 description: SwiftSandboxPhase is the lifecycle phase.
                 enum:
                 - Pending
                 - Materializing
                 - Running
+                - Exporting
                 - Completed
                 - Failed
                 type: string

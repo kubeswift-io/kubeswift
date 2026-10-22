@@ -75,7 +75,7 @@ func Compile(p *sandboxv1alpha1.SwiftArtifactVerificationPolicy) *Compiled {
 		c.selector = sel
 	}
 	for _, g := range p.Spec.Repositories {
-		if err := validGlob(g); err != nil {
+		if err := ValidGlob(g); err != nil {
 			c.badGlobs = true
 			if c.Err == nil {
 				c.Err = fmt.Errorf("repositories %q: %w", g, err)
@@ -151,9 +151,9 @@ func validClaim(c sandboxv1alpha1.ArtifactClaimRequirement) error {
 	return nil
 }
 
-// validGlob accepts the CRD's glob grammar: lowercase segments of
+// ValidGlob accepts the CRD's glob grammar: lowercase segments of
 // [a-z0-9._:-] and *, separated by /.
-func validGlob(g string) error {
+func ValidGlob(g string) error {
 	if g == "" {
 		return fmt.Errorf("empty")
 	}

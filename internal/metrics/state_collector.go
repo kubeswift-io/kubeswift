@@ -163,6 +163,7 @@ var (
 		sandboxv1alpha1.SwiftSandboxPending,
 		sandboxv1alpha1.SwiftSandboxMaterializing,
 		sandboxv1alpha1.SwiftSandboxRunning,
+		sandboxv1alpha1.SwiftSandboxExporting,
 		sandboxv1alpha1.SwiftSandboxCompleted,
 		sandboxv1alpha1.SwiftSandboxFailed,
 	}
