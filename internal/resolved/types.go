@@ -57,6 +57,10 @@ type ResolvedGuest struct {
 	// NIC (a primary interface without a networkRef). Set by the resolver from
 	// the namespace label.
 	PrimaryUDNInterface string `json:"primaryUDNInterface,omitempty"`
+	// PrimaryNADGateway is the gateway the primary interface's NAD declares in its
+	// IPAM config, when the primary rides a NAD. GetNICs puts it on the primary
+	// NIC. Set by the resolver.
+	PrimaryNADGateway string `json:"primaryNADGateway,omitempty"`
 	// NetworkSpec is the SwiftGuest spec.network block (binding + declarative
 	// service ports). Nil preserves today's behavior (nat, no exposure).
 	NetworkSpec *swiftv1alpha1.GuestNetworkSpec `json:"networkSpec,omitempty"`
@@ -520,6 +524,9 @@ func (r *ResolvedGuest) GetNICs() []runtimeintent.NICIntent {
 		} else {
 			// Legacy rule (unchanged): node-local bridges are primary.
 			nic.Primary = iface.NetworkRef == nil
+		}
+		if nic.Primary && nic.MultusInterface != "" {
+			nic.Gateway = r.PrimaryNADGateway
 		}
 		nics = append(nics, nic)
 		tapIdx++

@@ -101,6 +101,16 @@ func (r *resolver) Resolve(ctx context.Context, guest *swiftv1alpha1.SwiftGuest)
 		}
 	}
 
+	// Primary-on-NAD: the NAD's IPAM gateway backs up the launcher's route-based
+	// gateway discovery, so the guest never gets the bridge helper as its router.
+	if p := guest.PrimaryInterface(); p != nil && p.NetworkRef != nil {
+		gw, err := NADGateway(ctx, r.client, guest.Namespace, p.NetworkRef)
+		if err != nil {
+			return nil, &ResolutionError{Reason: "reading primary NAD gateway: " + err.Error()}
+		}
+		rg.PrimaryNADGateway = gw
+	}
+
 	return rg, nil
 }
 
