@@ -110,8 +110,11 @@ that can push only under the export repositories.
    nowhere else counts.
 3. **Collection.** Only after the workload exits 0 and the microVM is off,
    the launcher walks the output and packages it as a canonical tar
-   (regular files and directories only; symlinks, devices, FIFOs, sockets and
-   hard links refuse the output). `spec.timeout` and liveness no longer apply.
+   of regular files and directories. A symlink, device, FIFO or socket
+   refuses the output. A hard link is packaged as a separate copy of the file
+   (it cannot point outside the output's own filesystem, and each copy counts
+   against the limits). Owners, modes beyond 0755/0644 and timestamps are not
+   kept. `spec.timeout` and liveness no longer apply.
 4. **Export.** A Job in the KubeSwift namespace, on the same node, re-checks
    the package, compresses it deterministically and pushes it over HTTPS. The
    destination and limits come from the controller, re-authorized against the
@@ -167,3 +170,26 @@ Deleting a sandbox while it exports stops the push and removes the package.
 - Packages wait under `/var/lib/kubeswift/sandbox-outputs/<sandbox UID>/` on
   the node until pushed.
 - Metric: `kubeswift_sandbox_output_exports_total{result,reason}`.
+- A refused output is in `status.outputs` with its reason, as is a push that
+  timed out (with the last registry error).
+
+## Timings
+
+From the guest's exit to `Exported`, measured with
+`test/sandbox/outputs.sh perf` against ghcr.io (random, incompressible
+content; seconds):
+
+| Output | Packaging | Exit to export Job | Upload (verify, gzip, push) | Exit to Exported |
+|---|---|---|---|---|
+| 256 KiB | 0.02 | 0.1-0.4 | 3 | 7-10 |
+| 10 MiB | 0.1 | 0.4-0.5 | 5-6 | 12-13 |
+| 100 MiB | 0.8 | 0.8-1.2 | 7 | 13-15 |
+
+Most of the fixed cost is the export Job's pod start and the registry round
+trips; packaging grows with size.
+
+## Testing
+
+`test/sandbox/outputs.sh validate` runs the round trip (export, prepare with
+a SwiftArtifactPlacement, mount read-only in a pooled sandbox), the refusal
+and failure cases, and a compile-and-run fixture on a real cluster.

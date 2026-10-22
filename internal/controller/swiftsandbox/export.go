@@ -246,6 +246,17 @@ func (r *SwiftSandboxReconciler) admitOutputs(ctx context.Context, sb *sandboxv1
 	return "", "", r.Status().Update(ctx, sb)
 }
 
+// refuseOutputs records every output Failed when the sandbox's outputs are
+// refused before admission, so status.outputs says why per output.
+func refuseOutputs(sb *sandboxv1alpha1.SwiftSandbox, reason, msg string) {
+	sb.Status.Outputs = nil
+	for _, o := range sb.Spec.Outputs {
+		sb.Status.Outputs = append(sb.Status.Outputs, sandboxv1alpha1.SandboxOutputStatus{
+			Name: o.Name, State: sandboxv1alpha1.SandboxOutputFailed, Reason: reason, Message: truncate(msg, 512),
+		})
+	}
+}
+
 // withOutputLimits is sb with each output's limits set to its destination's,
 // for building the launcher (not persisted).
 func withOutputLimits(sb *sandboxv1alpha1.SwiftSandbox, dests []destination) *sandboxv1alpha1.SwiftSandbox {
@@ -715,6 +726,9 @@ func (r *SwiftSandboxReconciler) observeExportJob(ctx context.Context, sb *sandb
 		o.Reason, o.Message = rep.Reason, truncate(rep.Message, 512)
 	case failReason == "DeadlineExceeded":
 		o.Reason, o.Message = reasonOutputUploadTimeout, "the push did not finish within the policy's uploadTimeout"
+		if ok && rep.Message != "" {
+			o.Message = truncate(o.Message+"; last error: "+rep.Message, 512)
+		}
 	default:
 		o.Reason = reasonOutputRegistryUnavailable
 		o.Message = truncate(firstNonEmpty(rep.Message, failMsg, "the export Job failed"), 512)
