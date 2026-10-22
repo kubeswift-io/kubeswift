@@ -422,6 +422,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Reports whether each output export policy is usable (the sandbox
+	// controller enforces it).
+	if err = (&swiftsandbox.ExportPolicyStatusReconciler{
+		Client:          mgr.GetClient(),
+		APIReader:       mgr.GetAPIReader(),
+		Recorder:        mgr.GetEventRecorderFor("swiftartifactexportpolicy-controller"),
+		SystemNamespace: leaderElectionNS,
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftArtifactExportPolicy controller")
+		os.Exit(1)
+	}
+
 	// Holds each sandbox launcher's NetworkPolicy until the pods it protects
 	// can no longer run.
 	if err = (&swiftsandbox.IsolationReconciler{
