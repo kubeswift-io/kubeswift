@@ -6,6 +6,28 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.18.2] — 2026-10-22
+
+A security patch release. A launcher takes its runtime configuration from a ConfigMap named after its sandbox, warm-pool slot or migration destination. The controllers accepted an existing ConfigMap of that name without checking who had created it or what it held. Launchers are privileged, so a ConfigMap they read must be one KubeSwift created. Now it is.
+
+### Upgrade
+
+- No CRD changed and no chart value or template changed; applying `crds/` is not needed.
+- Upgrade the controller and the launcher (swiftletd) image together, as usual. A launcher pod created by this controller carries `KUBESWIFT_INTENT_SHA256`, and only a v0.18.2 swiftletd checks it. An older launcher image ignores it, so the digest check is lost, but nothing breaks.
+- No running guest, sandbox or warm slot is restarted. Their intent ConfigMaps are already controller-owned. One that is mutable (created before v0.18.2) is replaced with an immutable copy only when a new launcher is built for it.
+- An intent ConfigMap KubeSwift did not create now blocks its owner instead of being used:
+  - a SwiftSandbox stays `Pending` with `IntentConfigMapConflict`;
+  - a SwiftGuest stays `Pending` with the reason on `Resolved`;
+  - a live migration's destination is refused.
+
+  Delete the ConfigMap (named `<name>-runtime-intent`) to proceed.
+
+### Security
+
+- **Launcher intent integrity** (#827). Intent ConfigMaps for sandboxes, warm-pool slots and live-migration destinations are created `immutable` and controlled by their owner. One the owner does not control is never used or modified, and SwiftGuest no longer adopts or rewrites one. Sandbox and slot launcher pods carry the intent's SHA-256 in their pod spec (`KUBESWIFT_INTENT_SHA256`). swiftletd checks the exact bytes it parses against it, and refuses to start on a mismatch: annotation `kubeswift.io/launcher-intent-error`, sandbox reason `IntentMismatch`.
+
+---
+
 ## [v0.18.1] — 2026-10-21
 
 A patch release of SwiftGuest controller fixes:
