@@ -326,7 +326,8 @@ var (
 	// result (mounted, skipped) and reason: for mounted, where the content
 	// came from (Cached on the node, Fetched for this sandbox); for skipped,
 	// why (ResolveRefused, ResolvePending, RegistryUnavailable, FetchTimeout,
-	// VerificationFailed, MaterializeFailed, KernelUnsupported, NotOnNode).
+	// VerificationFailed, MaterializeFailed, KernelUnsupported, NotOnNode,
+	// PullSecretInvalid, VerifyKeyInvalid).
 	// Every label is from a fixed set: no names or digests.
 	SandboxArtifactsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{

@@ -212,6 +212,23 @@ func (r *ArtifactPlacementReconciler) authorize(ctx context.Context, p *sandboxv
 	authorized := map[string]bool{}
 	var refused []string
 	reqs, err := artifactRequests(ctx, r.Client, view)
+	if err == nil {
+		// A pull Secret that cannot be used refuses the placement, as before
+		// v0.19.2. The verify-key check artifactRequests makes for optional
+		// sandbox artifacts does not apply here (the view marks every
+		// artifact optional): an unusable key fails only that artifact's
+		// prepare, as it always has.
+		for i := range reqs {
+			if reqs[i].credReason == reasonVerifyKeyInvalid {
+				reqs[i].credErr, reqs[i].credReason = nil, ""
+				continue
+			}
+			if reqs[i].credErr != nil {
+				err = reqs[i].credErr
+				break
+			}
+		}
+	}
 	if err != nil {
 		// A missing or unreadable pull Secret: nothing can be authorized.
 		for i, a := range p.Spec.Artifacts {

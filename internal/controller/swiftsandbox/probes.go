@@ -178,7 +178,10 @@ func gateMessage(sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod, msg string) 
 	if !warm {
 		return msg, true
 	}
-	if id != string(sb.UID) && id != string(sb.UID)+fetchedActionSuffix {
+	// Any dispatch of this sandbox's workload: the first (<uid>), the one after
+	// a fetch, and one after optional artifacts were skipped (<uid>-<n>, #843).
+	// The prefix check below ties the verdict to the dispatch now on the slot.
+	if _, ours := actionAttempt(id, sb); !ours {
 		return "", false
 	}
 	if !strings.HasPrefix(msg, workloadPrefix(id)) {

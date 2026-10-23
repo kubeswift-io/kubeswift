@@ -578,7 +578,7 @@ func (r *SwiftSandboxReconciler) reconcileClaimedSlot(ctx context.Context, sb *s
 				code = int32(n)
 			}
 			sb.Status.ExitCode = &code
-			r.artifactsMounted(sb)
+			r.artifactsMounted(sb, &pod)
 			_ = r.Delete(ctx, &pod) // consume the slot; the pool replenishes a fresh warm one
 			if code == 0 {
 				return r.terminal(ctx, sb, sandboxv1alpha1.SwiftSandboxCompleted, "Completed", "workload exited 0")
@@ -627,7 +627,7 @@ func (r *SwiftSandboxReconciler) reconcileClaimedSlot(ctx context.Context, sb *s
 		return ctrl.Result{}, err
 	}
 	if c := apimeta.FindStatusCondition(sb.Status.Conditions, sandboxv1alpha1.SwiftSandboxConditionWorkloadReady); c != nil && c.Status == metav1.ConditionTrue {
-		r.artifactsMounted(sb)
+		r.artifactsMounted(sb, &pod)
 	}
 	return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "running (checked out)")
 }
@@ -854,16 +854,24 @@ func (r *SwiftSandboxReconciler) redispatch(ctx context.Context, sb *sandboxv1al
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	for _, a := range keep {
+		if st := artifactStatus(sb, a.Name); st != nil && st.State == sandboxv1alpha1.SandboxArtifactResolved {
+			st.State = sandboxv1alpha1.SandboxArtifactDispatched
+		}
+	}
+	// The status (skipped artifacts included) is written before the slot is
+	// patched: a status write lost to a conflict after the patch left a
+	// skipped artifact Dispatched, and then reported Mounted once the
+	// workload, dispatched without it, was ready. In this order a lost write
+	// patches nothing, and the next pass decides again from the slot.
+	if _, err := r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "running (checked out, dispatched again)"); err != nil {
+		return ctrl.Result{}, err
+	}
 	patch := client.MergeFrom(slot.DeepCopy())
 	slot.Annotations[annSandboxExecActionArgs] = string(argsJSON)
 	slot.Annotations[annSandboxExecActionID] = actionIDFor(sb, attempt+1)
 	if err := r.Patch(ctx, slot, patch); err != nil {
 		return ctrl.Result{}, err
 	}
-	for _, a := range keep {
-		if st := artifactStatus(sb, a.Name); st != nil && st.State == sandboxv1alpha1.SandboxArtifactResolved {
-			st.State = sandboxv1alpha1.SandboxArtifactDispatched
-		}
-	}
-	return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "running (checked out, dispatched again)")
+	return ctrl.Result{RequeueAfter: pollInterval}, nil
 }

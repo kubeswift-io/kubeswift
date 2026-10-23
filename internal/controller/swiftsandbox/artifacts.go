@@ -12,6 +12,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
@@ -45,8 +46,20 @@ func artifactMode(a *sandboxv1alpha1.SandboxArtifact) materialize.Mode {
 // tag is at most 36 bytes, and the mount path rides beside it).
 func artifactTag(i int) string { return fmt.Sprintf("sbxart%d", i) }
 
+// Skip reasons for an optional artifact whose credentials cannot be used.
+const (
+	reasonPullSecretInvalid = "PullSecretInvalid"
+	reasonVerifyKeyInvalid  = "VerifyKeyInvalid"
+)
+
 // artifactRequests are the registry requests for sb's artifacts, each with its
 // pull Secret (the artifact's own, else spec.imagePullSecret), in spec order.
+// A pull Secret that cannot be read or used does not stop the others: its
+// request carries credErr and is never sent. resolveArtifactRequests then
+// fails the sandbox for a required artifact (as before) and skips an optional
+// one (#844). An optional artifact's verify key is checked here too: one that
+// cannot be read would keep the materialize pod from starting, and so the
+// workload; a required artifact's is left as it was (the pod waits for it).
 func artifactRequests(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.SwiftSandbox) ([]resolveRequest, error) {
 	reqs := make([]resolveRequest, 0, len(sb.Spec.Artifacts))
 	for i := range sb.Spec.Artifacts {
@@ -55,17 +68,43 @@ func artifactRequests(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.
 		if a.PullSecretRef != nil {
 			secret = a.PullSecretRef.Name
 		}
-		auth, err := pullSecretAuth(ctx, c, sb.Namespace, secret, a.Ref)
-		if err != nil {
-			return nil, refusedError{fmt.Errorf("artifact %s: pull secret %s: %w", a.Name, secret, err)}
-		}
 		kind := resolveDigestKind
 		if artifactMode(a) == materialize.ModeLayout {
 			kind = resolveDescriptorKind
 		}
-		reqs = append(reqs, newResolveRequest(kind, a.Ref, artifactMode(a), artifactCacheDir, auth))
+		auth, err := pullSecretAuth(ctx, c, sb.Namespace, secret, a.Ref)
+		req := newResolveRequest(kind, a.Ref, artifactMode(a), artifactCacheDir, auth)
+		switch {
+		case err != nil:
+			req.credErr = refusedError{fmt.Errorf("artifact %s: pull secret %s: %w", a.Name, secret, err)}
+			req.credReason = reasonPullSecretInvalid
+		case a.Optional:
+			if msg := verifyKeyProblem(ctx, c, sb.Namespace, a); msg != "" {
+				req.credErr = refusedError{fmt.Errorf("artifact %s: %s", a.Name, msg)}
+				req.credReason = reasonVerifyKeyInvalid
+			}
+		}
+		reqs = append(reqs, req)
 	}
 	return reqs, nil
+}
+
+// verifyKeyProblem says why an artifact's verify key Secret cannot be used,
+// or "" when it can (or none is named). The message names the Secret, never
+// its content.
+func verifyKeyProblem(ctx context.Context, c client.Reader, namespace string, a *sandboxv1alpha1.SandboxArtifact) string {
+	k := a.VerifyKeySecretRef
+	if k == nil || k.Name == "" {
+		return ""
+	}
+	var sec corev1.Secret
+	if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: k.Name}, &sec); err != nil {
+		return fmt.Sprintf("verify key Secret %s: %v", k.Name, err)
+	}
+	if len(sec.Data[verifyKeyName]) == 0 {
+		return fmt.Sprintf("verify key Secret %s has no %s", k.Name, verifyKeyName)
+	}
+	return ""
 }
 
 // optionalWait is what a resolve does with an optional artifact whose
@@ -131,7 +170,7 @@ func resolveArtifactRequests(sb *sandboxv1alpha1.SwiftSandbox, reqs []resolveReq
 	results := make([]resolveResult, len(reqs))
 	done := make([]bool, len(reqs))
 	for i, req := range reqs {
-		if denied(i) != nil {
+		if denied(i) != nil || req.credErr != nil {
 			done[i] = true
 			continue
 		}
@@ -153,6 +192,15 @@ func resolveArtifactRequests(sb *sandboxv1alpha1.SwiftSandbox, reqs []resolveReq
 		}
 		res := results[i]
 		switch d := denied(i); {
+		case d == nil && reqs[i].credErr != nil && a.Optional:
+			// Its credentials cannot be used: skipped, never asked anonymously.
+			skipArtifact(&st, reqs[i].credReason, reqs[i].credErr.Error())
+		case d == nil && reqs[i].credErr != nil:
+			// A required artifact fails the sandbox, as it always has.
+			if refused == nil {
+				refused = reqs[i].credErr
+			}
+			st.State, st.Reason, st.Message = sandboxv1alpha1.SandboxArtifactFailed, "ArtifactResolveFailed", truncateMessage(reqs[i].credErr.Error())
 		case d != nil && a.Optional:
 			skipArtifact(&st, "PolicyDenied", d.Denied+": "+d.Message)
 		case d != nil:
