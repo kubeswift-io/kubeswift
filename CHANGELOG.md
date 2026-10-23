@@ -6,6 +6,11 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A warm sandbox whose optional artifact was skipped after the checkout never became ready** (#843). When the artifact was not on the slot's node (or its fetch timed out or failed verification), the workload was dispatched again as `<sandbox UID>-<n>`, and the controller ignored that dispatch's readiness verdict: `WorkloadReady` stayed `False` (`Probing`) and the pod never became Ready, although the workload answered. A required artifact fetched at checkout was affected the same way. Every dispatch of the sandbox's workload is now accepted, still only the one on the slot. Re-dispatching also writes the sandbox's status before the slot, so a skipped artifact can no longer be reported `Mounted`.
+- **An optional artifact whose pull Secret could not be used failed the sandbox** (#844). A missing Secret, one without `.dockerconfigjson`, or an unparsable one now skips the artifact (`status.artifacts[].state: Skipped`, reason `PullSecretInvalid`, a Warning Event naming the Secret) and the workload starts; nothing is asked of the registry without the credential. An optional artifact whose verify key Secret is missing or has no `cosign.pub` is skipped the same way (`VerifyKeyInvalid`); it used to keep a cold sandbox's materialize pod from starting. A required artifact fails the sandbox exactly as before.
+
 ## [v0.19.1] — 2026-10-22
 
 A patch release for SwiftSandbox. Sandbox registries behind a private CA now work: images, models, artifacts, placements and output exports, given an administrator's CA. The output-export cleanup no longer leaves a finished pod behind.
