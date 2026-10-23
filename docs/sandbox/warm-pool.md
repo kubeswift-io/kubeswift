@@ -223,8 +223,9 @@ the entry, named by the SHA-256 of the key bytes it used. A signature over an
 immutable digest with a given key is a fixed fact, so a checkout needs that
 record for exactly its own key and runs no cosign. An entry another tenant
 verified with another key does not count: it is a miss, and the fetch pod
-verifies with this sandbox's key. A cold sandbox still verifies on every
-start.
+verifies with this sandbox's key. A cold sandbox's required artifacts are
+still verified on every start; an optional one ready on the node is used as
+a checkout uses it (see below).
 
 **Authorization.** Every checkout is authorized with the checking-out
 sandbox's own credentials; that an entry is already on the node grants
@@ -246,7 +247,11 @@ answer still expires on time; if the registry refuses, the refusal replaces
 it at once. A tag is re-resolved after 30 seconds: it can move. Revoking
 credentials at the registry takes up to the TTL to stop new sandboxes from
 checking out a digest those credentials could read, and for a digest in use
-usually only until its next renewal. The cache is in memory: a controller
+usually only until its next renewal. A cold sandbox's optional artifact
+relies on the same answer: its init container uses an entry ready on the
+node without asking the registry for up to one TTL after the launcher pod is
+built (`--authorized-until`), so the answer behind it is at most twice the
+TTL old. The cache is in memory: a controller
 restart asks the registry again. A sandbox's registry requests (image,
 model, every artifact) start together and are waited for together.
 

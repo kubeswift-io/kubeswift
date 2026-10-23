@@ -206,6 +206,14 @@ func ConfigureAuthorization(ttl time.Duration, refresh float64) error {
 	return nil
 }
 
+// authorizationTTL is how long a digest reference's resolve stands for the
+// registry's authorization.
+func authorizationTTL() time.Duration {
+	sharedResolver.mu.Lock()
+	defer sharedResolver.mu.Unlock()
+	return sharedResolver.authTTL
+}
+
 // newResolveRequest builds the request for ref with auth (nil = anonymous).
 func newResolveRequest(kind resolveKind, ref string, mode materialize.Mode, cacheDir string, auth authn.Authenticator) resolveRequest {
 	return resolveRequest{
