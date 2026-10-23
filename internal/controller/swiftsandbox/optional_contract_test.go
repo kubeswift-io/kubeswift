@@ -2,18 +2,23 @@ package swiftsandbox
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
@@ -228,4 +233,47 @@ func drain(rec *record.FakeRecorder) string {
 			return b.String()
 		}
 	}
+}
+
+// A status that still says Dispatched for an artifact the slot's current
+// dispatch no longer carries is never turned into Mounted: the workload ran
+// without it.
+func TestArtifactsMounted_OnlyWhatTheSlotDispatched(t *testing.T) {
+	_, slot, sb, _, digest := warmSetup(t)
+	claimedWith(sb, slot, digest, actionIDFor(sb, 2), "", "")
+	sb.Status.Artifacts[0].State = sandboxv1alpha1.SandboxArtifactDispatched
+	slot.Annotations[annSandboxExecActionArgs] = `{"argv":["/bin/true"]}`
+	r, _ := sandboxReconciler(slot, sb)
+	r.artifactsMounted(sb, slot)
+	if s := sb.Status.Artifacts[0]; s.State == sandboxv1alpha1.SandboxArtifactMounted {
+		t.Errorf("reported Mounted although the dispatch did not carry it: %+v", s)
+	}
+	slot.Annotations[annSandboxExecActionArgs] = `{"argv":["/bin/true"],"artifacts":[{"name":"app","digest":"` + digest + `","layout":"oci","mountPath":"/run/app"}]}`
+	r.artifactsMounted(sb, slot)
+	if s := sb.Status.Artifacts[0]; s.State != sandboxv1alpha1.SandboxArtifactMounted {
+		t.Errorf("a dispatched artifact was not marked Mounted: %+v", s)
+	}
+}
+
+// A re-dispatch whose status write fails leaves the slot as it was, so the
+// skip is decided again instead of being lost while the workload runs
+// without the artifact.
+func TestRedispatch_StatusBeforeSlot(t *testing.T) {
+	slot, sb, _ := optionalSetup(t, 0)
+	objs := []client.Object{slot, sb, keySecret("app-key")}
+	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(objs...).
+		WithStatusSubresource(&sandboxv1alpha1.SwiftSandbox{}).
+		WithInterceptorFuncs(interceptor.Funcs{SubResourceUpdate: func(ctx context.Context, cl client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			return apierrors.NewConflict(schema.GroupResource{Resource: "swiftsandboxes"}, obj.GetName(), errors.New("injected"))
+		}}).Build()
+	r := &SwiftSandboxReconciler{Client: c, APIReader: c, Scheme: scheme.Scheme, Recorder: record.NewFakeRecorder(20)}
+	_, _ = r.Reconcile(context.Background(), ctrlRequestFor("sb"))
+	p := slotNow(t, c, slot)
+	if p.Annotations[annSandboxExecActionID] != string(sb.UID) {
+		t.Errorf("the slot was re-dispatched (%s) although the status write failed", p.Annotations[annSandboxExecActionID])
+	}
+}
+
+func ctrlRequestFor(name string) ctrl.Request {
+	return ctrl.Request{NamespacedName: client.ObjectKey{Namespace: "default", Name: name}}
 }

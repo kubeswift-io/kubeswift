@@ -339,6 +339,21 @@ func artifactsToMount(sb *sandboxv1alpha1.SwiftSandbox) []*sandboxv1alpha1.Sandb
 	return out
 }
 
+// dispatchedArtifacts names the artifacts in the slot's current exec action.
+func dispatchedArtifacts(slot *corev1.Pod) map[string]bool {
+	var args struct {
+		Artifacts []warmArtifactArg `json:"artifacts"`
+	}
+	out := map[string]bool{}
+	if json.Unmarshal([]byte(slot.Annotations[annSandboxExecActionArgs]), &args) != nil {
+		return out
+	}
+	for _, a := range args.Artifacts {
+		out[a.Name] = true
+	}
+	return out
+}
+
 // onlyOptionalArtifacts reports whether sb has artifacts to mount and every
 // one of them is optional.
 func onlyOptionalArtifacts(sb *sandboxv1alpha1.SwiftSandbox) bool {
@@ -353,11 +368,14 @@ func onlyOptionalArtifacts(sb *sandboxv1alpha1.SwiftSandbox) bool {
 
 // artifactsMounted marks the artifacts sent with the workload mounted, once
 // the workload is known to have run with them (ready, or exited): from the
-// node cache, or fetched for this sandbox.
-func (r *SwiftSandboxReconciler) artifactsMounted(sb *sandboxv1alpha1.SwiftSandbox) {
+// node cache, or fetched for this sandbox. Only artifacts in the dispatch now
+// on the slot count: one dropped from it was never mounted, whatever its
+// status says.
+func (r *SwiftSandboxReconciler) artifactsMounted(sb *sandboxv1alpha1.SwiftSandbox, slot *corev1.Pod) {
+	sent := dispatchedArtifacts(slot)
 	for i := range sb.Status.Artifacts {
 		st := &sb.Status.Artifacts[i]
-		if st.State != sandboxv1alpha1.SandboxArtifactDispatched {
+		if st.State != sandboxv1alpha1.SandboxArtifactDispatched || !sent[st.Name] {
 			continue
 		}
 		reason := "Cached"
