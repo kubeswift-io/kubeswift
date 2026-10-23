@@ -432,6 +432,19 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 			return r.waitForReference(ctx, sb, "PreviousLauncherStopping", msg)
 		}
 	}
+	// The status first, the pod second (#848). Once the pod exists, later
+	// passes go to reconcilePodState, which never computes Resolved or the
+	// artifact statuses again: a status write lost after the create left them
+	// stale for the sandbox's life. Written first, a lost write creates
+	// nothing, and with no pod the next pass comes back here and decides again.
+	sb.Status.Rootfs = &sandboxv1alpha1.SandboxRootfsStatus{Digest: ri.Digest, CachePath: ri.RootfsPath}
+	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
+		Type: sandboxv1alpha1.SwiftSandboxConditionResolved, Status: metav1.ConditionTrue,
+		Reason: "Resolved", Message: "image digest " + ri.Digest, ObservedGeneration: sb.Generation,
+	})
+	if _, err := r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxMaterializing, "materializing rootfs"); err != nil {
+		return ctrl.Result{}, err
+	}
 	if err := r.Create(ctx, pod); apierrors.IsAlreadyExists(err) {
 		// Ours from an earlier pass, or a pod that appeared since the check
 		// above: only ours may go on (#772).
@@ -444,12 +457,7 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	} else if err != nil {
 		return ctrl.Result{}, err
 	}
-	sb.Status.Rootfs = &sandboxv1alpha1.SandboxRootfsStatus{Digest: ri.Digest, CachePath: ri.RootfsPath}
-	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
-		Type: sandboxv1alpha1.SwiftSandboxConditionResolved, Status: metav1.ConditionTrue,
-		Reason: "Resolved", Message: "image digest " + ri.Digest, ObservedGeneration: sb.Generation,
-	})
-	return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxMaterializing, "materializing rootfs")
+	return ctrl.Result{RequeueAfter: pollInterval}, nil
 }
 
 func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) (ctrl.Result, error) {
