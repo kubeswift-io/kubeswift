@@ -60,6 +60,7 @@ func main() {
 		maxEntries = flag.Int("max-entries", materialize.DefaultArtifactMaxEntries, "entry cap for an unpacked read-only artifact; 0 is none")
 		timeout    = flag.Duration("timeout", 30*time.Minute, "bound on the whole run (resolve, verify, pull); a registry that stops answering fails the init container instead of holding it forever")
 		deadline   = flag.String("deadline", "", "RFC 3339 time the whole run must end by, in addition to --timeout (an optional artifact's deadline)")
+		authorized = flag.String("authorized-until", "", "RFC 3339 time until which the controller's resolution of --image (a digest reference) with the sandbox's own credentials stands: until then an optional artifact ready in the node cache is used without asking the registry, as a warm checkout uses it")
 		optional   = flag.Bool("optional", false, "an optional artifact: any failure is recorded in the result as a skip, with a reason, and the run exits 0; the artifact is not marked ok")
 		okFile     = flag.String("ok-file", "", "written once this run has resolved, verified (when a key is given) and materialized the artifact; its absence means not to mount it")
 		useDir     = flag.String("use-dir", "", "the artifact cache's use-lock directory: each use of an entry is recorded there (its last use), and limits are enforced (artifacts only)")
@@ -153,7 +154,20 @@ func main() {
 	if !artifact {
 		cache = cacheOpts{}
 	}
-	res, failed, err := run(ctx, opts, *verifyKey, reqs, *insecure, artifact, cache)
+	// An optional artifact already on the node is used as it is, without the
+	// registry, while the controller's authorization stands: fetchTimeout 0s
+	// promises exactly that, and an init container that starts after its
+	// deadline (pod start-up, other init containers) used to skip it.
+	useCache := false
+	if *authorized != "" {
+		until, err := time.Parse(time.RFC3339, *authorized)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-materialize: --authorized-until: %v\n", err)
+			os.Exit(2)
+		}
+		useCache = *optional && artifact && time.Now().Before(until)
+	}
+	res, failed, err := run(ctx, opts, *verifyKey, reqs, *insecure, artifact, cache, useCache)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sandbox-materialize: %v\n", err)
 		if !*optional {
@@ -197,7 +211,18 @@ type cacheOpts struct {
 
 // run resolves, verifies (with a key, and against every platform
 // requirement) and materializes, and says at which stage it failed.
-func run(ctx context.Context, opts materialize.Options, verifyKey string, reqs []materialize.Requirement, insecure, artifact bool, cache cacheOpts) (*materialize.Result, stage, error) {
+func run(ctx context.Context, opts materialize.Options, verifyKey string, reqs []materialize.Requirement, insecure, artifact bool, cache cacheOpts, useCache bool) (*materialize.Result, stage, error) {
+	if useCache {
+		if res := cachedEntry(opts, verifyKey, reqs); res != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-materialize: %s is ready on this node; not asking the registry\n", opts.ImageRef)
+			if cache.useDir != "" {
+				if err := accountEntry(opts.CacheDir, cache, res); err != nil {
+					return nil, stageMaterialize, err
+				}
+			}
+			return res, stageMaterialize, nil
+		}
+	}
 	// Verify-before-boot: resolve the digest and cosign-verify image@digest against
 	// the pinned public key BEFORE materializing a single layer. A missing/invalid
 	// signature fails here, so the init container fails and the sandbox goes
@@ -304,6 +329,28 @@ func run(ctx context.Context, opts materialize.Options, verifyKey string, reqs [
 		}
 	}
 	return res, stageMaterialize, nil
+}
+
+// cachedEntry is the node cache's entry for opts when it is ready to mount as
+// a warm checkout would (materialize.CachedArtifact), or nil: the registry is
+// asked then, and any problem is reported from there.
+func cachedEntry(opts materialize.Options, verifyKey string, reqs []materialize.Requirement) *materialize.Result {
+	fp := ""
+	if verifyKey != "" {
+		key, err := os.ReadFile(verifyKey)
+		if err != nil || len(key) == 0 {
+			return nil
+		}
+		fp = materialize.KeyFingerprint(key)
+	}
+	res, ok, err := materialize.CachedArtifact(opts, fp, reqs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sandbox-materialize: warning: node cache: %v\n", err)
+	}
+	if !ok {
+		return nil
+	}
+	return res
 }
 
 // accountEntry records this use of the entry, its size when just written, and

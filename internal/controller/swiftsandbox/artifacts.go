@@ -366,9 +366,11 @@ const (
 )
 
 // artifactOKFile is where the init container of optional artifact name
-// records that THIS pod resolved, verified and materialized it. swiftletd
-// shares an optional artifact only when it exists: never decided from what
-// the shared node cache happens to hold.
+// records that THIS pod resolved, verified and materialized it, or found it
+// ready in the node cache under the controller's authorization, as a warm
+// checkout does (--authorized-until). swiftletd shares an optional artifact
+// only when it exists: never decided from what the shared node cache happens
+// to hold.
 func artifactOKFile(name string) string { return artifactResultsDir + "/" + name }
 
 // hasOptionalArtifact reports whether any resolved artifact is optional.
@@ -434,6 +436,11 @@ func artifactInits(sb *sandboxv1alpha1.SwiftSandbox, tokens bool) ([]corev1.Cont
 				deadline = time.Now().Add(r.spec.ArtifactFetchTimeout())
 			}
 			args = append(args, "--optional", "--deadline="+deadline.UTC().Format(time.RFC3339))
+			// The artifact was just resolved with the sandbox's credentials:
+			// while that authorization stands, an entry already ready on the
+			// node is used without the registry, past the deadline too (a warm
+			// checkout's rule; fetchTimeout 0s means exactly that).
+			args = append(args, "--authorized-until="+time.Now().Add(authorizationTTL()).UTC().Format(time.RFC3339))
 			if tokens {
 				args = append(args, "--ok-file="+artifactOKFile(r.spec.Name))
 				mounts = append(mounts, corev1.VolumeMount{Name: artifactResultsVolume, MountPath: artifactResultsDir})

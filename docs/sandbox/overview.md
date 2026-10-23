@@ -432,8 +432,12 @@ spec:
   how long it may delay the workload: at checkout, counted from the sandbox's
   creation; on a cold start, waiting for its registry is counted from the
   sandbox's creation and fetching it from when the launcher pod is created.
-  `0s` uses it only when it is already on the node. A required artifact (the
-  default) behaves as before.
+  `0s` uses it only when it is already on the node. One already on the node
+  (read from its repository, verified with its key, meeting every platform
+  policy) is used without the registry, as a warm checkout uses it, however
+  late its init container starts; the controller has just resolved it with
+  the sandbox's credentials. A required artifact (the default) behaves as
+  before.
 
   | Optional artifact | Result |
   |---|---|

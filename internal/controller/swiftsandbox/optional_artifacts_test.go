@@ -160,7 +160,7 @@ func TestArtifactInits_OptionalFlags(t *testing.T) {
 	}
 	inits, vols := artifactInits(sb, true)
 	req, opt := strings.Join(inits[0].Args, " "), strings.Join(inits[1].Args, " ")
-	for _, f := range []string{"--optional", "--deadline", "--ok-file"} {
+	for _, f := range []string{"--optional", "--deadline", "--authorized-until", "--ok-file"} {
 		if strings.Contains(req, f) {
 			t.Errorf("required container has %s: %s", f, req)
 		}
