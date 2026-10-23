@@ -366,9 +366,11 @@ const (
 )
 
 // artifactOKFile is where the init container of optional artifact name
-// records that THIS pod resolved, verified and materialized it. swiftletd
-// shares an optional artifact only when it exists: never decided from what
-// the shared node cache happens to hold.
+// records that THIS pod resolved, verified and materialized it, or found it
+// ready in the node cache under the controller's authorization, as a warm
+// checkout does (--authorized-until). swiftletd shares an optional artifact
+// only when it exists: never decided from what the shared node cache happens
+// to hold.
 func artifactOKFile(name string) string { return artifactResultsDir + "/" + name }
 
 // hasOptionalArtifact reports whether any resolved artifact is optional.
