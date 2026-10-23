@@ -317,6 +317,25 @@ setup_secondary_nad_nic() {
     echo "Secondary NIC on NAD: $bridge bridges $multus_iface to $tap; guest IP=$nad_ip/$nad_prefix (helper $helper, no default route)"
 }
 
+# ipv4_gw_in_subnet GW CIDR -- prints GW when it is a plain IPv4 address inside
+# CIDR's subnet, nothing otherwise. GW comes from the user-controlled NAD config
+# and lands in primary-nad.env, which the launcher sources.
+ipv4_gw_in_subnet() {
+    case "$1" in
+        ""|*[!0-9.]*) return 0 ;;
+    esac
+    python3 -c '
+import ipaddress, sys
+try:
+    gw = ipaddress.IPv4Address(sys.argv[1])
+    net = ipaddress.IPv4Interface(sys.argv[2]).network
+except ValueError:
+    sys.exit(0)
+if gw in net:
+    print(gw)
+' "$1" "$2"
+}
+
 # setup_primary_nad_nic -- multi-node L2, primary-on-NAD.
 #
 # Datapath is cluster-validated (kube-ovn primary NAD: zero-touch cross-node
@@ -363,7 +382,7 @@ setup_primary_nad_nic() {
     [ -z "$nad_gw" ] && nad_gw=$(ip route show dev "$multus_iface" 2>/dev/null | awk '/default/{print $3; exit}')
     # An IPAM that installs no default route (e.g. whereabouts without routes) still
     # declares its gateway; without it dnsmasq would advertise the helper IP as router.
-    [ -z "$nad_gw" ] && nad_gw="$ipam_gw"
+    [ -z "$nad_gw" ] && nad_gw=$(ipv4_gw_in_subnet "$ipam_gw" "$nad_cidr")
 
     # The NAD interface's MTU (set by the CNI -- e.g. 1450 on a VXLAN overlay).
     # Handed to the guest via DHCP so an overlay's encapsulation overhead does not

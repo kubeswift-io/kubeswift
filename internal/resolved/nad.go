@@ -3,6 +3,7 @@ package resolved
 import (
 	"context"
 	"encoding/json"
+	"net/netip"
 
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -45,7 +46,7 @@ type nadConf struct {
 }
 
 // NADGateway returns the gateway declared in the IPAM config of the NAD ref names,
-// or "" when it declares none. The launcher hands a primary-on-NAD guest the
+// or "" when it declares no IPv4 one. The launcher hands a primary-on-NAD guest the
 // default route of its Multus interface as router, and an IPAM like whereabouts
 // installs no route unless told to; this gateway is the fallback for that case.
 // A missing NAD or NAD CRD yields "" (the pod cannot start without the NAD
@@ -78,25 +79,35 @@ func NADGateway(ctx context.Context, c client.Client, namespace string, ref *swi
 	return "", nil
 }
 
-// ipamGateway returns the first gateway an IPAM config declares.
+// ipamGateway returns the first IPv4 gateway an IPAM config declares.
 func ipamGateway(ipam *nadIPAM) string {
 	if ipam == nil {
 		return ""
 	}
-	if ipam.Gateway != "" {
-		return ipam.Gateway
+	if gw := ipv4Gateway(ipam.Gateway); gw != "" {
+		return gw
 	}
 	for _, set := range ipam.Ranges {
 		for _, r := range set {
-			if r.Gateway != "" {
-				return r.Gateway
+			if gw := ipv4Gateway(r.Gateway); gw != "" {
+				return gw
 			}
 		}
 	}
 	for _, a := range ipam.Addresses {
-		if a.Gateway != "" {
-			return a.Gateway
+		if gw := ipv4Gateway(a.Gateway); gw != "" {
+			return gw
 		}
 	}
 	return ""
+}
+
+// ipv4Gateway returns gw in canonical form when it is a plain IPv4 address, else "".
+// The NAD config is user-controlled and the gateway ends up in privileged shell code.
+func ipv4Gateway(gw string) string {
+	addr, err := netip.ParseAddr(gw)
+	if err != nil || !addr.Is4() {
+		return ""
+	}
+	return addr.String()
 }

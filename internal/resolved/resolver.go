@@ -106,7 +106,8 @@ func (r *resolver) Resolve(ctx context.Context, guest *swiftv1alpha1.SwiftGuest)
 	if p := guest.PrimaryInterface(); p != nil && p.NetworkRef != nil {
 		gw, err := NADGateway(ctx, r.client, guest.Namespace, p.NetworkRef)
 		if err != nil {
-			return nil, &ResolutionError{Reason: "reading primary NAD gateway: " + err.Error()}
+			// A plain error is retried; a ResolutionError would fail the guest.
+			return nil, fmt.Errorf("reading primary NAD gateway: %w", err)
 		}
 		rg.PrimaryNADGateway = gw
 	}

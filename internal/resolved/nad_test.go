@@ -2,17 +2,20 @@ package resolved
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func testNAD(ns, name, config string) *unstructured.Unstructured {
@@ -70,6 +73,40 @@ func TestNADGateway(t *testing.T) {
 			name:   "invalid config",
 			config: `{`,
 		},
+		{
+			name:   "shell syntax gateway",
+			config: `{"type":"ovs","ipam":{"type":"whereabouts","gateway":"10.10.0.1; reboot"}}`,
+		},
+		{
+			name:   "record separator gateway",
+			config: `{"type":"ovs","ipam":{"type":"whereabouts","gateway":"10.10.0.1|x"}}`,
+		},
+		{
+			name:   "newline gateway",
+			config: `{"type":"ovs","ipam":{"type":"whereabouts","gateway":"10.10.0.1\nfoo"}}`,
+		},
+		{
+			name:   "non-IP gateway",
+			config: `{"type":"ovs","ipam":{"type":"whereabouts","gateway":"gateway"}}`,
+		},
+		{
+			name:   "IPv6 gateway",
+			config: `{"type":"ovs","ipam":{"type":"whereabouts","range":"fd00::/64","gateway":"fd00::1"}}`,
+		},
+		{
+			name:   "IPv4-mapped IPv6 gateway",
+			config: `{"type":"ovs","ipam":{"type":"whereabouts","gateway":"::ffff:10.10.0.1"}}`,
+		},
+		{
+			name:   "dual-stack ranges with IPv6 first",
+			config: `{"type":"ovs","ipam":{"type":"host-local","ranges":[[{"subnet":"fd00::/64","gateway":"fd00::1"}],[{"subnet":"10.10.0.0/24","gateway":"10.10.0.1"}]]}}`,
+			want:   "10.10.0.1",
+		},
+		{
+			name:   "invalid top-level gateway falls through to ranges",
+			config: `{"type":"ovs","ipam":{"type":"host-local","gateway":"junk","ranges":[[{"subnet":"10.10.0.0/24","gateway":"10.10.0.1"}]]}}`,
+			want:   "10.10.0.1",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(nadScheme()).WithObjects(testNAD("ns", "net", tc.config)).Build()
@@ -105,10 +142,48 @@ func TestNADGateway_MissingNAD(t *testing.T) {
 	}
 }
 
-// resolveWithNADs resolves a disk-boot guest in namespace "ns" with the given
-// interfaces and NADs.
-func resolveWithNADs(t *testing.T, ifaces []swiftv1alpha1.GuestInterface, nads ...client.Object) *ResolvedGuest {
-	t.Helper()
+// errAPIUnavailable is a transient API error for interceptor-backed Gets.
+var errAPIUnavailable = apierrors.NewServiceUnavailable("apiserver unavailable")
+
+// failNADGets makes every NAD Get return errAPIUnavailable.
+var failNADGets = interceptor.Funcs{
+	Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if obj.GetObjectKind().GroupVersionKind() == networkAttachmentDefinitionGVK {
+			return errAPIUnavailable
+		}
+		return c.Get(ctx, key, obj, opts...)
+	},
+}
+
+// A transient API error is returned, not swallowed into "no gateway".
+func TestNADGateway_TransientError(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(nadScheme()).WithInterceptorFuncs(failNADGets).Build()
+	if _, err := NADGateway(context.Background(), c, "ns", &swiftv1alpha1.NetworkReference{Name: "net"}); err == nil {
+		t.Error("NADGateway returned no error for an unavailable API server")
+	}
+}
+
+// A transient API error must stay retryable: a ResolutionError without Waiting
+// fails a Pending guest.
+func TestResolve_PrimaryNADTransientErrorIsRetryable(t *testing.T) {
+	ifaces := []swiftv1alpha1.GuestInterface{{Name: "mgmt", Primary: true, NetworkRef: &swiftv1alpha1.NetworkReference{Name: "mgmt-net"}}}
+	objs, guest := nadResolveFixture(ifaces)
+	c := fake.NewClientBuilder().WithScheme(nadScheme()).WithObjects(objs...).WithInterceptorFuncs(failNADGets).Build()
+	_, err := NewResolver(c).Resolve(context.Background(), guest)
+	if err == nil {
+		t.Fatal("Resolve returned no error for an unavailable API server")
+	}
+	if re, ok := errors.AsType[*ResolutionError](err); ok {
+		t.Errorf("Resolve = ResolutionError %+v, want a plain error so the reconcile is retried", re)
+	}
+	if !apierrors.IsServiceUnavailable(err) {
+		t.Errorf("Resolve error %v does not wrap the API error", err)
+	}
+}
+
+// nadResolveFixture returns the objects and disk-boot guest in namespace "ns"
+// with the given interfaces.
+func nadResolveFixture(ifaces []swiftv1alpha1.GuestInterface) ([]client.Object, *swiftv1alpha1.SwiftGuest) {
 	guestClass := &swiftv1alpha1.SwiftGuestClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "gc"},
 		Spec: swiftv1alpha1.SwiftGuestClassSpec{
@@ -121,8 +196,6 @@ func resolveWithNADs(t *testing.T, ifaces []swiftv1alpha1.GuestInterface, nads .
 		Status:     imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatRaw}},
 	}
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns"}}
-	objs := append([]client.Object{guestClass, image, ns}, nads...)
-	c := fake.NewClientBuilder().WithScheme(nadScheme()).WithObjects(objs...).Build()
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns", UID: "uid-123"},
 		Spec: swiftv1alpha1.SwiftGuestSpec{
@@ -131,6 +204,15 @@ func resolveWithNADs(t *testing.T, ifaces []swiftv1alpha1.GuestInterface, nads .
 			Interfaces:    ifaces,
 		},
 	}
+	return []client.Object{guestClass, image, ns}, guest
+}
+
+// resolveWithNADs resolves a disk-boot guest in namespace "ns" with the given
+// interfaces and NADs.
+func resolveWithNADs(t *testing.T, ifaces []swiftv1alpha1.GuestInterface, nads ...client.Object) *ResolvedGuest {
+	t.Helper()
+	objs, guest := nadResolveFixture(ifaces)
+	c := fake.NewClientBuilder().WithScheme(nadScheme()).WithObjects(append(objs, nads...)...).Build()
 	rg, err := NewResolver(c).Resolve(context.Background(), guest)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
