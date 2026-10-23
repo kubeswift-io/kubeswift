@@ -389,3 +389,20 @@ func TestPreparedNodes(t *testing.T) {
 }
 
 func keys[V any](m map[string]V) []string { return sortedKeys(m) }
+
+// The verify-key check for optional sandbox artifacts (#844) does not apply
+// to a placement: an artifact whose key Secret is missing is authorized and
+// prepared as before, not refused with every other artifact.
+func TestPlacement_MissingVerifyKeyIsNotARefusal(t *testing.T) {
+	pl := testPlacement(plDigestA)
+	pl.Spec.Artifacts[0].VerifyKeySecretRef = &sandboxv1alpha1.SecretObjectReference{Name: "no-such-key"}
+	e := newPlacementEnv(t, pl, poolSlot("s1", "node-a"))
+	e.reconcile()
+	p := e.placement()
+	if r := p.Status.Artifacts[0].Reason; r == sandboxv1alpha1.PlacementReasonArtifactRefused {
+		t.Errorf("artifact %+v: refused for its verify key", p.Status.Artifacts[0])
+	}
+	if len(e.preparePods()) == 0 {
+		t.Error("no prepare pod: the placement stopped on the verify key")
+	}
+}
