@@ -106,6 +106,12 @@ type resolveRequest struct {
 	// followUp marks the wait for a request this pass already started, so the
 	// lookup is counted once.
 	followUp bool
+	// credErr is set by artifactRequests when the artifact's credentials (pull
+	// Secret, or an optional artifact's verify key) cannot be used: the
+	// request is never sent, so nothing is asked anonymously in their place.
+	// credReason is the skip reason for an optional artifact (#844).
+	credErr    error
+	credReason string
 }
 
 type resolveResult struct {
@@ -285,6 +291,9 @@ func (r *registryResolver) get(req resolveRequest, w waiter) (resolveResult, boo
 // references in flight at once instead of one after another.
 func prime(lookup lookupFunc, reqs ...resolveRequest) {
 	for _, req := range reqs {
+		if req.credErr != nil {
+			continue
+		}
 		req.noWait = true
 		lookup(req)
 	}

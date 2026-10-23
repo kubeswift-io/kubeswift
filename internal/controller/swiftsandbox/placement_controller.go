@@ -212,6 +212,16 @@ func (r *ArtifactPlacementReconciler) authorize(ctx context.Context, p *sandboxv
 	authorized := map[string]bool{}
 	var refused []string
 	reqs, err := artifactRequests(ctx, r.Client, view)
+	if err == nil {
+		// A pull Secret that cannot be used refuses the placement, as before:
+		// a placement has no optional artifacts to skip.
+		for _, req := range reqs {
+			if req.credErr != nil {
+				err = req.credErr
+				break
+			}
+		}
+	}
 	if err != nil {
 		// A missing or unreadable pull Secret: nothing can be authorized.
 		for i, a := range p.Spec.Artifacts {
