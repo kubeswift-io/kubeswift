@@ -6,10 +6,25 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.19.2] — 2026-10-23
+
+A patch release that restores the optional-artifact contract: an optional artifact that cannot be delivered never stops its workload from starting and becoming ready. Two cases broke it: a warm checkout that skipped an optional artifact after the claim (#843), and an optional artifact whose pull Secret could not be used (#844).
+
+### Upgrade
+
+- No CRD changed and no chart value or template changed; applying `crds/` is not needed. Only the controller changed: the launcher (swiftletd) and sandbox-materialize images are rebuilt at the new version but unchanged.
+- No running guest, sandbox or warm slot is restarted.
+- A warm sandbox already stuck before the upgrade (`WorkloadReady=False/Probing` after its optional artifact was skipped, #843) stays not ready: the old controller had cleared its launcher's readiness verdict, and the launcher reports it only when it changes. Delete it to get a ready one; new checkouts are not affected.
+- An optional artifact whose pull Secret cannot be used now starts its sandbox without the artifact (`Skipped`, `PullSecretInvalid`) instead of failing it. A required artifact fails exactly as before.
+
 ### Fixed
 
 - **A warm sandbox whose optional artifact was skipped after the checkout never became ready** (#843). When the artifact was not on the slot's node (or its fetch timed out or failed verification), the workload was dispatched again as `<sandbox UID>-<n>`, and the controller ignored that dispatch's readiness verdict: `WorkloadReady` stayed `False` (`Probing`) and the pod never became Ready, although the workload answered. A required artifact fetched at checkout was affected the same way. Every dispatch of the sandbox's workload is now accepted, still only the one on the slot. Re-dispatching also writes the sandbox's status before the slot, so a skipped artifact can no longer be reported `Mounted`.
 - **An optional artifact whose pull Secret could not be used failed the sandbox** (#844). A missing Secret, one without `.dockerconfigjson`, or an unparsable one now skips the artifact (`status.artifacts[].state: Skipped`, reason `PullSecretInvalid`, a Warning Event naming the Secret) and the workload starts; nothing is asked of the registry without the credential. An optional artifact whose verify key Secret is missing or has no `cosign.pub` is skipped the same way (`VerifyKeyInvalid`); it used to keep a cold sandbox's materialize pod from starting. A required artifact fails the sandbox exactly as before.
+
+### Known issues
+
+- A cold sandbox's status can stay stale (`Resolved=False`, empty `status.artifacts`) when its status write after the launcher is created loses a conflict; the workload and its artifacts are unaffected (#848).
 
 ## [v0.19.1] — 2026-10-22
 
