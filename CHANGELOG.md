@@ -6,6 +6,25 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.19.3] — 2026-10-23
+
+A patch release for cold SwiftSandbox artifacts. An optional artifact already on the node is now used however late its init container starts, as `fetchTimeout: 0s` always promised (#851). A cold sandbox's status no longer stays stale after a lost status write (#848).
+
+### Upgrade
+
+- No CRD changed and no chart value or template changed; applying `crds/` is not needed. The controller and sandbox-materialize changed; the launcher (swiftletd) image is rebuilt at the new version but unchanged.
+- **Run the controller and sandbox-materialize at the same version.** The controller now passes sandbox-materialize a new flag, `--authorized-until`, for every optional artifact. An older sandbox-materialize refuses it, and the artifact's init container fails, failing the sandbox. The chart sets both from one release; only check this if you pin `sandboxMaterialize.image.tag` (or `KUBESWIFT_SANDBOX_MATERIALIZE_IMAGE`) separately.
+- No running guest, sandbox or warm slot is restarted. Pods that already exist keep their arguments; the fix applies to launcher, fetch and placement pods created after the upgrade.
+
+### Fixed
+
+- **An optional artifact already on the node was skipped on a cold start** (#851). Its init container asked the registry before looking at the node cache, within the artifact's deadline (`fetchTimeout`, counted from when the launcher pod is built). An init container that started after the deadline skipped it as `FetchTimeout` even when it was cached and ready: always with `fetchTimeout: 0s`, and whenever the pod took longer to start than `fetchTimeout`, for example several cold sandboxes starting on a node at once. Such an artifact is now used without the registry when the node cache holds it exactly as a warm checkout needs it: complete, read from its own repository, verified with its key, meeting every platform policy. This is allowed while the controller's resolution of the digest with the sandbox's own credentials stands: up to `--artifact-authorization-ttl` (default 5m) after the pod is built, so the authorization behind it is at most twice that old. Anything else asks the registry as before. Required artifacts are unchanged.
+- **A cold sandbox's status could stay stale** (#848). The controller created the launcher pod and then wrote `Resolved`, `status.artifacts` and phase `Materializing`; a write that lost a conflict was never repeated, so the sandbox ran with `Resolved=False` and its artifacts never reported `Mounted`. The status is now written before the pod is created.
+
+### Docs
+
+- `docs/sandbox/overview.md` and `docs/sandbox/warm-pool.md` describe when a cold optional artifact is taken from the node cache, and the authorization bound.
+
 ## [v0.19.2] — 2026-10-23
 
 A patch release that restores the optional-artifact contract: an optional artifact that cannot be delivered never stops its workload from starting and becoming ready. Two cases broke it: a warm checkout that skipped an optional artifact after the claim (#843), and an optional artifact whose pull Secret could not be used (#844).
