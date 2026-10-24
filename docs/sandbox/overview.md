@@ -34,7 +34,7 @@ For bursts of same-image sandboxes where the ~15s cold boot dominates, a
 
 - A node labeled `kubeswift.io/kernel-node=true`
 - A `Ready` `SwiftKernel` named `sandbox` (OCI artifact
-  `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.16`, pulled per node)
+  `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.18`, pulled per node)
 
 The sandbox kernel is not a plain `kernelRef` SwiftGuest kernel — its
 bridge-initramfs needs the OCI rootfs disk that the SwiftSandbox controller
@@ -571,56 +571,12 @@ swiftctl sandbox attach <name> [-- <cmd>]
 
 ### Reading the console
 
-A sandbox launcher pod has an unprivileged `console` container whose logs are
-the sandbox's console, so it is read with the pod logs API:
-
-```bash
-kubectl logs <pod> -c console [-f] [--timestamps]
-```
-
-`<pod>` is `status.podRef`: the sandbox's own pod, or the warm slot it checked
-out. Reading it takes `get` on `pods/log` in the sandbox's namespace, plus `get`
-on the SwiftSandbox to find the pod and `get` on pods for `kubectl logs` (the
-API's log endpoint itself needs only `pods/log`). It needs no `pods/exec`. The
-console container runs as a non-root user with no capabilities and no service
-account token, and mounts only the console files, read-only: it reaches no
-launcher file, socket or device. It shares the pod's network, like every
-container of a pod, and runs a fixed copy loop that opens no connection.
-`swiftctl sandbox logs` uses it when the pod has one (pods created by KubeSwift
-v0.20 and later) and falls back to an exec into the launcher before.
-
-`pods/log` is in Kubernetes' built-in `view`, `edit` and `admin` roles: anyone
-who can read pod logs in a namespace can read the consoles of its sandboxes,
-live. Treat workload output as visible to them (a workload should not print
-secrets), or turn the console off (below). The console is the workload's raw
-bytes, terminal escapes included, printed to the reader's terminal as with
-`kubectl logs` of any container.
-
-- **Cold sandbox:** the guest's console: its kernel and bridge boot lines, then
-  the workload's output.
-- **Warm checkout:** only the checked-out workload's stdout and stderr, from
-  its dispatch on, as it runs (kernels/sandbox 6.6.18 / gpu-sandbox 6.6.7 or
-  later, bridge feature `workload-stream`; older kernels deliver it when the
-  workload exits). The slot's boot console is not in it, and a slot serves one
-  checkout, so nothing from before the checkout is in it either.
-
-The output is kept on the node, bounded: a warm workload's past 16 MiB is
-dropped after a one-line notice (`KUBESWIFT_CONSOLE_MAX_BYTES` on the
-launcher), and the kubelet rotates the container log as for any container. It
-lives as long as the pod: a warm slot is deleted when its workload ends, so a
-checked-out sandbox's console is read while it runs (`-f` from the checkout);
-a cold sandbox's pod stays until the sandbox is deleted. Nothing is kept
-elsewhere.
-
-`--timestamps` shows when the node received a line, not when the guest wrote
-it; on a warm checkout a line reaches the node within a few milliseconds of the
-write. Do not compare the guest's own clock with host times: it is set at boot
-(kvm-clock, no RTC, no NTP inside), and a warm slot's guest clock was measured
-150 ms behind its node's. For stage timings, print the guest's monotonic time
-and take differences, or use the receive times.
-
-`sandboxMaterialize.console: false` in the chart (`--sandbox-console=false` on
-the controller) turns the console container off for pods created afterwards.
+`kubectl logs <pod> -c console` (or `swiftctl sandbox logs`), with `get
+pods/log` and no exec. A cold sandbox's console is the guest console; a warm
+checkout's is only its workload's output, live on kernels/sandbox 6.6.18 /
+gpu-sandbox 6.6.7 or later. **Anyone with `pods/log` in the namespace, including
+the built-in `view` role, can read it.** Security boundary, RBAC, bounds,
+lifecycle, timestamps and how to turn it off: [SwiftSandbox console](console.md).
 
 ## Lifecycle
 
