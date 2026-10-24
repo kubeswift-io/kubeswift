@@ -88,8 +88,9 @@ rules:
 ```
 
 `swiftctl sandbox logs` reads `pods/log`. It execs into the launcher only for a
-pod that has no console container (created before v0.20.0), and that needs
-`pods/exec`, as before.
+pod that has no console container (created before v0.20.0), or for a caller
+refused `pods/log`; the exec then needs the caller's own `pods/exec`, as before
+v0.20.0. A caller refused both is told `pods/log` is missing.
 
 The kubeswift-ui **Logs** button goes through the gateway's `/sandbox-logs`,
 which still authorizes the user for `get swiftsandboxes/log` and then reads the
