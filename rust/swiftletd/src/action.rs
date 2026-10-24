@@ -1098,7 +1098,10 @@ async fn dispatch_sandbox_exec(
             swift_vsock_client::exec_stream(&vsock_socket, &req, timeout, |_, b| out.write(b)).map(
                 |end| match end {
                     swift_vsock_client::StreamEnd::Exit(code) => Ok(code),
-                    swift_vsock_client::StreamEnd::Refused(msg) => Err(msg),
+                    // The guest's text: bounded, it ends up in an annotation.
+                    swift_vsock_client::StreamEnd::Refused(msg) => {
+                        Err(msg.chars().take(4096).collect::<String>())
+                    }
                 },
             )
         } else {

@@ -53,7 +53,10 @@ func followConsole(args []string) int {
 }
 
 // untilClosed returns once every writer of the FIFO at path has closed it,
-// or when it has not appeared within wait.
+// or when it has not appeared within wait. It opens the FIFO non-blocking:
+// a blocking open waits for a writer, forever if the launcher has already
+// exited. A read then returns EAGAIN while a writer holds it, and 0 (EOF)
+// once none does, whichever came first.
 func untilClosed(path string, wait, poll time.Duration) {
 	deadline := time.Now().Add(wait)
 	for {
@@ -67,18 +70,24 @@ func untilClosed(path string, wait, poll time.Duration) {
 		}
 		time.Sleep(poll)
 	}
-	// Opening for reading returns at once: the launcher holds it read-write.
-	f, err := os.OpenFile(path, os.O_RDONLY, 0)
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "follow-console: %v; stopping\n", err)
 		return
 	}
-	defer f.Close()
+	defer unix.Close(fd)
 	buf := make([]byte, 512)
 	for {
-		if _, err := f.Read(buf); err != nil {
-			return // io.EOF: the launcher is gone
+		n, err := unix.Read(fd, buf)
+		switch {
+		case err == nil && n == 0:
+			return // no writer: the launcher is gone
+		case err != nil && err != unix.EAGAIN && err != unix.EINTR:
+			fmt.Fprintf(os.Stderr, "follow-console: %v; stopping\n", err)
+			return
 		}
+		// A writer holds it: wait for a change (or poll's bound).
+		_, _ = unix.Poll([]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}, int(poll.Milliseconds()))
 	}
 }
 

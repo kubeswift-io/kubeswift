@@ -137,6 +137,26 @@ func TestFollowConsole_UntilTheLauncherCloses(t *testing.T) {
 		t.Fatal("did not stop when the launcher closed its FIFO")
 	}
 
+	// A launcher that exited before the console container opened its FIFO
+	// (it can exit within a second of making it): no writer is left, and
+	// the console container must not wait for one.
+	gone := filepath.Join(dir, ".gone")
+	if err := unix.Mkfifo(gone, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, err := os.OpenFile(gone, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	ended := make(chan struct{})
+	go func() { untilClosed(gone, time.Second, 20*time.Millisecond); close(ended) }()
+	select {
+	case <-ended:
+	case <-time.After(3 * time.Second):
+		t.Fatal("waited for a writer of a FIFO whose launcher is gone")
+	}
+
 	// A launcher that never makes one: give up after the wait.
 	start := time.Now()
 	untilClosed(filepath.Join(dir, "none"), 100*time.Millisecond, 20*time.Millisecond)

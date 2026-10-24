@@ -53,9 +53,11 @@ fn hold_alive_in(dir: &Path) -> std::io::Result<()> {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::create_dir_all(dir)?;
-    let path = dir.join(ALIVE_FIFO);
-    let _ = std::fs::remove_file(&path);
-    let c = std::ffi::CString::new(path.as_os_str().as_bytes())
+    // Made and opened under a temporary name, then renamed into place: the
+    // console container never sees the FIFO without its writer.
+    let tmp = dir.join(format!("{}.tmp", ALIVE_FIFO));
+    let _ = std::fs::remove_file(&tmp);
+    let c = std::ffi::CString::new(tmp.as_os_str().as_bytes())
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     // SAFETY: c is a valid NUL-terminated path.
     if unsafe { libc::mkfifo(c.as_ptr(), 0o644) } != 0 {
@@ -67,7 +69,8 @@ fn hold_alive_in(dir: &Path) -> std::io::Result<()> {
         .read(true)
         .write(true)
         .custom_flags(libc::O_CLOEXEC)
-        .open(&path)?;
+        .open(&tmp)?;
+    std::fs::rename(&tmp, dir.join(ALIVE_FIFO))?;
     std::mem::forget(f);
     Ok(())
 }
@@ -158,25 +161,25 @@ impl WorkloadLog {
 
     /// Appends output, or counts it once the bound is reached.
     pub fn write(&mut self, data: &[u8]) {
-        if self.dropped > 0 || self.written >= self.max {
-            self.dropped += data.len() as u64;
-            return;
-        }
-        let room = (self.max - self.written) as usize;
+        let room = self.max.saturating_sub(self.written) as usize;
         let (keep, rest) = data.split_at(data.len().min(room));
-        if let Some(f) = self.file.as_mut() {
-            let _ = f.write_all(keep);
-        }
-        self.written += keep.len() as u64;
-        if !rest.is_empty() {
-            self.dropped += rest.len() as u64;
+        if !keep.is_empty() {
             if let Some(f) = self.file.as_mut() {
-                let _ = write!(
-                    f,
-                    "\n[kubeswift: workload console output past {} bytes is not kept]\n",
-                    self.max
-                );
+                let _ = f.write_all(keep);
             }
+            self.written += keep.len() as u64;
+        }
+        if !rest.is_empty() {
+            if self.dropped == 0 {
+                if let Some(f) = self.file.as_mut() {
+                    let _ = write!(
+                        f,
+                        "\n[kubeswift: workload console output past {} bytes is not kept]\n",
+                        self.max
+                    );
+                }
+            }
+            self.dropped += rest.len() as u64;
         }
     }
 
@@ -217,6 +220,43 @@ mod tests {
             1,
             "one notice"
         );
+    }
+
+    #[test]
+    fn the_notice_follows_a_write_that_ends_exactly_at_the_bound() {
+        let d = tmp("exact");
+        let path = d.join(WORKLOAD_LOG);
+        let mut w = WorkloadLog::at(&path, 4);
+        w.write(b"abcd");
+        w.write(b"e");
+        w.write(b"f");
+        assert_eq!(w.totals(), (4, 2));
+        let got = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+        assert!(
+            got.starts_with("abcd\n[kubeswift: ") && got.matches("kubeswift").count() == 1,
+            "{}",
+            got
+        );
+    }
+
+    #[test]
+    fn the_alive_fifo_appears_with_its_writer() {
+        let d = tmp("fifo");
+        hold_alive_in(&d).unwrap();
+        let path = d.join(ALIVE_FIFO);
+        use std::os::unix::fs::FileTypeExt;
+        assert!(std::fs::metadata(&path).unwrap().file_type().is_fifo());
+        assert!(!d.join(format!("{}.tmp", ALIVE_FIFO)).exists());
+        // A non-blocking reader finds a writer: EAGAIN, not EOF.
+        use std::io::Read;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut r = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&path)
+            .unwrap();
+        let err = r.read(&mut [0u8; 8]).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock);
     }
 
     #[test]

@@ -579,12 +579,22 @@ kubectl logs <pod> -c console [-f] [--timestamps]
 ```
 
 `<pod>` is `status.podRef`: the sandbox's own pod, or the warm slot it checked
-out. Reading it takes only `get` on `pods/log` in the sandbox's namespace (and
-`get` on the SwiftSandbox to find the pod). It needs no `pods/exec`, and the
-console container cannot reach the launcher: it runs as a non-root user with no
-capabilities, has no service account token, and mounts only the console files,
-read-only. `swiftctl sandbox logs` uses it when the pod has one (pods created by
-KubeSwift v0.20 and later) and falls back to an exec into the launcher before.
+out. Reading it takes `get` on `pods/log` in the sandbox's namespace, plus `get`
+on the SwiftSandbox to find the pod and `get` on pods for `kubectl logs` (the
+API's log endpoint itself needs only `pods/log`). It needs no `pods/exec`. The
+console container runs as a non-root user with no capabilities and no service
+account token, and mounts only the console files, read-only: it reaches no
+launcher file, socket or device. It shares the pod's network, like every
+container of a pod, and runs a fixed copy loop that opens no connection.
+`swiftctl sandbox logs` uses it when the pod has one (pods created by KubeSwift
+v0.20 and later) and falls back to an exec into the launcher before.
+
+`pods/log` is in Kubernetes' built-in `view`, `edit` and `admin` roles: anyone
+who can read pod logs in a namespace can read the consoles of its sandboxes,
+live. Treat workload output as visible to them (a workload should not print
+secrets), or turn the console off (below). The console is the workload's raw
+bytes, terminal escapes included, printed to the reader's terminal as with
+`kubectl logs` of any container.
 
 - **Cold sandbox:** the guest's console: its kernel and bridge boot lines, then
   the workload's output.
