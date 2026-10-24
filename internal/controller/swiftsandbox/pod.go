@@ -677,6 +677,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		}
 		pod.Annotations[EgressAllowedAnnotation] = allowed
 	}
+	addConsole(pod, consoleSerialLog)
 	return pod
 }
 

@@ -1087,39 +1087,50 @@ async fn dispatch_sandbox_exec(
         action.id,
         vsock_socket.display()
     );
-    let resp =
-        tokio::task::spawn_blocking(move || swift_vsock_client::exec(&vsock_socket, &req, timeout))
-            .await;
+    // The workload's output goes to its console as it runs when the agent can
+    // stream it with its files and mounts (bridge feature workload-stream),
+    // else all at once when it exits (console.rs). Either way it is bounded.
+    let streamed = crate::bridge::has("workload-stream");
+    let console_run_dir = run_dir.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let mut out = crate::console::WorkloadLog::open(&console_run_dir);
+        let r = if streamed {
+            swift_vsock_client::exec_stream(&vsock_socket, &req, timeout, |_, b| out.write(b)).map(
+                |end| match end {
+                    swift_vsock_client::StreamEnd::Exit(code) => Ok(code),
+                    // The guest's text: bounded, it ends up in an annotation.
+                    swift_vsock_client::StreamEnd::Refused(msg) => {
+                        Err(msg.chars().take(4096).collect::<String>())
+                    }
+                },
+            )
+        } else {
+            swift_vsock_client::exec(&vsock_socket, &req, timeout).map(|resp| {
+                out.write(resp.stdout.as_bytes());
+                out.write(resp.stderr.as_bytes());
+                if resp.ok {
+                    Ok(resp.exit_code.unwrap_or(-1))
+                } else {
+                    Err(resp.error.unwrap_or_else(|| "unknown".to_string()))
+                }
+            })
+        };
+        (r, out.totals())
+    })
+    .await;
     // The workload is over, however the exec ended: a drain in progress ends.
     crate::shutdown::workload_ended();
-    let resp = resp
-        .map_err(|e| format!("sandbox-exec task join: {}", e))?
-        .map_err(|e| format!("GuestAgentUnreachable: {}", e))?;
-
-    if !resp.ok {
-        return Err(format!(
-            "agent exec error: {}",
-            resp.error.unwrap_or_else(|| "unknown".to_string())
-        ));
-    }
-    // Save the workload output (best-effort) so `swiftctl sandbox logs` shows
-    // it — a checked-out workload runs over vsock, not on the guest console the
-    // cold path captures. Its own file, next to the console log: Cloud
-    // Hypervisor writes serial.sock.log at its own offset (it does not open it
-    // for append), so output appended there was overwritten by the next
-    // console line.
-    if !resp.stdout.is_empty() || !resp.stderr.is_empty() {
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(run_dir.join(WORKLOAD_LOG))
-        {
-            let _ = f.write_all(resp.stdout.as_bytes());
-            let _ = f.write_all(resp.stderr.as_bytes());
-        }
-    }
-    let code = resp.exit_code.unwrap_or(-1);
+    let (result, (kept, dropped)) = result.map_err(|e| format!("sandbox-exec task join: {}", e))?;
+    log::info!(
+        "workload_console id={} streamed={} bytes={} dropped={}",
+        action.id,
+        streamed,
+        kept,
+        dropped
+    );
+    let code = result
+        .map_err(|e| format!("GuestAgentUnreachable: {}", e))?
+        .map_err(|e| format!("agent exec error: {}", e))?;
     log::info!("sandbox-exec id={} workload exited {}", action.id, code);
     // detail = the workload exit code (the controller parses it); status "complete".
     Ok(ActionOutcome {
@@ -1129,10 +1140,6 @@ async fn dispatch_sandbox_exec(
         suppress_status: false,
     })
 }
-
-/// File in the run dir holding a warm-slot workload's output (read by
-/// `swiftctl sandbox logs` and the gateway after the console log).
-const WORKLOAD_LOG: &str = "workload.log";
 
 /// Args parsed from `kubeswift.io/migration-action-args` for the
 /// `send` verb. The destination URL is the load-bearing field and
