@@ -231,7 +231,10 @@ In `insecure` mode these work with no token; in `token` mode add
   (and then anyone who can reach the gateway can open any console).
 - **Sandbox logs & shell** — two sibling raw WebSockets for a `SwiftSandbox`
   (added in kubeswift v0.13.1): `/sandbox-logs?cluster=&namespace=&name=&token=`
-  (read-only — `tail -F`s the microVM console log) and
+  (read-only: since v0.20.0 it reads the launcher pod's `console` container with
+  the pod logs API, as the gateway's credential with `get pods/log`; for a pod
+  without one, or a credential without `pods/log`, it `tail -F`s the microVM
+  console log through the exec bridge; see [SwiftSandbox console](../sandbox/console.md)) and
   `/sandbox-exec?…&cmd=/bin/sh` (an interactive shell — pod-exec → the in-guest
   vsock agent → the `internal/guestagent` frame protocol; the browser sends
   binary stdin frames and a text `{"resize":{cols,rows}}` control). Same

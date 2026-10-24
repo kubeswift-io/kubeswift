@@ -37,6 +37,11 @@ rules:
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]
+  # A sandbox launcher's console container (v0.20+): /sandbox-logs reads it
+  # with the pod logs API instead of an exec.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

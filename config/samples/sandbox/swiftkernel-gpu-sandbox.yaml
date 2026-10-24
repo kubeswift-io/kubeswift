@@ -18,6 +18,6 @@ metadata:
   namespace: default
 spec:
   ociRef:
-    image: ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.5
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.7
   kernelCmdline: "console=ttyS0"
   profile: gpu-sandbox

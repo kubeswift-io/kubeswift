@@ -402,10 +402,17 @@ func runSandboxLogs(cmd *cobra.Command, args []string) error {
 		_, err = io.Copy(os.Stdout, stream)
 		return err
 	}
-	if !noConsoleContainer(err) {
+	// The exec fallback: a pod without a console container (created before
+	// v0.20), or a caller refused pods/log who may still hold pods/exec (the
+	// pre-v0.20 way to read it); the exec then needs that permission.
+	logsForbidden := apierrors.IsForbidden(err)
+	if !noConsoleContainer(err) && !logsForbidden {
 		return fmt.Errorf("read the console of %s/%s: %w", ns, name, err)
 	}
 	if sandboxLogsTimestamps {
+		if logsForbidden {
+			return fmt.Errorf("read the console of %s/%s: %w", ns, name, err)
+		}
 		return fmt.Errorf("--timestamps needs a launcher with a console container (KubeSwift v0.20 or later)")
 	}
 	runDir := "/var/lib/kubeswift/run/" + cli.GuestID(ns, target)
@@ -431,6 +438,9 @@ func runSandboxLogs(cmd *cobra.Command, args []string) error {
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 	}); err != nil {
+		if logsForbidden && apierrors.IsForbidden(err) {
+			return fmt.Errorf("reading the console of %s/%s needs get on pods/log in %s (the console container's logs): %w", ns, name, ns, err)
+		}
 		return fmt.Errorf("stream sandbox logs (is %s/%s running?): %w", ns, name, err)
 	}
 	return nil

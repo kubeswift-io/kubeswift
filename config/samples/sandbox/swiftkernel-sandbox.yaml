@@ -15,6 +15,6 @@ metadata:
 spec:
   ociRef:
     # Artifact 6.6.16 carries Linux 6.6.158.
-    image: ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.16
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.18
   kernelCmdline: "console=ttyS0"
   profile: sandbox

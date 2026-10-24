@@ -70,11 +70,11 @@ understands beyond argv/env/cwd (`make build` writes it from `BRIDGE_FEATURES`).
 
 ```
 cd output/images                # or output-gpu-sandbox/images for the gpu profile
-oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.17 \
+oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.18 \
   bzImage:application/vnd.kubeswift.kernel.binary \
   rootfs.cpio.gz:application/vnd.kubeswift.initramfs.binary \
   bridge-features:text/plain
-# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.6 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain
+# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.7 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain
 ```
 
 Then `kubectl apply -f config/samples/sandbox/swiftkernel-sandbox.yaml` (or
@@ -103,6 +103,13 @@ The SwiftSandbox controller appends to the kernel cmdline:
   stops every other process, syncs and unmounts the outputs, and only then
   prints the exit code, so a present exit code means the outputs are complete
   on the host. Feature `outputs` (kernels/sandbox 6.6.17, gpu-sandbox 6.6.6).
+
+Feature `workload-stream` (kernels/sandbox 6.6.18, gpu-sandbox 6.6.7) is the
+guest agent's, not the cmdline's: its streamed exec writes a checkout's files
+and binds its mounts before the workload, as the single-shot exec does, and
+reports a refusal as an error frame. swiftletd then dispatches a warm checkout
+streamed, so its output reaches the sandbox's console as it runs
+(docs/sandbox/console.md); without the feature, when the workload exits.
 
 The config disk is a raw blob: `KUBESWIFT-EXEC-V1`, then one TAB-separated line
 per item, then `KUBESWIFT-EXEC-END`, NUL-padded. Values are base64.
