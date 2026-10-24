@@ -114,6 +114,11 @@ func main() {
 			"expires and no checkout waits for the registry. 0 disables renewal. At least 0, below 1.")
 	maxConcurrentExports := flag.Int("max-concurrent-exports", swiftsandbox.DefaultMaxConcurrentExports,
 		"Export Jobs (SwiftSandbox spec.outputs) running at once, cluster-wide.")
+	if v := os.Getenv("KUBESWIFT_SANDBOX_CONSOLE"); v != "" {
+		swiftsandbox.ConsoleEnabled = v != "false"
+	}
+	flag.BoolVar(&swiftsandbox.ConsoleEnabled, "sandbox-console", swiftsandbox.ConsoleEnabled,
+		"give sandbox launcher pods an unprivileged console container: the guest console (cold) or the checked-out workload's output (warm slot), read with `kubectl logs <pod> -c console`")
 	slotReadyTimeout := flag.Duration("warm-slot-ready-timeout", swiftsandbox.DefaultSlotReadyTimeout,
 		"How long after its launcher starts a warm SwiftSandboxPool slot may wait for its guest agent "+
 			"before it is deleted and replaced (Warning Event SlotNotReady). Doubles with each consecutive "+

@@ -19,6 +19,8 @@ import (
 const (
 	GuestLabelKey     = "swift.kubeswift.io/guest"
 	LauncherContainer = "launcher"
+	// ConsoleContainer is a sandbox launcher pod's console sidecar (pods/log).
+	ConsoleContainer = "console"
 )
 
 // GuestResolver resolves SwiftGuest and its pod.

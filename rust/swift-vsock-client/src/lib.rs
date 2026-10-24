@@ -238,6 +238,12 @@ pub struct ExecRequest {
     /// the field, so the caller checks the kernel's bridge-features first).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mounts: Vec<ExecMount>,
+    /// Stream stdout/stderr as frames while the command runs ([`exec_stream`]).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stream: bool,
+    /// Ask the agent to report a refusal as an error frame, not as exit 255.
+    #[serde(rename = "errorFrames", skip_serializing_if = "std::ops::Not::not")]
+    pub error_frames: bool,
 }
 
 /// One staged artifact: its directory name in the slot's staging share and the
@@ -284,6 +290,8 @@ impl ExecRequest {
             cwd,
             files: vec![],
             mounts: vec![],
+            stream: false,
+            error_frames: false,
         }
     }
 }
@@ -320,6 +328,115 @@ pub fn exec(
         .map_err(|e| VsockError::Decode(format!("{}: {}", e, String::from_utf8_lossy(trimmed))))
 }
 
+/// Frame types of the streamed exec (the agent's `internal/guestagent`).
+pub const FRAME_STDOUT: u8 = 1;
+pub const FRAME_STDERR: u8 = 2;
+const FRAME_EXIT: u8 = 3;
+const FRAME_ERROR: u8 = 7;
+
+/// Largest frame payload accepted (the agent's `MaxFramePayload`).
+pub const MAX_FRAME_PAYLOAD: usize = 1 << 20;
+
+/// How a streamed exec ended.
+#[derive(Debug, PartialEq)]
+pub enum StreamEnd {
+    /// The workload exited with this code.
+    Exit(i32),
+    /// The agent refused the request before running anything.
+    Refused(String),
+}
+
+/// Run a command in the guest and stream its output: `on_output` gets each
+/// stdout ([`FRAME_STDOUT`]) and stderr ([`FRAME_STDERR`]) chunk as it arrives,
+/// in arrival order. The request is sent with `stream` and `errorFrames` set
+/// (bridge feature `workload-stream`). `timeout` bounds the whole run, as for
+/// [`exec`]. A frame of another type is ignored; one larger than
+/// [`MAX_FRAME_PAYLOAD`], or a stream that ends without an exit, is an error.
+pub fn exec_stream(
+    socket_path: &Path,
+    req: &ExecRequest,
+    timeout: Duration,
+    mut on_output: impl FnMut(u8, &[u8]),
+) -> Result<StreamEnd, VsockError> {
+    let mut req = req.clone();
+    req.stream = true;
+    req.error_frames = true;
+    let line = serde_json::to_vec(&req).map_err(|e| VsockError::Decode(e.to_string()))?;
+    let deadline = Instant::now() + timeout;
+    let stream = UnixStream::connect(socket_path)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+    let mut writer = stream.try_clone()?;
+    let mut reader = BufReader::new(stream);
+    writer.write_all(format!("CONNECT {}\n", AGENT_PORT).as_bytes())?;
+    writer.flush()?;
+    let mut ok = String::new();
+    reader.read_line(&mut ok)?;
+    if !ok.starts_with("OK") {
+        return Err(VsockError::Handshake(format!("expected OK, got {:?}", ok)));
+    }
+    writer.write_all(&line)?;
+    writer.write_all(b"\n")?;
+    writer.flush()?;
+
+    let mut payload = vec![0u8; 0];
+    loop {
+        let mut hdr = [0u8; 5];
+        read_full(&mut reader, &mut hdr, deadline)?;
+        let len = u32::from_be_bytes([hdr[1], hdr[2], hdr[3], hdr[4]]) as usize;
+        if len > MAX_FRAME_PAYLOAD {
+            return Err(VsockError::Decode(format!("frame of {} bytes", len)));
+        }
+        payload.resize(len, 0);
+        read_full(&mut reader, &mut payload, deadline)?;
+        match hdr[0] {
+            FRAME_STDOUT | FRAME_STDERR => on_output(hdr[0], &payload),
+            FRAME_EXIT => {
+                if len != 4 {
+                    return Err(VsockError::Decode(format!("exit frame of {} bytes", len)));
+                }
+                return Ok(StreamEnd::Exit(i32::from_be_bytes([
+                    payload[0], payload[1], payload[2], payload[3],
+                ])));
+            }
+            FRAME_ERROR => {
+                return Ok(StreamEnd::Refused(
+                    String::from_utf8_lossy(&payload).into_owned(),
+                ))
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Fill buf from r before deadline (one deadline for the whole stream).
+fn read_full(
+    r: &mut BufReader<UnixStream>,
+    buf: &mut [u8],
+    deadline: Instant,
+) -> Result<(), VsockError> {
+    let mut off = 0;
+    while off < buf.len() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(VsockError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "workload did not finish before the timeout",
+            )));
+        }
+        r.get_ref().set_read_timeout(Some(left))?;
+        let n = r.read(&mut buf[off..])?;
+        if n == 0 {
+            return Err(VsockError::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "the agent closed the stream without an exit",
+            )));
+        }
+        off += n;
+    }
+    Ok(())
+}
+
 fn trim_trailing_newline(b: &[u8]) -> &[u8] {
     let mut end = b.len();
     while end > 0 && (b[end - 1] == b'\n' || b[end - 1] == b'\r') {
@@ -352,6 +469,103 @@ mod tests {
             w.write_all(resp.as_bytes()).unwrap();
             req
         })
+    }
+
+    // Like fake_agent, but writes raw bytes (frames) after the request line.
+    fn fake_stream_agent(path: std::path::PathBuf, frames: Vec<u8>) -> thread::JoinHandle<String> {
+        let listener = UnixListener::bind(&path).unwrap();
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut w = stream.try_clone().unwrap();
+            let mut r = BufReader::new(stream);
+            let mut connect = String::new();
+            r.read_line(&mut connect).unwrap();
+            w.write_all(b"OK 1\n").unwrap();
+            let mut req = String::new();
+            r.read_line(&mut req).unwrap();
+            w.write_all(&frames).unwrap();
+            req
+        })
+    }
+
+    fn frame(typ: u8, payload: &[u8]) -> Vec<u8> {
+        let mut f = vec![typ];
+        f.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        f.extend_from_slice(payload);
+        f
+    }
+
+    #[test]
+    fn exec_stream_delivers_output_in_order_then_the_exit() {
+        let dir = std::env::temp_dir().join(format!("vsock-test-s-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("vsock.sock");
+        let mut frames = frame(FRAME_STDOUT, b"one\n");
+        frames.extend(frame(FRAME_STDERR, &[0xff, 0xfe, b'\n'])); // not UTF-8
+        frames.extend(frame(FRAME_STDOUT, b"two\n"));
+        frames.extend(frame(FRAME_EXIT, &7i32.to_be_bytes()));
+        let agent = fake_stream_agent(sock.clone(), frames);
+        let mut got = vec![];
+        let end = exec_stream(
+            &sock,
+            &ExecRequest::new(vec!["true".into()], vec![], String::new()),
+            Duration::from_secs(5),
+            |t, b| got.push((t, b.to_vec())),
+        )
+        .unwrap();
+        assert_eq!(end, StreamEnd::Exit(7));
+        assert_eq!(
+            got,
+            vec![
+                (FRAME_STDOUT, b"one\n".to_vec()),
+                (FRAME_STDERR, vec![0xff, 0xfe, b'\n']),
+                (FRAME_STDOUT, b"two\n".to_vec()),
+            ]
+        );
+        let req = agent.join().unwrap();
+        assert!(
+            req.contains(r#""stream":true"#) && req.contains(r#""errorFrames":true"#),
+            "{}",
+            req
+        );
+    }
+
+    #[test]
+    fn exec_stream_reports_refusals_and_bad_streams() {
+        let dir = std::env::temp_dir().join(format!("vsock-test-sr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let req = ExecRequest::new(vec!["true".into()], vec![], String::new());
+
+        let sock = dir.join("refused.sock");
+        let agent = fake_stream_agent(
+            sock.clone(),
+            frame(FRAME_ERROR, b"exec: mounts need an exec root"),
+        );
+        let end = exec_stream(&sock, &req, Duration::from_secs(5), |_, _| {}).unwrap();
+        assert_eq!(
+            end,
+            StreamEnd::Refused("exec: mounts need an exec root".into())
+        );
+        agent.join().unwrap();
+
+        // Ended without an exit frame.
+        let sock = dir.join("eof.sock");
+        let agent = fake_stream_agent(sock.clone(), frame(FRAME_STDOUT, b"x"));
+        assert!(exec_stream(&sock, &req, Duration::from_secs(5), |_, _| {}).is_err());
+        agent.join().unwrap();
+
+        // A frame larger than the agent may send.
+        let sock = dir.join("big.sock");
+        let mut big = vec![FRAME_STDOUT];
+        big.extend_from_slice(&((MAX_FRAME_PAYLOAD + 1) as u32).to_be_bytes());
+        let agent = fake_stream_agent(sock.clone(), big);
+        assert!(matches!(
+            exec_stream(&sock, &req, Duration::from_secs(5), |_, _| {}),
+            Err(VsockError::Decode(_))
+        ));
+        agent.join().unwrap();
     }
 
     #[test]

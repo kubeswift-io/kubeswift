@@ -89,6 +89,7 @@ key named instead of being silently ignored. Delete the key.
 | `sandboxMaterialize.artifactCache.maxPercent` | Same, as a percentage of the cache filesystem; the smaller limit applies | `0` (none) |
 | `sandboxMaterialize.artifactCache.minAge` | An entry used more recently is never evicted | `10m` |
 | `sandboxMaterialize.registryCABundle` | PEM CA certificates every SwiftSandbox registry connection trusts on top of the system roots (images, models, artifacts, placements, output exports, cosign); for registries behind a private CA | `""` (system roots) |
+| `sandboxMaterialize.console` | Give sandbox launcher pods an unprivileged `console` container, read with `kubectl logs <pod> -c console` (`get pods/log`, no exec) | `true` |
 | `sandboxMaterialize.artifactCache.evictLegacy` | Also evict entries written before v0.17 (counted, otherwise never evicted). Set once no pre-v0.17 launcher runs | `false` |
 
 ### Snapshot backend images

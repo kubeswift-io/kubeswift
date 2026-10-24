@@ -46,6 +46,8 @@ func main() {
 			os.Exit(exportOutput(os.Args[2:]))
 		case "clean-outputs":
 			os.Exit(cleanOutputs(os.Args[2:]))
+		case "follow-console":
+			os.Exit(followConsole(os.Args[2:]))
 		}
 	}
 	var (

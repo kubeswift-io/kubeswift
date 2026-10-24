@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -164,6 +165,42 @@ func TestExecStream(t *testing.T) {
 		Argv: []string{"sh", "-c", "echo $FOO; pwd"}, Env: []string{"FOO=bar"}, Cwd: "/tmp"})
 	if out, _, _ := drainFrames(t, &buf2); out != "bar\n/tmp\n" {
 		t.Errorf("env+cwd stream stdout=%q", out)
+	}
+}
+
+// A streamed exec prepares like the single-shot one (bridge feature
+// workload-stream): its files are written before the command runs, and a host
+// that asks for error frames gets a refusal as one, never as a workload exit.
+func TestExecStream_PreparesAndReportsRefusals(t *testing.T) {
+	h, _ := newHandler()
+	h.execRoot = "/" // no chroot in the test: paths are real
+	path := filepath.Join(t.TempDir(), "secret")
+	var buf bytes.Buffer
+	h.execStream(&buf, Request{Op: "exec", Stream: true, ErrorFrames: true,
+		Argv:  []string{"cat", path},
+		Files: []ExecFile{{Path: path, Data: []byte("s3cret")}}})
+	if out, _, code := drainFrames(t, &buf); out != "s3cret" || code != 0 {
+		t.Fatalf("files before a streamed command: out=%q code=%d", out, code)
+	}
+
+	// A refusal: a file path that is not absolute.
+	var refused bytes.Buffer
+	h.execStream(&refused, Request{Op: "exec", Stream: true, ErrorFrames: true,
+		Argv: []string{"true"}, Files: []ExecFile{{Path: "relative", Data: []byte("x")}}})
+	typ, msg, err := guestagent.ReadFrame(&refused)
+	if err != nil || typ != guestagent.FrameError || !strings.Contains(string(msg), "relative") {
+		t.Fatalf("refusal: typ=%d msg=%q err=%v", typ, msg, err)
+	}
+	if _, _, err := guestagent.ReadFrame(&refused); err == nil {
+		t.Error("a frame after the error frame")
+	}
+
+	// Without ErrorFrames (swiftctl), the refusal stays a stderr line and exit 255.
+	var legacy bytes.Buffer
+	h.execStream(&legacy, Request{Op: "exec", Stream: true,
+		Argv: []string{"true"}, Files: []ExecFile{{Path: "relative", Data: []byte("x")}}})
+	if _, errOut, code := drainFrames(t, &legacy); code != 255 || !strings.Contains(errOut, "relative") {
+		t.Errorf("legacy refusal: stderr=%q code=%d", errOut, code)
 	}
 }
 

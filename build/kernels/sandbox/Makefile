@@ -25,7 +25,7 @@ export KBUILD_BUILD_USER := kubeswift
 export KBUILD_BUILD_HOST := kubeswift
 BUILDROOT_VERSION := 2024.02.6
 # Features of the bridge in rootfs-overlay/init (its BRIDGE_FEATURES).
-BRIDGE_FEATURES   := files mounts warm-mounts outputs
+BRIDGE_FEATURES   := files mounts warm-mounts outputs workload-stream
 BUILDROOT_DIR     := $(CURDIR)/buildroot
 OUTPUT_DIR        ?= $(CURDIR)/output$(if $(filter-out sandbox,$(PROFILE)),-$(PROFILE))
 EXTERNAL          := $(CURDIR)

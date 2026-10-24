@@ -69,7 +69,7 @@ done
 # same list to the artifact's bridge-features file, which swiftletd checks
 # before it asks for any of them: an older bridge ignores what it does not
 # know, and would run the workload without its files or mounts.
-BRIDGE_FEATURES="files mounts warm-mounts outputs"
+BRIDGE_FEATURES="files mounts warm-mounts outputs workload-stream"
 echo "sandbox-bridge: features: $BRIDGE_FEATURES"
 
 # fail ends the sandbox. It reports an exit code first (125), as a workload

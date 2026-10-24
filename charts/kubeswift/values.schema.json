@@ -68,7 +68,8 @@
             "evictLegacy": { "type": "boolean" }
           }
         },
-        "registryCABundle": { "type": "string" }
+        "registryCABundle": { "type": "string" },
+        "console": { "type": "boolean" }
       }
     },
     "snapshotORAS": {

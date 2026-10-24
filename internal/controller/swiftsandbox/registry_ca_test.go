@@ -34,7 +34,8 @@ func TestRegistryCAReachesEveryPull(t *testing.T) {
 		var out []corev1.Container
 		pod := buildPod(sb, "sandbox")
 		for _, c := range pod.Spec.InitContainers {
-			if c.Image == SandboxMaterializeImage() {
+			// The console container pulls nothing.
+			if c.Image == SandboxMaterializeImage() && c.Name != ConsoleContainerName {
 				out = append(out, c)
 			}
 		}
