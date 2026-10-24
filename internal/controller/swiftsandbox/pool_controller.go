@@ -562,6 +562,7 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 	pod := buildPod(slot, kernelName)
 	swiftguest.SetIntentDigest(pod, intentJSON)
 	addWarmStage(pod)
+	followWorkloadLog(pod)
 	pod.Labels[PoolLabelKey] = pool.Name
 	pod.Labels[SlotStateLabelKey] = slotStateWarm
 	pod.Labels[SlotNameLabelKey] = slot.Name

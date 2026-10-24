@@ -78,6 +78,8 @@ spec:
             - name: KUBESWIFT_SANDBOX_REGISTRY_CA_BUNDLE
               value: {{ . | quote }}
             {{- end }}
+            - name: KUBESWIFT_SANDBOX_CONSOLE
+              value: {{ ne .Values.sandboxMaterialize.console false | quote }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

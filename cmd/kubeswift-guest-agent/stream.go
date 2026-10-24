@@ -18,9 +18,13 @@ import (
 // command's stdin (a plain pipe; the PTY path is execAttach). rw is the framed
 // connection back to the host.
 func (h *handler) execStream(rw io.ReadWriter, req Request) {
-	fc := &frameConn{FrameWriter: guestagent.NewFrameWriter(rw)}
+	fc := &frameConn{FrameWriter: guestagent.NewFrameWriter(rw), errorFrames: req.ErrorFrames}
 	cmd, err := h.buildExecCmd(req)
 	if err != nil {
+		fc.exitErr(err.Error())
+		return
+	}
+	if err := h.prepareExec(req); err != nil {
 		fc.exitErr(err.Error())
 		return
 	}
@@ -127,6 +131,8 @@ func waitCode(cmd *exec.Cmd, fc *frameConn) int {
 // frameConn adds exit/error helpers over the serialized FrameWriter.
 type frameConn struct {
 	*guestagent.FrameWriter
+	// errorFrames reports a refusal as a FrameError (Request.ErrorFrames).
+	errorFrames bool
 }
 
 func (c *frameConn) write(typ byte, payload []byte) error { return c.Write(typ, payload) }
@@ -137,6 +143,10 @@ func (c *frameConn) exit(code int) { _ = c.Write(guestagent.FrameExit, guestagen
 // stream: a stderr frame plus a non-zero Exit frame, so the host prints it and exits
 // non-zero — never a silent stall.
 func (c *frameConn) exitErr(msg string) {
+	if c.errorFrames {
+		_ = c.Write(guestagent.FrameError, []byte(msg))
+		return
+	}
 	_ = c.Write(guestagent.FrameStderr, []byte("kubeswift-guest-agent: "+msg+"\n"))
 	c.exit(255)
 }

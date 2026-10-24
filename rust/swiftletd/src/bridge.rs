@@ -40,11 +40,17 @@ pub fn require(feature: &str, what: &str) -> Result<(), String> {
     ))
 }
 
+/// Whether the bridge lists `feature`.
+pub fn has(feature: &str) -> bool {
+    FEATURES.get().map(|f| f.contains(feature)).unwrap_or(false)
+}
+
 /// The first sandbox and gpu-sandbox kernels whose bridge has `feature`.
 fn minimum_kernels(feature: &str) -> (&'static str, &'static str) {
     match feature {
         "warm-mounts" => ("6.6.15", "6.6.4"),
         "outputs" => ("6.6.17", "6.6.6"),
+        "workload-stream" => ("6.6.18", "6.6.7"),
         _ => ("6.6.14", "6.6.3"),
     }
 }

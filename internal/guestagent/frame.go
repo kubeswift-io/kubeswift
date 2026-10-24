@@ -29,6 +29,10 @@ const (
 	FrameStdin      byte = 4 // host->guest: workload stdin (attach / -i)
 	FrameResize     byte = 5 // host->guest: TTY resize (attach); payload = rows:2 + cols:2, big-endian
 	FrameStdinClose byte = 6 // host->guest: stdin reached EOF; close the command's stdin (keep the connection for output)
+	// FrameError is guest->host and terminal: the agent refused the request
+	// before running anything (payload = the reason). Sent only to a host that
+	// asked for it (Request.ErrorFrames); others get a stderr line and Exit 255.
+	FrameError byte = 7
 )
 
 // MaxFramePayload bounds a single frame's payload so a hostile/broken peer cannot

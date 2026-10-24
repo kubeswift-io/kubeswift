@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
@@ -67,6 +68,7 @@ var sandboxCmd = &cobra.Command{
 }
 
 var sandboxLogsFollow bool
+var sandboxLogsTimestamps bool
 
 var sandboxLogsCmd = &cobra.Command{
 	Use:   "logs [sandbox-name]",
@@ -117,6 +119,7 @@ var (
 
 func init() {
 	sandboxLogsCmd.Flags().BoolVarP(&sandboxLogsFollow, "follow", "f", false, "Follow the log output")
+	sandboxLogsCmd.Flags().BoolVar(&sandboxLogsTimestamps, "timestamps", false, "Prefix each line with the time the node received it (not the guest's time)")
 	sandboxExecCmd.Flags().StringArrayVarP(&sandboxExecEnv, "env", "e", nil, "Environment variable KEY=VALUE (repeatable)")
 	sandboxExecCmd.Flags().StringVarP(&sandboxExecWorkdir, "workdir", "w", "", "Working directory inside the sandbox")
 	sandboxExecCmd.Flags().BoolVarP(&sandboxExecStdin, "stdin", "i", false, "Forward stdin to the command")
@@ -386,6 +389,24 @@ func runSandboxLogs(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// A launcher with a console container is read with the pod logs API:
+	// `get pods/log`, no exec into the privileged launcher.
+	if pod, err := clientset.CoreV1().Pods(ns).Get(cmd.Context(), target, metav1.GetOptions{}); err == nil && hasConsoleContainer(pod) {
+		stream, err := clientset.CoreV1().Pods(ns).GetLogs(target, &corev1.PodLogOptions{
+			Container:  cli.ConsoleContainer,
+			Follow:     sandboxLogsFollow,
+			Timestamps: sandboxLogsTimestamps,
+		}).Stream(cmd.Context())
+		if err != nil {
+			return fmt.Errorf("read the console of %s/%s: %w", ns, name, err)
+		}
+		defer stream.Close()
+		_, err = io.Copy(os.Stdout, stream)
+		return err
+	}
+	if sandboxLogsTimestamps {
+		return fmt.Errorf("--timestamps needs a launcher with a console container (KubeSwift v0.20 or later)")
+	}
 	runDir := "/var/lib/kubeswift/run/" + cli.GuestID(ns, target)
 	shellCmd := cli.SandboxLogsCommand(runDir, sandboxLogsFollow)
 
@@ -412,4 +433,14 @@ func runSandboxLogs(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("stream sandbox logs (is %s/%s running?): %w", ns, name, err)
 	}
 	return nil
+}
+
+// hasConsoleContainer reports whether a launcher pod has the console sidecar.
+func hasConsoleContainer(pod *corev1.Pod) bool {
+	for _, c := range pod.Spec.Containers {
+		if c.Name == cli.ConsoleContainer {
+			return true
+		}
+	}
+	return false
 }

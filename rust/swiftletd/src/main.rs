@@ -1,6 +1,7 @@
 mod action;
 mod agent_ready;
 mod bridge;
+mod console;
 mod cpuset;
 mod intent;
 mod kube_client;
@@ -85,6 +86,11 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format_timestamp_millis()
         .init();
+
+    // The console container follows this launcher's life, including
+    // an exit before the intent is read (console.rs; only sandbox launchers
+    // have a console directory).
+    console::hold_alive();
 
     if env::args().any(|a| a == "--version" || a == "-V") {
         log::info!("swiftletd {} (git {})", VERSION, GIT_COMMIT);

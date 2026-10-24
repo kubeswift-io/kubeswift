@@ -82,12 +82,17 @@ type Request struct {
 	TTY    bool     `json:"tty,omitempty"`    // allocate a PTY (interactive attach); implies stdin
 	Rows   uint16   `json:"rows,omitempty"`   // initial TTY rows (tty only)
 	Cols   uint16   `json:"cols,omitempty"`   // initial TTY cols (tty only)
-	// Files are written into the exec root before the command runs (single-shot
-	// exec only): a checked-out sandbox's secret files.
+	// Files are written into the exec root before the command runs: a
+	// checked-out sandbox's secret files. A streamed exec honours them too
+	// (bridge feature workload-stream).
 	Files []ExecFile `json:"files,omitempty"`
 	// Mounts are staged artifacts bound read-only into the exec root before
-	// the files and the command (single-shot exec only, mounts.go).
+	// the files and the command (mounts.go). A streamed exec honours them too.
 	Mounts []ExecMount `json:"mounts,omitempty"`
+	// ErrorFrames asks a streamed exec to report a refusal (anything that
+	// stops it before the command runs) as a FrameError, which a dispatching
+	// host tells apart from the workload's own exit.
+	ErrorFrames bool `json:"errorFrames,omitempty"`
 }
 
 // ExecFile is one file the exec op writes into the exec root: a path inside it,
@@ -505,19 +510,7 @@ func (h *handler) exec(req Request) Response {
 	if err != nil {
 		return Response{OK: false, Error: err.Error()}
 	}
-	if len(req.Mounts) > 0 {
-		if h.execRoot == "" || h.execRoot == "/" {
-			return Response{OK: false, Error: "exec: mounts need an exec root"}
-		}
-		stage := h.stageDir
-		if stage == "" {
-			stage = DefaultStageDir
-		}
-		if err := mountExecMounts(h.execRoot, stage, req.Mounts); err != nil {
-			return Response{OK: false, Error: err.Error()}
-		}
-	}
-	if err := writeExecFiles(h.execRoot, req.Files); err != nil {
+	if err := h.prepareExec(req); err != nil {
 		return Response{OK: false, Error: err.Error()}
 	}
 	stdout := &capBuffer{max: execOutputCap}
@@ -533,6 +526,24 @@ func (h *handler) exec(req Request) Response {
 		}
 	}
 	return Response{OK: true, Stdout: stdout.buf.String(), Stderr: stderr.buf.String(), ExitCode: &code}
+}
+
+// prepareExec binds the request's staged artifacts and writes its files into
+// the exec root, before the command runs (both exec forms).
+func (h *handler) prepareExec(req Request) error {
+	if len(req.Mounts) > 0 {
+		if h.execRoot == "" || h.execRoot == "/" {
+			return fmt.Errorf("exec: mounts need an exec root")
+		}
+		stage := h.stageDir
+		if stage == "" {
+			stage = DefaultStageDir
+		}
+		if err := mountExecMounts(h.execRoot, stage, req.Mounts); err != nil {
+			return err
+		}
+	}
+	return writeExecFiles(h.execRoot, req.Files)
 }
 
 // writeExecFiles writes files under root, creating their directories. A path

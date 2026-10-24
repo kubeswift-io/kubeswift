@@ -309,6 +309,17 @@ where
         .join("serial.sock")
         .to_string_lossy()
         .to_string();
+    // A cold sandbox's console file lands in the console volume (console.rs),
+    // read by its unprivileged console container. A warm slot's boot console
+    // stays here: that container shows only the checked-out workload.
+    if intent.is_sandbox() && !intent.sandbox_warm_slot {
+        if let Err(e) = crate::console::link_into_console(
+            Path::new(&format!("{}.log", serial_socket_path)),
+            crate::console::SERIAL_LOG,
+        ) {
+            log::warn!("sandbox_console_link error={}", e);
+        }
+    }
 
     let data_disk_paths = intent.data_disk_paths();
 

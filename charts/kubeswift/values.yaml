@@ -97,6 +97,12 @@ sandboxMaterialize:
   # exports, and cosign. For registries behind a private CA. Set here only:
   # tenants cannot add a CA. Empty: system roots only.
   registryCABundle: ""
+  # The console container of every sandbox launcher pod: the guest console
+  # (cold) or the checked-out workload's output (warm), read with
+  # `kubectl logs <pod> -c console` (get pods/log) instead of an exec into the
+  # privileged launcher. Unprivileged, no token, the console files only.
+  # Applies to pods created after the change.
+  console: true
 
 # snapshot-oras: the uploader/downloader image for the oci (OCI registry / ORAS)
 # snapshot backend. The controller passes this to the per-snapshot push Job (and
