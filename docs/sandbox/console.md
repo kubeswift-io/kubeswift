@@ -122,7 +122,7 @@ to its exec bridge.
 | Sandbox deleted | The pod goes; a follower's stream ends |
 | Launcher exits (any way) | The console container copies what is left and exits; the pod ends |
 | Controller restart | No effect |
-| Console container restarted by the kubelet | The new instance reads the console from the start (it is bounded) |
+| Console container stopped | Only an administrator can stop it (an exec into it); the guest cannot. It is not restarted (launcher pods never restart containers) and the pod turns not Ready while the sandbox runs on. Its memory does not grow with the workload's output, so an out-of-memory kill is not expected |
 | Migration | Sandboxes do not migrate |
 
 Nothing is kept anywhere else: once the pod is gone, so is the console.
