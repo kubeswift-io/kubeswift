@@ -6,6 +6,41 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.20.0] — 2026-10-24
+
+A minor release that makes a SwiftSandbox's console readable with the Kubernetes pod logs API (`kubectl logs <pod> -c console`) instead of an exec into its privileged launcher, and makes a warm checkout's workload output visible while it runs. See [SwiftSandbox console](docs/sandbox/console.md).
+
+### Upgrade
+
+- **Starting in v0.20.0, SwiftSandbox console output is exposed through the Kubernetes pod log API. Users with `pods/log` permission in the sandbox namespace, including users granted the built-in `view` role, can read the sandbox console.** This covers a cold sandbox's guest console and a warm checkout's workload stdout and stderr, live. Before, reading it took `pods/exec` on the launcher or the gateway's `swiftsandboxes/log`. Workloads should not print secrets. To keep the old behaviour, set the new chart value `sandboxMaterialize.console: false` (controller flag `--sandbox-console=false`). It is cluster-wide; there is no per-sandbox switch.
+- Every sandbox launcher pod created after the upgrade has a second container, `console` (unprivileged, no service account token, the console files only, read-only). Running sandboxes and warm-pool slots keep their pods and get no console until they are replaced; the upgrade restarts none of them. `swiftctl sandbox logs` and the gateway read older pods with the exec, as before.
+- Live warm-checkout output needs the new kernels **`kernels/sandbox:6.6.18`** and **`kernels/gpu-sandbox:6.6.7`** (bridge feature `workload-stream`). Point your SwiftKernels at them; a SwiftKernel's tag change pulls nothing by itself, see [SwiftKernel](docs/swiftkernel.md). On an older kernel a checked-out workload runs as before and its output appears in the console when it exits. Both artifacts carry Linux 6.6.158 and the same kernel as 6.6.17 / 6.6.6; only the guest agent and bridge changed. A GPU image's `nvidia.ko` built for 6.6.6 loads unchanged. Both were validated on a KVM cluster, `gpu-sandbox:6.6.7` on a warm GPU slot with a Pascal GPU passed through and its checkout's output streamed live.
+- No CRD changed; applying `crds/` is not needed. One chart value is new: `sandboxMaterialize.console` (default `true`). The gateway's `kubeswift-gateway-console` ClusterRole gains `get pods/log`; on a member whose gateway RBAC was set up by hand (`config/samples/gateway/member-rbac.yaml`), add it, or the gateway keeps reading consoles by exec.
+- Keep the controller, swiftletd and sandbox-materialize images at the same version, as the chart does: the console container runs the sandbox-materialize image and stops on a signal only this swiftletd gives.
+
+### Added
+
+- **SwiftSandbox console through the pod logs API** (#854). An unprivileged `console` container in every sandbox launcher pod (uid 65532, no capabilities, read-only root filesystem, RuntimeDefault seccomp, masked service account token, the console volume read-only) copies the console to its stdout. A cold sandbox's is the guest console; a warm checkout's is only its workload's output, from the dispatch on: the slot's boot console is not in it, and a slot serves one checkout. Reading needs `get pods/log` (and `get` on the SwiftSandbox and pods), no exec, attach or port-forward. Chart value `sandboxMaterialize.console`, controller flag `--sandbox-console`.
+- **Live warm-checkout output.** The guest agent's streamed exec writes a checkout's secret files and binds its artifacts like the single-shot one, and reports a refusal as an error frame (bridge feature `workload-stream`, kernels/sandbox 6.6.18, gpu-sandbox 6.6.7). swiftletd dispatches a checkout streamed and writes its output to the console as it arrives, bounded at 16 MiB (`KUBESWIFT_CONSOLE_MAX_BYTES`), then one notice; the guest never waits on the console and the workload's exit code is unaffected.
+- `swiftctl sandbox logs --timestamps` (the time the node received each line).
+
+### Changed
+
+- `swiftctl sandbox logs` reads the console container's logs. It execs into the launcher only for a pod without one, or for a caller refused `pods/log` who holds `pods/exec`; refused both, it says `pods/log` is missing (#856).
+- The gateway's `/sandbox-logs` reads the console container with the pod logs API as its credential, after the same `get swiftsandboxes/log` check of the user, and falls back to its exec bridge for older pods or a credential without `pods/log` (#856).
+
+### Docs
+
+- `docs/sandbox/console.md`: what the console shows, how it works, the security boundary, who can read it, bounds, lifecycle, timestamps, turning it off. Do not compare a guest's wall clock with host times: a warm slot's guest clock was measured 150 to 180 ms behind its node's; use the receive times or the guest's monotonic clock.
+- Samples, examples and docs pin `kernels/sandbox:6.6.18` and `kernels/gpu-sandbox:6.6.7`.
+
+### Known issues
+
+- A cold sandbox's guest console file is not bounded (#855). Cloud Hypervisor writes it, as in every earlier release; the run and console volumes have no size limit. The console container adds a copy in its container log, which the kubelet rotates and bounds.
+- `pods/log` covers every pod in a namespace; there is no per-sandbox console permission or opt-out.
+- A warm slot is deleted when its workload ends, and its console with it: read a warm sandbox's console while it runs (`-f` from the checkout).
+- Stopping a console container by hand (an exec into it) is not undone: launcher pods never restart containers, and the pod turns not Ready while the sandbox runs on.
+
 ## [v0.19.3] — 2026-10-23
 
 A patch release for cold SwiftSandbox artifacts. An optional artifact already on the node is now used however late its init container starts, as `fetchTimeout: 0s` always promised (#851). A cold sandbox's status no longer stays stale after a lost status write (#848).
