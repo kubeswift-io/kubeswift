@@ -750,14 +750,6 @@ mod tests {
         );
     }
 
-    #[test]
-    /// The affinity list MUST be wrapped in `[...]`. CH's option parser splits
-    /// --cpus on commas, so an unbracketed list is read as stray --cpus keys and
-    /// fails value conversion. Verified against the v53.0 binary:
-    ///   affinity=[0@[0],1@[1]]  -> accepted
-    ///   affinity=0@[0]:1@[1]    -> ParseCpus(Conversion("affinity"))
-    /// This test is what keeps that shape from regressing.
-    #[test]
     /// hugepage_size must be CH units ("2M"/"1G"). Kubernetes units are
     /// rejected by CH (`Conversion("hugepage_size", "2Mi")`), so if a
     /// translation is ever lost upstream this test is where it surfaces.
@@ -793,6 +785,13 @@ mod tests {
         );
     }
 
+    /// The affinity list MUST be wrapped in `[...]`. CH's option parser splits
+    /// --cpus on commas, so an unbracketed list is read as stray --cpus keys and
+    /// fails value conversion. Verified against the v53.0 binary:
+    ///   affinity=[0@[0],1@[1]]  -> accepted
+    ///   affinity=0@[0]:1@[1]    -> ParseCpus(Conversion("affinity"))
+    /// This test is what keeps that shape from regressing.
+    #[test]
     fn test_cpu_affinity_emits_bracketed_list_on_cpus() {
         let mut cfg = make_disk_boot_config();
         cfg.cpu_affinity = vec![(0, vec![2]), (1, vec![3])];
@@ -816,6 +815,7 @@ mod tests {
         assert!(!none.contains("affinity"), "unexpected affinity: {}", none);
     }
 
+    #[test]
     fn test_core_scheduling_emits_on_cpus() {
         let mut cfg = make_disk_boot_config();
         cfg.core_scheduling = Some("vm".to_string());
