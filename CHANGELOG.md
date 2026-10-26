@@ -6,8 +6,14 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Upgrade
+
+- **Image-backed data disks are now copied per guest.** A guest with `dataDiskRef` or `dataDiskRefs[].imageRef` gets its own `ReadWriteOnce` Block PVC (`<guest>-data-<name>`), filled from the SwiftImage once by a `<guest>-dataclone-<name>` Job before it boots. Guests running before the upgrade keep the image's PVC attached until their launcher pod is recreated (stop and start, offline migration), when their copy is taken from the image as it is then. SwiftImages already used this way may contain data written by guests: re-import any image that must be pristine.
+
 ### Fixed
 
+- **A guest wrote into the SwiftImage behind an image-backed data disk.** `dataDiskRef` and `dataDiskRefs[].imageRef` attached the image's own PVC to the guest, writable: a guest's writes changed the image for every guest that used it later, and while one guest ran no other guest using that image could start (Cloud Hypervisor refused the locked disk). Each guest now gets its own copy, and the image is only read.
+- **A Windows root-disk clone failed on an image whose GPT backup header was not at the end of the disk** (#875). `sgdisk -e` exits 4 on such an image even though it repairs it, and the clone Job runs under `set -e`. The clone Job, clone-grow-init and the shared-base materializer now run `sgdisk -e` a second time when the first fails; the second succeeds on a repaired table and still fails on a broken one.
 - **A guest whose data disks cannot move was sent on a live migration that could only fail** (#877). The live-migration storage check covered only the root disk. A guest with a `ReadWriteOnce` data disk (every `blank` data disk, every image-backed one) passed validation, its destination pod hit Multi-Attach, and the migration failed after 60 s with `DstNeverReady`. A node drain (`mode: auto`) took that live path too, so draining such a guest's node failed instead of moving it offline. Every data disk must now be `ReadWriteMany` + `Block`, and a PVC mounted as a directory or backing a filesystem `ReadWriteMany`, or the guest is offline-only: `mode: live` fails at once with `EligibilityMismatch` naming the volume, and `mode: auto` (and a drain) resolves to offline. The controller now also refuses `mode: live` itself for VFIO devices, node-local virtio backends and primary-UDN namespaces, which only auto mode and the admission webhook (off by default) checked.
 
 ## [v0.21.0-rc.1] — 2026-10-26

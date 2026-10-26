@@ -240,6 +240,11 @@ type ResolvedDataDisk struct {
 	// Ready is true once the disk is usable: image-backed = SwiftImage Ready;
 	// blank/attached = always true (PVC binding is gated by the controller).
 	Ready bool `json:"ready"`
+	// SourcePVC and SourceSize are set for an image-backed data disk: the
+	// SwiftImage's prepared PVC and image size. The guest attaches its own
+	// copy (PVCName), filled once from SourcePVC; the image is never attached.
+	SourcePVC  string `json:"sourcePVC,omitempty"`
+	SourceSize int64  `json:"sourceSize,omitempty"`
 }
 
 // HasSeed returns true if seed materialization inputs are present.

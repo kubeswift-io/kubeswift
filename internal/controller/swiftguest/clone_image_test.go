@@ -3,6 +3,7 @@ package swiftguest
 import (
 	"context"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -72,6 +73,24 @@ func assertCloneJobClean(t *testing.T, volumeMode string) {
 			t.Errorf("%s clone script no longer uses %s; the image requirement may have drifted", volumeMode, tool)
 		}
 	}
+	assertSgdiskRetried(t, script)
+}
+
+// assertSgdiskRetried checks #875: sgdisk -e can exit 4 on a table it has just
+// repaired (a misplaced backup GPT header, an oversized protective MBR), so
+// every `sgdisk -e X` under set -e is followed by `|| sgdisk -e X`.
+func assertSgdiskRetried(t *testing.T, script string) {
+	t.Helper()
+	all := regexp.MustCompile(`sgdisk -e (\S+)`).FindAllStringSubmatch(script, -1)
+	retried := regexp.MustCompile(`sgdisk -e (\S+) \|\| sgdisk -e (\S+)`).FindAllStringSubmatch(script, -1)
+	if len(all) == 0 || len(retried)*2 != len(all) {
+		t.Errorf("every sgdisk -e must be retried once (#875):\n%s", script)
+	}
+	for _, m := range retried {
+		if m[1] != m[2] {
+			t.Errorf("sgdisk retry targets differ: %q vs %q", m[1], m[2])
+		}
+	}
 }
 
 // clone-grow-init runs inside the launcher pod, so reusing the launcher image
@@ -91,6 +110,7 @@ func TestCloneGrowInit_RunsLauncherImageAndInstallsNothing(t *testing.T) {
 		if !strings.Contains(script, "sgdisk") {
 			t.Errorf("block=%v: script no longer uses sgdisk", isBlock)
 		}
+		assertSgdiskRetried(t, script)
 	}
 }
 

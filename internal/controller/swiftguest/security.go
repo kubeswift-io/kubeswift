@@ -94,10 +94,10 @@ func cloneGrowInitContainer(rg *resolved.ResolvedGuest, targetBytes int64) corev
 		// the raw image to the block device).
 		script = fmt.Sprintf(`set -e
 echo "clone-grow-init: Block mode, target=%d bytes, device=%s"
-sgdisk -e %s
+sgdisk -e %s || sgdisk -e %s  # a first run that repairs the table can exit 4 (#875)
 sync
 echo "clone-grow-init: complete (Block)"`,
-			targetBytes, DiskRootDevicePath, DiskRootDevicePath)
+			targetBytes, DiskRootDevicePath, DiskRootDevicePath, DiskRootDevicePath)
 		volumeDevices = []corev1.VolumeDevice{
 			{Name: "root-disk", DevicePath: DiskRootDevicePath},
 		}
@@ -108,10 +108,10 @@ echo "clone-grow-init: complete (Block)"`,
 		script = fmt.Sprintf(`set -e
 echo "clone-grow-init: target=%d bytes"
 qemu-img resize -f raw %s/image.raw %d
-sgdisk -e %s/image.raw
+sgdisk -e %s/image.raw || sgdisk -e %s/image.raw  # a first run that repairs the table can exit 4 (#875)
 sync
 echo "clone-grow-init: complete ($(stat -c %%s %s/image.raw) bytes)"`,
-			targetBytes, DisksRootPath, targetBytes, DisksRootPath, DisksRootPath)
+			targetBytes, DisksRootPath, targetBytes, DisksRootPath, DisksRootPath, DisksRootPath)
 		volumeMounts = []corev1.VolumeMount{
 			{Name: "root-disk", MountPath: DisksRootPath},
 		}

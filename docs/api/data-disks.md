@@ -8,7 +8,7 @@ shorthand for one image-backed disk). Data disks work with every boot path
 | Kind | Field | What it is | VM-visible disk? |
 |---|---|---|---|
 | **Blank** | `blank: {size, storageClassName, volumeMode}` | A new, empty, sized volume — no image. The controller provisions a guest-owned PVC; the guest formats it. | Yes |
-| **Image-backed** | `imageRef: {name}` | A Ready SwiftImage attached as a second disk (pre-seeded content). | Yes |
+| **Image-backed** | `imageRef: {name}` | A copy of a Ready SwiftImage (pre-seeded content). The controller provisions a guest-owned Block PVC and fills it from the image once; the image itself is never attached. | Yes |
 | **Attached PVC** | `pvcRef: {name}` (+ `attachAsDisk: true`) | An existing PVC. With `attachAsDisk` and a **Block** PVC, attached as a raw VM disk; otherwise a filesystem-directory mount (pool storage, not a VM disk). | Only with `attachAsDisk` |
 
 ## Blank data disk (the common case)
@@ -67,6 +67,15 @@ devicePath, bound}`. The blank PVC is garbage-collected when the guest is delete
 # or the singular shorthand (one image-backed disk named "data"):
   dataDiskRef: {name: my-data-image}
 ```
+
+Each guest gets its own copy: a guest-owned `ReadWriteOnce` Block PVC
+(`<guest>-data-<name>`, sized to the image) that a one-shot Job fills from the
+SwiftImage's PVC, read-only, before the guest boots. Writes stay in the guest's
+copy, and any number of guests can use the same image at once. Until v0.21.0
+the image's own PVC was attached to the guest, writable. A guest started on an
+earlier version keeps that until its launcher pod is recreated (a stop and
+start, an offline migration); its copy is then taken from the image as it is,
+including what guests wrote into it.
 
 > ⚠️ **Never point an image-backed data disk at a bootable OS image** (especially
 > the same one used for `imageRef`). A cloud OS image has fixed partition and

@@ -190,8 +190,13 @@ func run(ctx context.Context, cfg config, out io.Writer) error {
 		// before getting this far: the retry sees the guest, and the header
 		// would stay mid-disk forever.
 		if cfg.guestBytes > imageBytes {
-			if msg, err := exec.CommandContext(ctx, "sgdisk", "-e", path).CombinedOutput(); err != nil {
-				return fmt.Errorf("moving the backup GPT header to the end of %s: %w: %s", path, err, msg)
+			// A first run that repairs the table (a backup header that is not at
+			// the end, an oversized protective MBR) can exit 4 although it
+			// fixed it (#875); a second run on the repaired table succeeds.
+			if _, err := exec.CommandContext(ctx, "sgdisk", "-e", path).CombinedOutput(); err != nil {
+				if msg, err := exec.CommandContext(ctx, "sgdisk", "-e", path).CombinedOutput(); err != nil {
+					return fmt.Errorf("moving the backup GPT header to the end of %s: %w: %s", path, err, msg)
+				}
 			}
 		}
 		verb := "created"
