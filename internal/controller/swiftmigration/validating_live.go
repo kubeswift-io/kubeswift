@@ -13,6 +13,7 @@ import (
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/migrationcert"
+	"github.com/kubeswift-io/kubeswift/internal/resolved"
 )
 
 // handleValidatingLive is the live-mode Validating phase.
@@ -91,6 +92,28 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 		return phaseTransient(fmt.Errorf("check live-migration storage: %w", err))
 	} else if gate != nil {
 		return phaseFailure(gate.Error(), migrationv1alpha1.FailureReasonEligibilityMismatch)
+	}
+
+	// The rest of live eligibility, which auto-mode resolution and the
+	// admission webhook (also off by default) apply: devices, backends and
+	// networks that stay with the source node cannot follow the guest. An
+	// explicit mode=live used to get past here and fail later.
+	if guest.HasVFIODevices() {
+		return phaseFailure(
+			fmt.Sprintf("SwiftGuest %q has VFIO devices (gpuProfileRef or an SR-IOV interface); they cannot live-migrate. Use spec.mode=offline", guest.Name),
+			migrationv1alpha1.FailureReasonEligibilityMismatch)
+	}
+	if guest.HasNodeLocalVirtioBackends() {
+		return phaseFailure(
+			fmt.Sprintf("SwiftGuest %q has node-local virtio backends (spec.filesystems, spec.vhostUserDevices, or a vhost-user interface); they cannot live-migrate. Use spec.mode=offline", guest.Name),
+			migrationv1alpha1.FailureReasonEligibilityMismatch)
+	}
+	if modelA, err := resolved.NamespaceHasPrimaryUDN(ctx, r.Client, mig.Namespace); err != nil {
+		return phaseTransient(fmt.Errorf("check primary-UDN namespace: %w", err))
+	} else if modelA {
+		return phaseFailure(
+			fmt.Sprintf("SwiftGuest %q is on namespace %q's primary user-defined network, which cannot carry a live migration. Use spec.mode=offline", guest.Name, mig.Namespace),
+			migrationv1alpha1.FailureReasonEligibilityMismatch)
 	}
 
 	// Stamp status.Mode + SourceNode + DestinationNode + SourcePodUID.

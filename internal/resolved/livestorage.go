@@ -1,7 +1,14 @@
 package resolved
 
 import (
+	"context"
 	"fmt"
+	"slices"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
@@ -31,4 +38,79 @@ func LiveMigrationStorageError(guest *swiftv1alpha1.SwiftGuest, class *swiftv1al
 			"Set spec.storage on the SwiftGuest or its SwiftGuestClass to ReadWriteMany+Block, or use spec.mode=offline.",
 		guest.Name, storage.AccessMode, storage.VolumeMode,
 	)
+}
+
+// LiveMigrationVolumesError applies the live-migration rule to every volume
+// the launcher pod mounts besides the root disk: data disks and virtio-fs
+// filesystems backed by a PVC. During a live migration the source and the
+// destination launcher hold each volume at once, on two nodes, so a
+// ReadWriteOnce volume cannot attach on the destination (Multi-Attach) and the
+// migration could only fail later, after its Preparing budget.
+//
+//   - A disk the VM writes to (every data disk) needs ReadWriteMany AND Block,
+//     the root disk's rule. Image-backed data disks (dataDiskRef, dataDiskRefs
+//     imageRef) are a file on the SwiftImage's Filesystem PVC, so they never
+//     qualify.
+//   - A PVC mounted into the launcher as a directory (dataDiskRefs pvcRef
+//     without attachAsDisk, filesystems pvcRef) needs ReadWriteMany.
+//
+// gate is non-nil, naming the first volume that does not qualify, when the
+// guest cannot be live-migrated; err is a failed read the caller may retry. A
+// PVC that does not exist is a gate (it cannot be shown to qualify). Shared by
+// the SwiftMigration admission webhook and the controller so the two cannot
+// drift.
+func LiveMigrationVolumesError(ctx context.Context, c client.Reader, guest *swiftv1alpha1.SwiftGuest) (gate error, err error) {
+	refuse := func(format string, a ...any) error {
+		return fmt.Errorf("SwiftGuest %q cannot be live-migrated: "+format+
+			"; the source and destination hold every volume at once on two nodes. Use spec.mode=offline", append([]any{guest.Name}, a...)...)
+	}
+	if guest.Spec.DataDiskRef != nil {
+		return refuse("its data disk from SwiftImage %q is a file on the image's Filesystem PVC (a data disk needs ReadWriteMany+Block)", guest.Spec.DataDiskRef.Name), nil
+	}
+	check := func(what, pvcName string, needBlock bool) (error, error) {
+		pvc := &corev1.PersistentVolumeClaim{}
+		if err := c.Get(ctx, types.NamespacedName{Namespace: guest.Namespace, Name: pvcName}, pvc); err != nil {
+			if apierrors.IsNotFound(err) {
+				return refuse("%s PVC %q does not exist", what, pvcName), nil
+			}
+			return nil, fmt.Errorf("get %s PVC %q: %w", what, pvcName, err)
+		}
+		modes := pvc.Status.AccessModes
+		if len(modes) == 0 {
+			modes = pvc.Spec.AccessModes
+		}
+		block := pvc.Spec.VolumeMode != nil && *pvc.Spec.VolumeMode == corev1.PersistentVolumeBlock
+		switch {
+		case !slices.Contains(modes, corev1.ReadWriteMany):
+			return refuse("%s PVC %q is %v, not ReadWriteMany", what, pvcName, modes), nil
+		case needBlock && !block:
+			return refuse("%s PVC %q is volumeMode Filesystem; a disk needs ReadWriteMany+Block", what, pvcName), nil
+		}
+		return nil, nil
+	}
+	for i := range guest.Spec.DataDiskRefs {
+		d := &guest.Spec.DataDiskRefs[i]
+		var gate, err error
+		switch {
+		case d.ImageRef != nil:
+			gate = refuse("data disk %q from SwiftImage %q is a file on the image's Filesystem PVC (a data disk needs ReadWriteMany+Block)", d.Name, d.ImageRef.Name)
+		case d.Blank != nil:
+			gate, err = check(fmt.Sprintf("data disk %q", d.Name), BlankDataDiskPVCName(guest.Name, d.Name), true)
+		case d.PVCRef != nil:
+			gate, err = check(fmt.Sprintf("data disk %q", d.Name), d.PVCRef.Name, d.AttachAsDisk)
+		}
+		if gate != nil || err != nil {
+			return gate, err
+		}
+	}
+	for i := range guest.Spec.Filesystems {
+		f := &guest.Spec.Filesystems[i]
+		if f.Source.PVCRef == nil {
+			continue
+		}
+		if gate, err := check(fmt.Sprintf("filesystem %q", f.Name), f.Source.PVCRef.Name, false); gate != nil || err != nil {
+			return gate, err
+		}
+	}
+	return nil, nil
 }

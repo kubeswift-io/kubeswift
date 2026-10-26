@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -15,6 +16,7 @@ import (
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/resolved"
 )
 
 // migrationScheme builds a scheme registering the types the validator
@@ -1471,6 +1473,47 @@ func TestValidate_SharedBaseDiskRefusesEveryMode(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "cannot be migrated in any mode") {
 				t.Errorf("wrong refusal: %v", err)
+			}
+		})
+	}
+}
+
+// #877: the gate covers data disks, not only the root disk, and kernel-boot
+// guests too. An RWO data disk could not attach on the destination.
+func TestGateLiveModeStorage_DataDisks(t *testing.T) {
+	block := corev1.PersistentVolumeBlock
+	rwxBlock := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "class"},
+		Spec: swiftv1alpha1.SwiftGuestClassSpec{Storage: &swiftv1alpha1.StorageSpec{
+			AccessMode: corev1.ReadWriteMany, VolumeMode: corev1.PersistentVolumeBlock}},
+	}
+	for _, tc := range []struct {
+		name       string
+		kernelBoot bool
+		mode       corev1.PersistentVolumeAccessMode
+		wantReject bool
+	}{
+		{"disk boot, RWO data disk", false, corev1.ReadWriteOnce, true},
+		{"disk boot, RWX+Block data disk", false, corev1.ReadWriteMany, false},
+		{"kernel boot, RWO data disk", true, corev1.ReadWriteOnce, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			guest := newSwiftGuest("guest", "default")
+			if tc.kernelBoot {
+				guest.Spec.KernelRef = &corev1.LocalObjectReference{Name: "k"}
+			}
+			guest.Spec.DataDiskRefs = []swiftv1alpha1.DataDiskRef{{Name: "scratch", Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("1Gi")}}}
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: resolved.BlankDataDiskPVCName("guest", "scratch"), Namespace: "default"},
+				Spec:       corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{tc.mode}, VolumeMode: &block},
+			}
+			c := fake.NewClientBuilder().WithScheme(migrationScheme(t)).WithObjects(guest, rwxBlock, pvc).Build()
+			err := (&Validator{Client: c}).gateLiveModeStorage(context.Background(), guest)
+			if tc.wantReject != (err != nil) {
+				t.Fatalf("reject=%v, want %v (err=%v)", err != nil, tc.wantReject, err)
+			}
+			if err != nil && !strings.Contains(err.Error(), `data disk "scratch"`) {
+				t.Errorf("error should name the data disk: %q", err)
 			}
 		})
 	}

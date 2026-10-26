@@ -29,7 +29,9 @@ import (
 //   - networking is multi-node OR allowIPChange=true
 //
 //   - storage is live-migration-capable (resolved.LiveMigrationStorageError:
-//     kernel-boot, or RWX+Block root storage)
+//     kernel-boot, or RWX+Block root storage; and
+//     resolved.LiveMigrationVolumesError: every data disk RWX+Block, every
+//     PVC-backed filesystem RWX)
 //
 // Storage IS checked here. It used not to be — on the assumption that
 // Validating-live would reject incapable storage, which it never did — so
@@ -127,17 +129,22 @@ func (r *SwiftMigrationReconciler) liveStorageGate(
 	ctx context.Context,
 	guest *swiftv1alpha1.SwiftGuest,
 ) (gate error, classFound bool, err error) {
-	if guest.Spec.KernelRef != nil {
-		return nil, true, nil
-	}
-	var class swiftv1alpha1.SwiftGuestClass
-	if err := r.Get(ctx, client.ObjectKey{Name: guest.Spec.GuestClassRef.Name}, &class); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, false, nil
+	if guest.Spec.KernelRef == nil {
+		var class swiftv1alpha1.SwiftGuestClass
+		if err := r.Get(ctx, client.ObjectKey{Name: guest.Spec.GuestClassRef.Name}, &class); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, false, nil
+			}
+			return nil, false, err
 		}
-		return nil, false, err
+		if gate := resolved.LiveMigrationStorageError(guest, &class); gate != nil {
+			return gate, true, nil
+		}
 	}
-	return resolved.LiveMigrationStorageError(guest, &class), true, nil
+	// Data disks and PVC-backed filesystems too, kernel boot included: the
+	// destination must be able to attach every volume the source holds.
+	gate, err = resolved.LiveMigrationVolumesError(ctx, r.Client, guest)
+	return gate, true, err
 }
 
 // hasVFIODevices returns true when the guest references VFIO devices
