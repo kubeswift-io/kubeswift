@@ -12,6 +12,13 @@ This page is the operator entry point; the deep dives are linked inline.
 > reads the NoCloud `cidata` seed and runs the first-boot user-data** (RDP
 > enabled), reaching `Running` with an IP — the last previously-untested piece
 > (in-cluster cloudbase-init provisioning) is now closed.
+>
+> **Cloud Hypervisor v54.0 (KubeSwift v0.21.0), validated 2026-10-26.** Windows
+> Server 2025 boots with the root disk on the path KubeSwift emits
+> (`image_type=raw,direct=on`, which v54 no longer lets misalign): a 256 MiB
+> write and an unbuffered copy (`robocopy /J`) read back identical, the System
+> log shows no storage errors, and the data survives an in-guest reboot and a
+> stop and start (`runPolicy`).
 
 ## How it works — `osType: windows`
 

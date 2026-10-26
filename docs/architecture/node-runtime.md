@@ -74,9 +74,55 @@ The runtime directory is created under `KUBESWIFT_RUN_DIR` (default `/var/lib/ku
 
 ## Cloud Hypervisor requirements
 
-- **Version:** v53.0 (CLI format: `--api-socket path=`, `--disk path=`, etc.)
-- **Binary:** Included in the swiftletd container image at `/usr/local/bin/cloud-hypervisor`
+- **Version:** v54.0 since KubeSwift v0.21.0 (v53.0 before). CLI format: `--api-socket path=`, `--disk path=`, etc.
+- **Binary:** Included in the swiftletd container image at `/usr/local/bin/cloud-hypervisor`, checksum-pinned in `images/swiftletd/Containerfile`
 - **Socket:** Unix socket only; no TCP binding
+
+### Settings KubeSwift sets explicitly
+
+Cloud Hypervisor v54 changed two defaults. KubeSwift sets both explicitly, so
+guests behave as they did on v53:
+
+- **Nested virtualization:** `--cpus ...,nested=on`. Guests see VMX/SVM and can
+  use `/dev/kvm`, as on v53 (v54's default is off). This is compatibility
+  behaviour; a future API may make it a per-guest choice.
+- **virtio-net offloads:** `offload_csum=on,offload_tso=on,offload_ufo=on` on
+  every `--net` (tap and vhost-user). With v54's default (off), guest-to-pod
+  TCP throughput on the same node fell from about 11 Gbps to under 1 Gbps.
+
+Every file-backed `--disk` carries `image_type=raw` (v54 no longer detects the
+image type). These settings are part of the VM's configuration, so a snapshot,
+a restore and a live migration keep them, and a guest restored from a v53
+snapshot keeps v53's settings.
+
+### Upgrades
+
+A chart upgrade does not change the hypervisor of guests that are already
+running. A guest keeps the launcher image it was started with (swiftletd and
+Cloud Hypervisor), including across live migration and node drain; it moves to
+the new version when its launcher pod is recreated (a stop and start, or an
+offline migration). Guests started on v53 therefore stay on v53 until then.
+Live-migrating a running guest onto a newer Cloud Hypervisor is not supported.
+
+v54 restores memory snapshots taken on v53 (including `cloneFromSnapshot`).
+
+### Known limitations (v54)
+
+- **Live migration between unlike CPUs:** v54 checks CPU features more
+  strictly and may refuse a migration between hosts whose CPUs differ.
+  Validated between hosts with identical CPUs only.
+- **Unaligned `direct=on` I/O** now fails instead of being emulated. Ubuntu
+  24.04 and Windows Server 2025 guests were validated on the disk path
+  KubeSwift emits.
+- **VM Generation ID:** v54 exposes the device (ACPI `VMGENCTR`). Ubuntu cloud
+  images ship its driver as a module that is not loaded, so a guest cloned from
+  a memory snapshot does not reseed its RNG unless it loads `vmgenid`. Sandbox
+  kernels do not include it; sandboxes are never restored.
+- **GPU:** passthrough uses legacy VFIO. v54's iommufd backend works only with
+  its new P2P BAR mapping turned off (`vfio_p2p_dma=off`); KubeSwift does not
+  use iommufd.
+- **No hierarchical PCIe topology:** GPUs that need a PCIe root port per
+  device (HGX SXM) still run on QEMU.
 
 ## Status reporting
 
