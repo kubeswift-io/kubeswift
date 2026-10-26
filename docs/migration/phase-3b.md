@@ -134,10 +134,23 @@ annotation-only and not persisted to status.
   discipline:** verify `lscpu` flag uniformity across nodes that
   participate in live migration. A `swiftctl migrate --check` pre-flight
   is tracked (Follow-up #10).
-- **Complete swiftletd rollouts before live-migrating.** A live migration
-  reuses the source pod's launcher image for the destination pod
-  (clone-src pod builder); mid-rollout image skew can stall the
-  destination image pull.
+- **A guest migrates on the launcher it was started with.** The destination
+  pod is a copy of the source pod, images included. A KubeSwift upgrade does
+  not change the launcher image (swiftletd and Cloud Hypervisor) of guests
+  that are already running, and live-migrating one, or draining its node,
+  keeps it on that launcher. A guest moves to the new launcher only when its
+  launcher pod is recreated (a stop and start, or an offline migration). Up
+  to v0.20.0 a guest started before an upgrade could not be live-migrated
+  after it (`ImageTagMismatch`). Moving a running guest to a newer Cloud
+  Hypervisor by live migration is not supported.
+- **The source launcher pod must be unmodified.** A live migration refuses
+  (`ImageTagMismatch`) to copy a source pod whose spec was changed after the
+  controller created it, such as a patched container or init-container
+  image (its `metadata.generation` is above 1, or a container restarted),
+  and (`Other`) a pod at the guest's launcher name that the guest does not
+  control. On API servers older than Kubernetes 1.33, which do not set a
+  pod's generation, each image's repository must match the one the kubelet
+  reports.
 - **No default `spec.timeout`.** An unset timeout means no runaway gate;
   set `--timeout` (live mode enforces a 60s floor) on workloads where a
   stuck migration must auto-fail. Cancel anytime with

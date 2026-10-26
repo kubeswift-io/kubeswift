@@ -383,6 +383,34 @@ func dstPodMatches(existing *corev1.Pod, mig *migrationv1alpha1.SwiftMigration, 
 	return false
 }
 
+// podImagesDiff compares the container and init-container images of two
+// pods by container name and describes the first difference, or returns "".
+func podImagesDiff(got, want *corev1.Pod) string {
+	diff := func(kind string, g, w []corev1.Container) string {
+		if len(g) != len(w) {
+			return fmt.Sprintf("%d %s, want %d", len(g), kind, len(w))
+		}
+		images := make(map[string]string, len(w))
+		for _, c := range w {
+			images[c.Name] = c.Image
+		}
+		for _, c := range g {
+			wantImage, ok := images[c.Name]
+			if !ok {
+				return fmt.Sprintf("unexpected %s %q", kind, c.Name)
+			}
+			if c.Image != wantImage {
+				return fmt.Sprintf("%s %q image %q, want %q", kind, c.Name, c.Image, wantImage)
+			}
+		}
+		return ""
+	}
+	if d := diff("init containers", got.Spec.InitContainers, want.Spec.InitContainers); d != "" {
+		return d
+	}
+	return diff("containers", got.Spec.Containers, want.Spec.Containers)
+}
+
 // dstPodReady returns true when the destination pod has reached
 // Ready. Per design §2.3 Preparing exit condition:
 // status.phase=Running AND Ready condition True.

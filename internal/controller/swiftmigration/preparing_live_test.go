@@ -38,8 +38,12 @@ func preparingLiveFixture(t *testing.T, srcUID types.UID) (*migrationv1alpha1.Sw
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"},
 	}
-	src := templateSrcPod("guest", "default")
+	src := ranAsCreated(templateSrcPod("guest", "default"))
 	src.UID = srcUID
+	src.Generation = 1
+	ref := guestControllerRef(guest.Name)
+	ref.UID = guest.UID
+	src.OwnerReferences = []metav1.OwnerReference{ref}
 	return mig, guest, src
 }
 

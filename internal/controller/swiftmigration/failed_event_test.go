@@ -13,7 +13,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
-	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 )
 
 // drainEvents returns every event recorded so far.
@@ -105,15 +104,18 @@ func TestDispatchResult_NoEventUntilTheFailureIsPersisted(t *testing.T) {
 	}
 }
 
-// The lab case (#694): a live migration refused at validation because the
-// source launcher came from another build recorded no event at all.
+// #694: a live migration refused at validation recorded no event at all.
+// (The lab case was a source launcher from an earlier release, refused
+// because it differed from the controller's default; that is no longer a
+// refusal. A source pod whose image was patched after creation still is.)
 func TestReconcile_RefusedAtValidationRecordsAWarningEvent(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
 	node := newSpaciousNode("worker-2", 8, 65536)
-	t.Setenv(swiftguest.LauncherImageEnv, "ghcr.io/test/swiftletd:v2.0.0")
 	srcPod := newSourcePodWithLauncherImage("guest", "default", "uid", "ghcr.io/test/swiftletd:v1.0.0")
+	srcPod.Spec.Containers[0].Image = "evil.example/root:1"
+	srcPod.Generation = 2 // the API server's bump for the patch
 	mig := newMigration("m", "default")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(mig, guest, class, node, srcPod).WithStatusSubresource(mig).Build()
@@ -137,7 +139,7 @@ func TestReconcile_RefusedAtValidationRecordsAWarningEvent(t *testing.T) {
 		t.Fatalf("phase=%s reason=%s, want Failed/ImageTagMismatch", got.Status.Phase, got.Status.FailureReason)
 	}
 	events := failedEvents(drainEvents(rec))
-	if len(events) != 1 || !strings.Contains(events[0], "ImageTagMismatch: ") || !strings.Contains(events[0], "v1.0.0") {
+	if len(events) != 1 || !strings.Contains(events[0], "ImageTagMismatch: ") || !strings.Contains(events[0], "generation 2") {
 		t.Errorf("events = %q, want one MigrationFailed warning naming the mismatch", events)
 	}
 	// A terminal migration reconciles again without reporting again.

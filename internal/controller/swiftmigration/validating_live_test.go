@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -25,10 +26,11 @@ import (
 // SwiftGuest controller injects this on real migration-eligible pods).
 func withClientStunnelSidecar(p *corev1.Pod) *corev1.Pod {
 	p.Spec.Containers = append(p.Spec.Containers, corev1.Container{
-		Name: migrationsidecar.ContainerName,
-		Env:  []corev1.EnvVar{{Name: migrationsidecar.EnvRole, Value: migrationsidecar.RoleClient}},
+		Name:  migrationsidecar.ContainerName,
+		Image: "ghcr.io/test/stunnel:v1",
+		Env:   []corev1.EnvVar{{Name: migrationsidecar.EnvRole, Value: migrationsidecar.RoleClient}},
 	})
-	return p
+	return ranAsCreated(p)
 }
 
 // migrationNodeIdentitySecret builds a per-node identity Secret fixture
@@ -57,6 +59,21 @@ func newSourcePodWithLauncherImage(guestName, ns, uid, image string) *corev1.Pod
 	p.Spec.Containers = []corev1.Container{
 		{Name: LauncherContainerName, Image: image},
 	}
+	return ranAsCreated(p)
+}
+
+// ranAsCreated sets the pod's container statuses to its spec images, as the
+// kubelet reports a launcher pod whose spec nobody patched.
+func ranAsCreated(p *corev1.Pod) *corev1.Pod {
+	statuses := func(cs []corev1.Container) []corev1.ContainerStatus {
+		var out []corev1.ContainerStatus
+		for _, c := range cs {
+			out = append(out, corev1.ContainerStatus{Name: c.Name, Image: c.Image, ImageID: "sha256:0123"})
+		}
+		return out
+	}
+	p.Status.InitContainerStatuses = statuses(p.Spec.InitContainers)
+	p.Status.ContainerStatuses = statuses(p.Spec.Containers)
 	return p
 }
 
@@ -65,16 +82,31 @@ func newSourcePodWithLauncherImage(guestName, ns, uid, image string) *corev1.Pod
 func newSourcePod(guestName, ns, uid string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      guestName,
-			Namespace: ns,
-			UID:       types.UID(uid),
+			Name:       guestName,
+			Namespace:  ns,
+			UID:        types.UID(uid),
+			Generation: 1, // as created; the API server bumps it on a spec change
 			Labels: map[string]string{
 				"swift.kubeswift.io/guest": guestName,
 			},
+			// The guest's own launcher: controlled by it. Test guests have no
+			// UID, so the reference carries none either.
+			OwnerReferences: []metav1.OwnerReference{guestControllerRef(guestName)},
 		},
 		Spec: corev1.PodSpec{
 			NodeName: "worker-1",
 		},
+	}
+}
+
+// guestControllerRef is the controller reference the SwiftGuest controller
+// puts on a guest's launcher pod.
+func guestControllerRef(guestName string) metav1.OwnerReference {
+	return metav1.OwnerReference{
+		APIVersion: swiftv1alpha1.GroupName + "/" + swiftv1alpha1.Version,
+		Kind:       "SwiftGuest",
+		Name:       guestName,
+		Controller: ptr.To(true),
 	}
 }
 
@@ -400,114 +432,7 @@ func TestValidatingLive_TargetNodeCordoned_Fails(t *testing.T) {
 
 // --- Phase 3b PR 2 Commit D: net-new test coverage --------------------
 
-// TestValidatingLive_ImageTagMatch_HappyPath verifies that when the src
-// pod's launcher container image matches the controller's default
-// (swiftguest.LauncherImage), the LBA-1 trip-wire passes silently and
-// the phase advances normally.
-func TestValidatingLive_ImageTagMatch_HappyPath(t *testing.T) {
-	scheme := validatingScheme(t)
-	guest := newGuestForValidating("guest", "default", "class-default")
-	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("worker-2", 8, 65536)
-	// Pin the launcher image via env so the test asserts on a stable
-	// value (independent of LauncherImageDefault drift).
-	t.Setenv(swiftguest.LauncherImageEnv, "ghcr.io/test/swiftletd:v1.0.0")
-	srcPod := newSourcePodWithLauncherImage("guest", "default", "uid", "ghcr.io/test/swiftletd:v1.0.0")
-	mig := newMigration("m", "default")
-	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
-	mig.Spec.AllowIPChange = true
-
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(mig, guest, class, node, srcPod).
-		WithStatusSubresource(mig).
-		Build()
-	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
-
-	status := mig.Status.DeepCopy()
-	result := r.handleValidatingLive(context.Background(), mig, status)
-	if result.FailureMsg != "" {
-		t.Fatalf("expected silent pass on matching image tags; got failure: %q", result.FailureMsg)
-	}
-	if !result.Advanced {
-		t.Fatal("expected Advanced=true on matching image tags")
-	}
-	if status.Phase != migrationv1alpha1.SwiftMigrationPhasePreparing {
-		t.Errorf("phase: want Preparing, got %q", status.Phase)
-	}
-}
-
-// TestValidatingLive_ImageTagMatch_Mismatch_FailsWithImageTagMismatch
-// is the LBA-1 trip-wire fail-loud assertion. If a future refactor
-// regresses newDstPod's clone-src guarantee (or if a partial rolling
-// upgrade puts the controller and src pod on different launcher
-// versions), the migration must fail with ImageTagMismatch and the
-// message must point operators at LBA-1.
-func TestValidatingLive_ImageTagMatch_Mismatch_FailsWithImageTagMismatch(t *testing.T) {
-	scheme := validatingScheme(t)
-	guest := newGuestForValidating("guest", "default", "class-default")
-	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("worker-2", 8, 65536)
-	t.Setenv(swiftguest.LauncherImageEnv, "ghcr.io/test/swiftletd:v2.0.0")
-	// src pod runs the OLD launcher image; controller default is v2.0.0.
-	srcPod := newSourcePodWithLauncherImage("guest", "default", "uid", "ghcr.io/test/swiftletd:v1.0.0")
-	mig := newMigration("m", "default")
-	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
-
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(mig, guest, class, node, srcPod).
-		WithStatusSubresource(mig).
-		Build()
-	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme}
-
-	result := r.handleValidatingLive(context.Background(), mig, &mig.Status)
-	if result.FailureReason != migrationv1alpha1.FailureReasonImageTagMismatch {
-		t.Errorf("FailureReason: want ImageTagMismatch, got %q", result.FailureReason)
-	}
-	if !strings.Contains(result.FailureMsg, "v1.0.0") || !strings.Contains(result.FailureMsg, "v2.0.0") {
-		t.Errorf("FailureMsg should include both image strings; got %q", result.FailureMsg)
-	}
-	if !strings.Contains(result.FailureMsg, "LBA-1") {
-		t.Errorf("FailureMsg should reference LBA-1; got %q", result.FailureMsg)
-	}
-}
-
-// TestValidatingLive_ImageTagMatch_NoLauncherContainer_DefensiveSkip
-// verifies that when the src pod has no container named "launcher"
-// (configuration gap, not a regression), the trip-wire defensively
-// returns nil and the phase proceeds normally. The trip-wire is not
-// load-bearing for correctness; this path matches the docstring's
-// "Common path skips" guarantee.
-func TestValidatingLive_ImageTagMatch_NoLauncherContainer_DefensiveSkip(t *testing.T) {
-	scheme := validatingScheme(t)
-	guest := newGuestForValidating("guest", "default", "class-default")
-	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("worker-2", 8, 65536)
-	t.Setenv(swiftguest.LauncherImageEnv, "ghcr.io/test/swiftletd:v1.0.0")
-	// newSourcePod produces a pod with NO containers, so
-	// launcherContainerImage returns "" → defensive skip.
-	srcPod := newSourcePod("guest", "default", "uid")
-	mig := newMigration("m", "default")
-	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
-	mig.Spec.AllowIPChange = true
-
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(mig, guest, class, node, srcPod).
-		WithStatusSubresource(mig).
-		Build()
-	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
-
-	status := mig.Status.DeepCopy()
-	result := r.handleValidatingLive(context.Background(), mig, status)
-	if result.FailureMsg != "" {
-		t.Fatalf("expected defensive-skip pass on missing launcher container; got failure: %q", result.FailureMsg)
-	}
-	if !result.Advanced {
-		t.Fatal("expected Advanced=true under defensive-skip")
-	}
-}
+// The launcher-image checks are in image_upgrade_test.go.
 
 // TestValidatingLive_MigrationDisabled_FailsWithEligibilityMismatch
 // is the defense-in-depth path: webhook caught migration.enabled=false

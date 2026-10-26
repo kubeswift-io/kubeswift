@@ -185,13 +185,14 @@ const (
 	// wire level, protocol error). Classified from swiftletd's
 	// failure-reason-code annotation; detail in FailureMessage.
 	FailureReasonRpcError FailureReasonCode = "RpcError"
-	// FailureReasonImageTagMismatch — set when the Validating phase's
-	// defensive image-tag-match check (LBA-1 trip-wire) detects that the
-	// destination pod would not inherit the source pod's launcher
-	// image. This should NEVER fire in practice because newDstPod uses
-	// srcPod.DeepCopy() which clones the source image atomically; if
-	// this code surfaces, a refactor has regressed the clone-src
-	// guarantee (LBA-1).
+	// FailureReasonImageTagMismatch — set when the source launcher pod's
+	// spec was changed after the controller created it (its
+	// metadata.generation grew, or a container restarted, which a launcher
+	// container does only after a spec change), for example a container
+	// or init-container image patched. A live migration copies the source
+	// pod, images included, to the destination, so it refuses to copy a
+	// changed one. A source launcher from an earlier KubeSwift release is
+	// NOT a mismatch: the guest migrates on the launcher it was started with.
 	FailureReasonImageTagMismatch FailureReasonCode = "ImageTagMismatch"
 	// FailureReasonDstPodConflict — set when the controller observes a
 	// dst pod with the deterministic dst-pod name already present at
@@ -528,8 +529,8 @@ type SwiftMigrationStatus struct {
 	//   - ReceiveDisconnect — dst-side RPC reported peer/network
 	//     disconnect during transfer.
 	//   - RpcError — CH HTTP RPC error not otherwise classified.
-	//   - ImageTagMismatch — LBA-1 trip-wire (defensive; should never
-	//     fire).
+	//   - ImageTagMismatch — the source launcher pod's spec was changed
+	//     after it was created; the copy is refused.
 	//   - DstPodConflict — dst pod name collision with foreign state.
 	//
 	// Phase 1 offline mode does not populate this field — its failure

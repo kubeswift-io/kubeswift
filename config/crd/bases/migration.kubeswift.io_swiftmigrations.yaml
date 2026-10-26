@@ -381,8 +381,8 @@ spec:
                     - ReceiveDisconnect — dst-side RPC reported peer/network
                       disconnect during transfer.
                     - RpcError — CH HTTP RPC error not otherwise classified.
-                    - ImageTagMismatch — LBA-1 trip-wire (defensive; should never
-                      fire).
+                    - ImageTagMismatch — the source launcher pod's spec was changed
+                      after it was created; the copy is refused.
                     - DstPodConflict — dst pod name collision with foreign state.
 
                   Phase 1 offline mode does not populate this field — its failure

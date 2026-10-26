@@ -177,6 +177,10 @@ func (r *SwiftMigrationReconciler) handlePreparingLive(
 		// pod will mount, BEFORE creating the pod. A stop-during-migration
 		// flip of the live `<guest>-runtime-intent` CM then cannot poison
 		// the dst receiver's launch gate.
+		// The pod copied below, checked again: Validating saw an earlier read.
+		if res := sourcePodCopyable(&srcPod, &guest); res != nil {
+			return res
+		}
 		frozenIntentCM, frozenErr := r.ensureFrozenDstIntent(ctx, &guest, expectedDstName)
 		if frozenErr != nil {
 			return phaseTransient(fmt.Errorf("ensure frozen dst intent: %w", frozenErr))
@@ -229,6 +233,24 @@ func (r *SwiftMigrationReconciler) handlePreparingLive(
 		if !dstPodMatches(&existingDst, mig, &guest) {
 			return phaseFailure(
 				fmt.Sprintf("destination pod %q exists but does not match expected ownership/labels (possible name collision)", existingDst.Name),
+				migrationv1alpha1.FailureReasonDstPodConflict)
+		}
+		// Its images must be the ones newDstPod gives it (the source's, plus
+		// the controller's own sidecar): a patched image would run privileged
+		// on the destination node.
+		expected, buildErr := newDstPod(mig, &guest, &srcPod, r.Scheme, dstSidecarConfig{
+			mtlsEnabled: r.MigrationMTLSEnabled,
+			srcNodeName: guest.Status.NodeName,
+			dstNodeName: mig.Spec.Target.NodeName,
+		}, "", nil)
+		if buildErr != nil {
+			return phaseFailure(
+				fmt.Sprintf("construct dst pod: %v", buildErr),
+				migrationv1alpha1.FailureReasonOther)
+		}
+		if diff := podImagesDiff(&existingDst, expected); diff != "" {
+			return phaseFailure(
+				fmt.Sprintf("destination pod %q does not have the source launcher's images: %s", existingDst.Name, diff),
 				migrationv1alpha1.FailureReasonDstPodConflict)
 		}
 		// Persist DestinationPodRef on re-entry too (status may have
