@@ -6,6 +6,25 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.20.1] — 2026-10-26
+
+A patch release for live migration after an upgrade. A SwiftGuest started before a KubeSwift chart upgrade could not be live-migrated after it, neither by a SwiftMigration nor by a node drain: every such migration failed with `ImageTagMismatch` (#864). It now migrates, on the launcher it was started with.
+
+### Upgrade
+
+- No CRD changed in a way that needs applying: one field description in the SwiftMigration CRD changed (`failureReason` `ImageTagMismatch`). No chart value or template changed. Only the controller changed; the other images are rebuilt at the new version but unchanged.
+- No running guest, sandbox or warm slot is restarted.
+- **Guests keep their launcher across an upgrade.** A chart upgrade does not change the launcher image (swiftletd and Cloud Hypervisor) of guests that are already running, and live-migrating one, or draining its node, keeps it on that launcher: the destination pod runs the source pod's images. A guest moves to the new launcher only when its launcher pod is recreated (a stop and start, or an offline migration). This was already the design; until this release, those guests could not live-migrate at all. Live-migrating a running guest to a newer Cloud Hypervisor is not supported.
+- Guests started on v0.20.0 or earlier can be live-migrated once the controller runs v0.20.1.
+
+### Fixed
+
+- **Guests started before an upgrade could not be live-migrated** (#864). Validation compared the source launcher's image with the controller's current default launcher image, which every release changes, so after an upgrade every guest started before it failed with `ImageTagMismatch`, node-drain migrations included (an earlier report, #694, only gained an event). The destination pod is a copy of the source pod, so the default never mattered for what it runs. Validation now checks what the copy depends on, at Validating and again before the copy is made: the source pod is controlled by the guest, and its spec is the one the controller created (`metadata.generation` 1 and no container restarted; on API servers older than Kubernetes 1.33, which do not set a pod's generation, each image's repository matches the one the kubelet reports). A destination pod found on a retry must have the images the controller would build from the source. `ImageTagMismatch` now means the source launcher pod's spec was changed after it was created.
+
+### Docs
+
+- `docs/migration/phase-3b.md`: a guest migrates on the launcher it was started with; the source launcher pod must be unmodified. `docs/migration/troubleshooting.md`: `ImageTagMismatch`.
+
 ## [v0.20.0] — 2026-10-24
 
 A minor release that makes a SwiftSandbox's console readable with the Kubernetes pod logs API (`kubectl logs <pod> -c console`) instead of an exec into its privileged launcher, and makes a warm checkout's workload output visible while it runs. See [SwiftSandbox console](docs/sandbox/console.md).
