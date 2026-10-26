@@ -3,6 +3,7 @@ package swiftmigration
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -12,7 +13,6 @@ import (
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/migrationcert"
-	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 )
 
 // handleValidatingLive is the live-mode Validating phase.
@@ -135,23 +135,16 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 		return res
 	}
 
-	// LBA-1 defensive image-tag-match trip-wire.
-	//
-	// newDstPod (dst_pod.go) constructs the destination pod via
-	// srcPod.DeepCopy() which clones the source pod's launcher
-	// container image atomically. This guarantees match-tag migration
-	// as a structural property; the webhook does not need a
-	// version-skew rule because the implementation enforces it.
-	//
-	// This check is a fail-loud trip-wire: it fires only if a future
-	// refactor regresses the clone-src behavior or if the deployed
-	// controller's default launcher image diverges from the running
-	// guest's image (e.g., partial rolling upgrade mid-fleet). The
-	// common path always passes. If it ever fires, the migration
-	// enters Failed with ImageTagMismatch reason code, pointing
-	// operators at LBA-1.
-	if err := checkImageTagMatch(&srcPod); err != nil {
-		return phaseFailure(err.Error(), migrationv1alpha1.FailureReasonImageTagMismatch)
+	// The destination pod is a copy of the source pod (newDstPod), images
+	// included: a live migration keeps the guest on the launcher it was
+	// started with, whatever the controller's launcher image is now (a chart
+	// upgrade does not move running guests to a new launcher). So the source
+	// pod must be one the controller built for this guest, and its images
+	// must still be the ones it was created with: a pod's container and
+	// init-container images can be patched after creation, and the copy
+	// would run a patched image privileged on the destination node.
+	if res := sourcePodCopyable(&srcPod, &guest); res != nil {
+		return res
 	}
 
 	// IPWillChange surfacing (same logic as offline path; live mode
@@ -330,36 +323,99 @@ func srcPodLookupName(mig *migrationv1alpha1.SwiftMigration, guest *swiftv1alpha
 	return canonicalPodNameForGuest(guest)
 }
 
-// checkImageTagMatch is the LBA-1 defensive trip-wire. Returns nil
-// when the src pod's launcher container image matches the controller's
-// default launcher image OR when either value is empty (defensive
-// skip — the trip-wire is not load-bearing for correctness).
-//
-// See handleValidatingLive's wire site for the rationale.
-func checkImageTagMatch(srcPod *corev1.Pod) error {
-	expected := swiftguest.LauncherImage()
-	actual := launcherContainerImage(srcPod)
-	if expected == "" || actual == "" {
-		// Missing config; not load-bearing. Common path skips.
-		return nil
+// sourcePodCopyable is the gate in front of newDstPod's copy of the source
+// pod: the pod must be controlled by the guest and keep the images it was
+// created with. nil means the copy may proceed. Run at Validating (to fail
+// early) and again in Preparing on the pod actually copied.
+func sourcePodCopyable(srcPod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) *phaseResult {
+	if !metav1.IsControlledBy(srcPod, guest) {
+		return phaseFailure(
+			fmt.Sprintf("source pod %q is not controlled by SwiftGuest %q; refusing to copy it to the destination", srcPod.Name, guest.Name),
+			migrationv1alpha1.FailureReasonOther)
 	}
-	if actual != expected {
-		return fmt.Errorf(
-			"image tag mismatch: source pod uses %q, controller default is %q "+
-				"(LBA-1 trip-wire)",
-			actual, expected,
-		)
+	if pending, err := checkSourcePodImages(srcPod); err != nil {
+		if pending {
+			return phaseTransient(err)
+		}
+		return phaseFailure(err.Error(), migrationv1alpha1.FailureReasonImageTagMismatch)
 	}
 	return nil
 }
 
-// launcherContainerImage returns the image of the pod's launcher
-// container, or "" if no container matches LauncherContainerName.
-func launcherContainerImage(pod *corev1.Pod) string {
-	for i := range pod.Spec.Containers {
-		if pod.Spec.Containers[i].Name == LauncherContainerName {
-			return pod.Spec.Containers[i].Image
+// checkSourcePodImages verifies that the source pod's containers still run
+// the images the controller created it with. The controller sets images only
+// when it creates a launcher pod, but container and init-container images can
+// be patched afterwards by anyone allowed to patch pods; the copy would run a
+// patched image privileged on the destination node.
+//
+//   - metadata.generation (set by API servers from Kubernetes 1.33) is 1 at
+//     creation and grows with every spec change, labels and annotations
+//     excepted: above 1, the spec was changed.
+//   - A launcher pod's restartPolicy is Never, so the kubelet restarts a
+//     container only when its spec changed: a restart means a patched image
+//     already ran.
+//   - Without generation (older API servers), each image's repository must
+//     be the one the kubelet reports. Only the repository: the CRI may report
+//     another tag of the same image (containerd reports the image's first
+//     tag), so a tag cannot be compared.
+//
+// pending is true when, without generation, a container has no reported
+// image yet: retry rather than fail.
+func checkSourcePodImages(pod *corev1.Pod) (pending bool, err error) {
+	for _, s := range pod.Status.ContainerStatuses {
+		if s.RestartCount > 0 {
+			return false, fmt.Errorf(
+				"source pod %q: container %q restarted %d time(s); a launcher container restarts only after its spec "+
+					"was changed, and a live migration copies the spec", pod.Name, s.Name, s.RestartCount)
 		}
 	}
-	return ""
+	if pod.Generation > 1 {
+		return false, fmt.Errorf(
+			"source pod %q: its spec was changed after it was created (generation %d); a live migration copies the spec",
+			pod.Name, pod.Generation)
+	}
+	if pod.Generation == 1 {
+		return false, nil
+	}
+	check := func(containers []corev1.Container, statuses []corev1.ContainerStatus) (bool, error) {
+		ran := make(map[string]string, len(statuses))
+		for _, s := range statuses {
+			ran[s.Name] = s.Image
+		}
+		for _, c := range containers {
+			image := ran[c.Name]
+			if image == "" {
+				return true, fmt.Errorf("source pod %q: container %q has no reported image yet", pod.Name, c.Name)
+			}
+			if imageRepository(c.Image) != imageRepository(image) {
+				return false, fmt.Errorf(
+					"source pod %q: container %q spec image %q is not from the repository it was started from (%q); "+
+						"the pod's spec was changed after it was created, and a live migration copies it",
+					pod.Name, c.Name, c.Image, image)
+			}
+		}
+		return false, nil
+	}
+	if pending, err := check(pod.Spec.InitContainers, pod.Status.InitContainerStatuses); err != nil {
+		return pending, err
+	}
+	return check(pod.Spec.Containers, pod.Status.ContainerStatuses)
+}
+
+// imageRepository returns an image reference's repository, without tag or
+// digest, with a Docker Hub short name expanded as the CRI reports it
+// ("busybox:1.36" -> "docker.io/library/busybox").
+func imageRepository(ref string) string {
+	if i := strings.IndexByte(ref, '@'); i >= 0 {
+		ref = ref[:i]
+	}
+	if i := strings.LastIndexByte(ref, ':'); i > strings.LastIndexByte(ref, '/') {
+		ref = ref[:i]
+	}
+	if i := strings.IndexByte(ref, '/'); i < 0 {
+		return "docker.io/library/" + ref
+	} else if first := ref[:i]; !strings.ContainsAny(first, ".:") && first != "localhost" {
+		return "docker.io/" + ref
+	}
+	return ref
 }
