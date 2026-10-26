@@ -128,9 +128,10 @@ COPY --from=builder /usr/local/bin/virtiofsd /usr/libexec/virtiofsd
 # releases (v52, v53), adds vm.cancel-migration and a documented event monitor,
 # a VM Generation ID device (guests reseed their RNG after a restore), and fixes
 # silent guest-memory corruption after a live migration (#9015). It changes two
-# defaults: nested virtualization off, virtio-net offloads off (see
-# swift-ch-client/src/config.rs). The CLOUDHV.fd firmware below is re-validated
-# on v54 by the upgrade spike (docs/design/cloud-hypervisor-v54-upgrade.md).
+# defaults: nested virtualization off, virtio-net offloads off; KubeSwift emits
+# both explicitly (--cpus nested=on, --net offload_*=on in
+# swift-ch-client/src/config.rs) to keep v53 guest behaviour. The CLOUDHV.fd
+# firmware below (ch-13b4963ec4) is unchanged: it boots Ubuntu 24.04 on v54.
 ARG CH_VERSION=54.0
 ARG TARGETARCH=amd64
 # Checksum-pinned like CLOUDHV.fd below. This binary IS the hypervisor — it runs

@@ -3,6 +3,14 @@
 /// Cloud Hypervisor binary name. Override with KUBESWIFT_CH_BINARY env.
 pub const DEFAULT_CH_BINARY: &str = "cloud-hypervisor";
 
+/// virtio-net offloads emitted on every `--net`. Cloud Hypervisor v54 turned
+/// checksum, TSO and UFO offload off by default (on in v53 and earlier), which
+/// cut guest<->pod TCP throughput by an order of magnitude on a tap NIC. Emitted
+/// explicitly so KubeSwift does not depend on the default. TSO and UFO require
+/// csum. They are recorded in the VM config, so a snapshot or a live migration
+/// keeps them.
+pub const NET_OFFLOADS: &str = "offload_csum=on,offload_tso=on,offload_ufo=on";
+
 /// Network interface configuration for multi-NIC mode.
 #[derive(Debug, Clone)]
 pub struct NICConfig {
@@ -281,7 +289,11 @@ impl VmConfig {
             },
             "--cpus".to_string(),
             {
-                let mut cpus = format!("boot={}", self.cpus.max(1));
+                // nested=on: Cloud Hypervisor v54 turned nested virtualization
+                // off by default (v53 and earlier exposed VMX/SVM to every guest).
+                // Emitted explicitly so the v54 upgrade does not remove a guest
+                // capability; a future API may make this a per-guest choice.
+                let mut cpus = format!("boot={},nested=on", self.cpus.max(1));
                 if self.kvm_hyperv {
                     // Windows: KVM Hyper-V enlightenments (required on CH).
                     cpus.push_str(",kvm_hyperv=on");
@@ -446,15 +458,21 @@ impl VmConfig {
             for nic in &self.nics {
                 args.push("--net".to_string());
                 if let Some(ref socket) = nic.vhost_user_socket {
-                    args.push(format!("vhost_user=on,socket={},mac={}", socket, nic.mac));
+                    args.push(format!(
+                        "vhost_user=on,socket={},mac={},{}",
+                        socket, nic.mac, NET_OFFLOADS
+                    ));
                 } else {
-                    args.push(format!("tap={},mac={}", nic.tap_name, nic.mac));
+                    args.push(format!(
+                        "tap={},mac={},{}",
+                        nic.tap_name, nic.mac, NET_OFFLOADS
+                    ));
                 }
             }
         } else if let Some(ref tap) = self.tap_name {
             // Legacy single-NIC mode.
             args.push("--net".to_string());
-            args.push(format!("tap={}", tap));
+            args.push(format!("tap={},{}", tap, NET_OFFLOADS));
         }
 
         // VFIO passthrough devices (SR-IOV VFs, GPUs).
@@ -646,20 +664,20 @@ mod tests {
 
     #[test]
     fn test_cpus_kvm_hyperv_for_windows() {
-        // Default (Linux): plain boot=N, no enlightenments.
+        // Default (Linux): boot=N with nested on, no enlightenments.
         let cfg = make_disk_boot_config();
         let joined = cfg.to_args().join(" ");
         assert!(
-            joined.contains("--cpus boot=2") && !joined.contains("kvm_hyperv"),
-            "linux --cpus should be plain boot=N: {}",
+            joined.contains("--cpus boot=2,nested=on") && !joined.contains("kvm_hyperv"),
+            "linux --cpus should be boot=N,nested=on: {}",
             joined
         );
-        // Windows: boot=N,kvm_hyperv=on.
+        // Windows: boot=N,nested=on,kvm_hyperv=on.
         let mut win = make_disk_boot_config();
         win.kvm_hyperv = true;
         let joined = win.to_args().join(" ");
         assert!(
-            joined.contains("--cpus boot=2,kvm_hyperv=on"),
+            joined.contains("--cpus boot=2,nested=on,kvm_hyperv=on"),
             "windows --cpus should add kvm_hyperv=on: {}",
             joined
         );
@@ -1404,5 +1422,81 @@ mod tests {
             "Filesystem data path missing: {}",
             joined
         );
+    }
+
+    /// Cloud Hypervisor v54 defaults nested virtualization to off; KubeSwift
+    /// keeps v53's behaviour by emitting nested=on on every --cpus.
+    #[test]
+    fn test_cpus_emit_nested_on() {
+        let mut sandbox = make_disk_boot_config();
+        sandbox.is_sandbox = true;
+        for cfg in [make_disk_boot_config(), sandbox] {
+            let args = cfg.to_args();
+            let i = args.iter().position(|a| a == "--cpus").expect("--cpus");
+            assert!(
+                args[i + 1].split(',').any(|kv| kv == "nested=on"),
+                "--cpus {} lacks nested=on",
+                args[i + 1]
+            );
+        }
+    }
+
+    /// Cloud Hypervisor v54 defaults virtio-net csum/TSO/UFO offload to off;
+    /// every --net (legacy tap, multi-NIC tap, vhost-user) must enable them.
+    #[test]
+    fn test_every_net_emits_offloads() {
+        let legacy = make_disk_boot_config();
+        let mut multi = make_disk_boot_config();
+        multi.tap_name = None;
+        multi.nics = vec![
+            NICConfig {
+                tap_name: "tap0".to_string(),
+                mac: "52:54:00:aa:bb:01".to_string(),
+                vhost_user_socket: None,
+            },
+            NICConfig {
+                tap_name: String::new(),
+                mac: "52:54:00:aa:bb:fe".to_string(),
+                vhost_user_socket: Some("/var/run/vhost/fast0.sock".to_string()),
+            },
+        ];
+        for (cfg, nets) in [(legacy, 1), (multi, 2)] {
+            let args = cfg.to_args();
+            let values: Vec<&String> = args
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| *a == "--net")
+                .map(|(i, _)| &args[i + 1])
+                .collect();
+            assert_eq!(values.len(), nets);
+            for v in values {
+                let kv: Vec<&str> = v.split(',').collect();
+                for want in ["offload_csum=on", "offload_tso=on", "offload_ufo=on"] {
+                    assert!(kv.contains(&want), "--net {} lacks {}", v, want);
+                }
+            }
+        }
+    }
+
+    /// v54 removed disk image-type autodetection: every file-backed --disk
+    /// value must say image_type=raw (vhost-user disks have no image).
+    #[test]
+    fn test_every_file_disk_is_raw() {
+        let mut cfg = make_disk_boot_config();
+        cfg.data_disk_paths = vec!["/data/d0.raw".to_string(), "/data/d1.raw".to_string()];
+        let args = cfg.to_args();
+        let i = args.iter().position(|a| a == "--disk").expect("--disk");
+        let disks: Vec<&String> = args[i + 1..]
+            .iter()
+            .take_while(|a| !a.starts_with("--"))
+            .collect();
+        assert_eq!(disks.len(), 4, "root, seed, two data disks: {:?}", disks);
+        for d in disks {
+            assert!(
+                d.contains("image_type=raw"),
+                "--disk {} lacks image_type=raw",
+                d
+            );
+        }
     }
 }

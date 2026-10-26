@@ -783,6 +783,15 @@ mod tests {
         let (_, body) = req.split_once("\r\n\r\n").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
         assert_eq!(parsed["receiver_url"], "tcp:0.0.0.0:6789");
+        // Only receiver_url: Cloud Hypervisor v54 removed `memory_mode` and
+        // defaults every field it added (vfio_fds, iommufd_fd, zone_updates,
+        // background_fetch_pages), so the v53 request shape is the v54 one.
+        assert_eq!(
+            parsed.as_object().unwrap().keys().collect::<Vec<_>>(),
+            vec!["receiver_url"],
+            "receive-migration body: {}",
+            body
+        );
     }
 
     #[test]
