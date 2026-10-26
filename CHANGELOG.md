@@ -6,6 +6,35 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.21.0-rc.1] — 2026-10-26
+
+Release candidate for v0.21.0: the launcher moves from Cloud Hypervisor v53.0 to **v54.0**. Guests keep the behaviour they had on v53: KubeSwift now sets explicitly the two things v54 changed by default (nested virtualization, virtio-net offloads). See [Node runtime: Cloud Hypervisor](docs/architecture/node-runtime.md#cloud-hypervisor-requirements).
+
+### Upgrade
+
+- **Running guests stay on Cloud Hypervisor v53.** A chart upgrade does not change the launcher of guests that are already running; live migration and node drain keep each guest on its launcher (the v0.20.1 contract). A guest moves to v54 when its launcher pod is recreated: a stop and start, an offline migration, or a new guest. Live-migrating a running v53 guest onto v54 is not supported. New sandboxes and warm-pool slots start on v54; existing slots keep v53 until they are used or replaced.
+- v54 restores memory snapshots taken on v53, including `cloneFromSnapshot`.
+- No CRD changed; applying `crds/` is not needed. The chart's `ui.image.tag` default moves to `v0.13.1` (kubeswift-ui v0.13.1). No other value or template changed.
+- Live migration between nodes whose CPUs differ may now be refused by Cloud Hypervisor's stricter CPU checks; validated between identical CPUs only.
+
+### Changed
+
+- **Cloud Hypervisor v54.0** in the swiftletd image (checksum-pinned; the CLOUDHV.fd firmware is unchanged). v54 fixes silent guest-memory corruption after a live migration, adds VM Generation ID, and is faster at live migration (2 GiB guest: 27-29 s against 36-37 s on v53, same nodes).
+- **Nested virtualization stays on:** `--cpus nested=on` for every guest (v54's default is off). Guests keep VMX/SVM and a working `/dev/kvm`, as on v53. This is compatibility behaviour; an explicit control is tracked in #874.
+- **virtio-net offloads stay on:** `offload_csum=on,offload_tso=on,offload_ufo=on` on every NIC (tap and vhost-user). With v54's default (off), guest-to-pod TCP on the same node fell from about 13 Gbps to under 1 Gbps; with them, v54 measures 13.2-15.6 Gbps against 13.7-16.9 Gbps on v53.
+- Both settings are part of the VM's configuration, so snapshots, restores and live migrations keep them.
+
+### Validation
+
+On a three-node KVM cluster, v53 baseline against v54: Ubuntu 24.04 disk boot and kernel boot; root, seed and data disks (`image_type=raw`, `direct=on`, O_DIRECT read/write); Windows Server 2025 (`direct=on` root disk, write and unbuffered copy, in-guest reboot, stop and start); SwiftSandbox cold and warm (console, live warm output, exit codes, refill); v53 snapshot restored and cloned on v54 (`ondemand`, identity regenerated); a v53 guest kept running across the upgrade, then live-migrated and node-drained on its v53 launcher; v54 live migrations across nodes with RAM and boot ID preserved; snapshot after migration and migration after snapshot; GTX 1080 passthrough (legacy VFIO) with the NVIDIA driver and `nvidia-smi`; DNS, Service and outbound HTTPS from guests; nested KVM (`KVM_GET_API_VERSION`) in a guest.
+
+### Known issues
+
+- A Windows image whose GPT backup header is not at the end of the disk fails the root-disk clone (`sgdisk -e` exits 4 though it repairs the table); not new, workaround in #875.
+- v54's iommufd backend fails to map a GPU's BARs for P2P DMA unless `vfio_p2p_dma=off` (#873); KubeSwift uses legacy VFIO.
+- Ubuntu cloud images do not load the VM Generation ID driver, so clones do not reseed their RNG (#870).
+- GPUs that need a PCIe root port per device (HGX SXM) still run on QEMU; v54 has no hierarchical PCIe topology.
+
 ## [v0.20.1] — 2026-10-26
 
 A patch release for live migration after an upgrade. A SwiftGuest started before a KubeSwift chart upgrade could not be live-migrated after it, neither by a SwiftMigration nor by a node drain: every such migration failed with `ImageTagMismatch` (#864). It now migrates, on the launcher it was started with.
