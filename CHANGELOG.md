@@ -6,6 +6,10 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A guest whose data disks cannot move was sent on a live migration that could only fail** (#877). The live-migration storage check covered only the root disk. A guest with a `ReadWriteOnce` data disk (every `blank` data disk, every image-backed one) passed validation, its destination pod hit Multi-Attach, and the migration failed after 60 s with `DstNeverReady`. A node drain (`mode: auto`) took that live path too, so draining such a guest's node failed instead of moving it offline. Every data disk must now be `ReadWriteMany` + `Block`, and a PVC mounted as a directory or backing a filesystem `ReadWriteMany`, or the guest is offline-only: `mode: live` fails at once with `EligibilityMismatch` naming the volume, and `mode: auto` (and a drain) resolves to offline. The controller now also refuses `mode: live` itself for VFIO devices, node-local virtio backends and primary-UDN namespaces, which only auto mode and the admission webhook (off by default) checked.
+
 ## [v0.21.0-rc.1] — 2026-10-26
 
 Release candidate for v0.21.0: the launcher moves from Cloud Hypervisor v53.0 to **v54.0**. Guests keep the behaviour they had on v53: KubeSwift now sets explicitly the two things v54 changed by default (nested virtualization, virtio-net offloads). See [Node runtime: Cloud Hypervisor](docs/architecture/node-runtime.md#cloud-hypervisor-requirements).

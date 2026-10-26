@@ -20,6 +20,18 @@ A guest is eligible for `mode: live` only when **all** of these hold:
    (`live-migratable`) or a per-guest `spec.storage` override.
    - **Kernel-boot guests** (`kernelRef`) have **no root PVC**, so they are
      live-migratable on default storage — the lightest case.
+4. **Data disks need the same.** During a live migration the source and the
+   destination hold every volume at once, on two nodes. Every data disk in
+   `dataDiskRefs` must be a `ReadWriteMany` + `Block` PVC (a `pvcRef` with
+   `attachAsDisk`); a `pvcRef` mounted without `attachAsDisk` must be
+   `ReadWriteMany`. `blank` data disks are created `ReadWriteOnce`, and
+   image-backed data disks (`imageRef`, `dataDiskRef`) are a file on the
+   image's PVC, so a guest with either is **offline-only**. This applies to
+   kernel-boot guests too.
+
+The controller checks all of these before it starts: an ineligible
+`mode: live` fails at once with `EligibilityMismatch` naming the reason, and
+`mode: auto` (and so a node drain) resolves to offline.
 
 `spec.migration.preferredMode: live` states the intent (with `auto` the
 controller live-migrates when eligible, else falls back to offline).

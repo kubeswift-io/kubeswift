@@ -586,7 +586,7 @@ func (v *Validator) gateLiveModeStorage(ctx context.Context, guest *swiftv1alpha
 	// AND imageRef, so the presence of kernelRef implies absence
 	// of disk-boot storage.
 	if guest.Spec.KernelRef != nil {
-		return nil
+		return v.gateLiveModeVolumes(ctx, guest)
 	}
 
 	var class swiftv1alpha1.SwiftGuestClass
@@ -603,7 +603,21 @@ func (v *Validator) gateLiveModeStorage(ctx context.Context, guest *swiftv1alpha
 	}
 	// The rule itself is shared with the controller (auto-mode resolution and
 	// the Validating-live gate), so admission and reconcile cannot drift.
-	return resolved.LiveMigrationStorageError(guest, &class)
+	if err := resolved.LiveMigrationStorageError(guest, &class); err != nil {
+		return err
+	}
+	return v.gateLiveModeVolumes(ctx, guest)
+}
+
+// gateLiveModeVolumes rejects live mode when a data disk or PVC-backed
+// filesystem cannot be attached on the destination while the source holds it
+// (resolved.LiveMigrationVolumesError). Kernel-boot guests are checked too.
+func (v *Validator) gateLiveModeVolumes(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) error {
+	gate, err := resolved.LiveMigrationVolumesError(ctx, v.Client, guest)
+	if err != nil {
+		return fmt.Errorf("check data volumes for live mode: %w", err)
+	}
+	return gate
 }
 
 // checkPerSourceNodeConcurrency rejects a live-mode SwiftMigration
