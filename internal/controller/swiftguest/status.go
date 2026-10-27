@@ -331,7 +331,15 @@ func MapPodToStatus(guest *swiftv1alpha1.SwiftGuest, pod *corev1.Pod, status *sw
 		// sidecar that is still pulling or starting (the migration stunnel
 		// server) reads Pending too. swiftletd reports GuestRunning=True once,
 		// so clearing it then left the guest reading not-running for good.
-		if !launcherContainerRunning(pod) {
+		//
+		// Nor does a launcher reported as not yet running mean it is not: the
+		// kubelet reports the containers it started only once it has started
+		// them all, so with a sidecar to start (a slow mTLS stunnel image) the
+		// launcher can boot its VM and report GuestRunning=True while the pod
+		// still shows it waiting. A True that turned true after this pod was
+		// created came from this pod's launcher -- a new pod clears the last
+		// run's state above, and nothing else writes it -- so it stands.
+		if !launcherContainerRunning(pod) && !guestRunningSince(status, pod) {
 			ClearRunState(status, "GuestStarting", "the launcher has not started; the VM is not running")
 		}
 		unschedulable := findUnschedulableCondition(pod)
@@ -390,6 +398,14 @@ func primaryIPScope(guest *swiftv1alpha1.SwiftGuest, pod *corev1.Pod) swiftv1alp
 
 // launcherContainerRunning reports whether the pod's launcher (swiftletd)
 // container is currently running.
+// guestRunningSince reports whether GuestRunning turned True after pod was
+// created, that is, whether pod's own launcher reported its VM running.
+func guestRunningSince(status *swiftv1alpha1.SwiftGuestStatus, pod *corev1.Pod) bool {
+	c := findCondition(status, "GuestRunning")
+	return c != nil && c.Status == metav1.ConditionTrue &&
+		!pod.CreationTimestamp.IsZero() && !c.LastTransitionTime.Before(&pod.CreationTimestamp)
+}
+
 func launcherContainerRunning(pod *corev1.Pod) bool {
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Name == LauncherContainerName {

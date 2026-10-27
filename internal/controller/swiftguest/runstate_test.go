@@ -369,3 +369,34 @@ func TestReconcile_ExitedLauncherDoesNotRewriteStatus(t *testing.T) {
 		}
 	}
 }
+
+// The kubelet reports a pod's started containers only once it has started
+// them all, so a launcher can boot its VM and report GuestRunning=True while
+// the pod (a slow sidecar still starting) shows it waiting. That True came
+// from this pod's launcher -- it turned true after the pod was created -- and
+// must stand. A True from before the pod existed is the last run's.
+func TestMapPodToStatus_PendingKeepsThisLaunchersReport(t *testing.T) {
+	waiting := func(created time.Time) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: testGuestName, Namespace: "ns", UID: "pod-1", CreationTimestamp: metav1.NewTime(created)},
+			Spec:       corev1.PodSpec{NodeName: "worker-1"},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				ContainerStatuses: []corev1.ContainerStatus{
+					{Name: LauncherContainerName, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}},
+					{Name: "stunnel", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}},
+				},
+			},
+		}
+	}
+
+	st := ranStatus("pod-1") // GuestRunning=True as of now
+	MapPodToStatus(kernelGuest(), waiting(time.Now().Add(-time.Minute)), st)
+	if c := findCondition(st, "GuestRunning"); c == nil || c.Status != metav1.ConditionTrue {
+		t.Errorf("GuestRunning = %+v; this pod's launcher reported it running", c)
+	}
+
+	st = ranStatus("pod-1")
+	MapPodToStatus(kernelGuest(), waiting(time.Now().Add(time.Minute)), st)
+	assertNotRunning(t, st, "GuestStarting")
+}
