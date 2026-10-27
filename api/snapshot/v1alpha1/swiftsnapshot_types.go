@@ -399,6 +399,14 @@ type SwiftSnapshotStatus struct {
 	// pin the restore-receive launcher pod to the same node.
 	NodeName string `json:"nodeName,omitempty"`
 
+	// NodeCopies lists the nodes, other than nodeName, holding a copy of this
+	// snapshot's artifacts downloaded for a restore or a clone (s3 and oci
+	// backends), guest memory included. Each node is recorded before its
+	// download starts, and every copy is removed when the snapshot is deleted.
+	// +optional
+	// +listType=set
+	NodeCopies []string `json:"nodeCopies,omitempty"`
+
 	// ObservedPauseWindowMs is the wall-clock duration the source VM
 	// was paused during capture, measured by swiftletd at the action
 	// handler. Set on a successful local-backend capture; absent for

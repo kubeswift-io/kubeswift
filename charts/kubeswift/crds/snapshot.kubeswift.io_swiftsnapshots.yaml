@@ -598,6 +598,16 @@ spec:
                     format: int64
                     type: integer
                 type: object
+              nodeCopies:
+                description: |-
+                  NodeCopies lists the nodes, other than nodeName, holding a copy of this
+                  snapshot's artifacts downloaded for a restore or a clone (s3 and oci
+                  backends), guest memory included. Each node is recorded before its
+                  download starts, and every copy is removed when the snapshot is deleted.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
               nodeName:
                 description: |-
                   NodeName is the Kubernetes node where the snapshot was taken.

@@ -819,6 +819,11 @@ func (in *SwiftSnapshotStatus) DeepCopyInto(out *SwiftSnapshotStatus) {
 		*out = new(MemorySnapshotRef)
 		**out = **in
 	}
+	if in.NodeCopies != nil {
+		in, out := &in.NodeCopies, &out.NodeCopies
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.S3 != nil {
 		in, out := &in.S3, &out.S3
 		*out = new(S3SnapshotStatus)

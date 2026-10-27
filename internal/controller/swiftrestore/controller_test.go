@@ -46,7 +46,7 @@ func newReconciler(t *testing.T, objs ...client.Object) (*SwiftRestoreReconciler
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objs...).
-		WithStatusSubresource(&snapshotv1alpha1.SwiftRestore{}).
+		WithStatusSubresource(&snapshotv1alpha1.SwiftRestore{}, &snapshotv1alpha1.SwiftSnapshot{}).
 		Build()
 	return &SwiftRestoreReconciler{Client: c, Scheme: scheme}, c
 }

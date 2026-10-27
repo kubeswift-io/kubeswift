@@ -76,7 +76,7 @@ func localSnap(phase snapshotv1alpha1.SwiftSnapshotPhase) *snapshotv1alpha1.Swif
 
 func newCloneReconciler(t *testing.T, objs ...client.Object) (*SwiftGuestReconciler, client.Client) {
 	s := cloneScheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).WithStatusSubresource(&snapshotv1alpha1.SwiftSnapshot{}).Build()
 	return &SwiftGuestReconciler{Client: c, Scheme: s}, c
 }
 
@@ -166,6 +166,14 @@ func TestPrepareCloneFromSnapshot_TierC_DownloadsThenProceeds(t *testing.T) {
 	}
 	if job.Spec.Template.Spec.NodeName != "worker-2" {
 		t.Errorf("download Job must pin to targetNode worker-2; got %q", job.Spec.Template.Spec.NodeName)
+	}
+	// The snapshot knows the copy is there, so deleting it removes the copy.
+	var snap snapshotv1alpha1.SwiftSnapshot
+	if err := c.Get(context.Background(), client.ObjectKey{Name: s3CloneSnap().Name, Namespace: "ns"}, &snap); err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Status.NodeCopies) != 1 || snap.Status.NodeCopies[0] != "worker-2" {
+		t.Errorf("snapshot nodeCopies = %v, want [worker-2]", snap.Status.NodeCopies)
 	}
 	// The shared Job is owned by the clone guest that created it.
 	if oc := metav1.GetControllerOf(&job); oc == nil || oc.Kind != "SwiftGuest" || oc.Name != "clone-a" {

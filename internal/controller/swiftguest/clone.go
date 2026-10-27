@@ -426,6 +426,11 @@ func (r *SwiftGuestReconciler) ensureCloneDownloadJob(
 		if failReason != "" {
 			return false, failReason, nil
 		}
+		// Recorded first, so deleting the snapshot removes the copy even if
+		// the download is interrupted.
+		if rerr := clonecommon.RecordNodeCopy(ctx, r.Client, snap, node); rerr != nil {
+			return false, "", rerr
+		}
 		if cerr := ctrl.SetControllerReference(guest, j, r.Scheme); cerr != nil {
 			return false, "", cerr
 		}

@@ -213,12 +213,18 @@ storage**: capture on worker-1 → upload to MinIO → cross-node download on wo
 ### Deletion
 
 Deleting a SwiftSnapshot with `deletionPolicy: Delete` (the default) purges its
-objects under `<prefix>/<namespace>/<name>/`. With either policy, the copy of
-the capture left on the capture node (which holds the guest's RAM) is removed
-from that node. Download caches written on other nodes by restores and clones
-are not tracked and are not removed.
+objects under `<prefix>/<namespace>/<name>/`. With either policy, every copy
+on a node is removed: the one the capture left on the capture node, and the
+download caches restores and clones wrote on other nodes. Each holds the
+guest's RAM. The snapshot records a node in `status.nodeCopies` before a
+download starts there.
 
-The capture-node copy is removed by the same cleanup pod as a local
+Download caches written before v0.21.0 were not recorded and stay on their
+nodes after the snapshot is deleted. They are the directories under
+`/var/lib/kubeswift/snapshots/` (`<namespace>_<name>`, or `<namespace>-<name>`
+for older snapshots) whose snapshot no longer exists; remove them by hand.
+
+Each node's copy is removed by the same cleanup pod as a local
 snapshot's directory, which runs in the controller's namespace (see
 [local snapshots: Cleanup](local-snapshots.md#cleanup)). The purge runs as a
 Job in the snapshot's namespace, because it reads the credentials Secret

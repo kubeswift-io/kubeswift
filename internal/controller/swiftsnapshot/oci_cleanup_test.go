@@ -224,3 +224,55 @@ func TestHandleOCIDeletion_NoDigestAnywhereReleasesWithoutAJob(t *testing.T) {
 		t.Errorf("got %d events, want one PurgeIncomplete", len(rec.Events))
 	}
 }
+
+// Restores and clones download the snapshot to other nodes
+// (status.nodeCopies); each copy holds the guest's RAM and was never removed.
+// Every copy is cleaned, side by side with the capture node's, before the
+// finalizer goes. A node that has left the cluster took its copy with it.
+func TestS3Deletion_CleansEveryDownloadedCopy(t *testing.T) {
+	snap := s3SnapReady("snap1", "team-a")
+	snap.Status.NodeName = "worker-1"
+	snap.Status.NodeCopies = []string{"worker-2", "gone-node"}
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-2"}}
+	r, c := newReconciler(t, snap, node, deleteJobWith(snap, batchv1.JobComplete))
+	r.SnapshotS3Image = "img"
+	ctx := context.Background()
+
+	if done, err := r.handleS3Deletion(ctx, snap); err != nil || done {
+		t.Fatalf("first pass should start the node cleanups; done=%v err=%v", done, err)
+	}
+	var pods corev1.PodList
+	if err := c.List(ctx, &pods); err != nil {
+		t.Fatal(err)
+	}
+	byNode := map[string]*corev1.Pod{}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		byNode[p.Spec.NodeName] = p
+		if got := strings.Join(p.Spec.Containers[0].Args, " "); got != HostPathBaseMount+"/team-a-snap1" {
+			t.Errorf("cleanup pod on %s removes %q", p.Spec.NodeName, got)
+		}
+	}
+	if len(byNode) != 2 || byNode["worker-1"] == nil || byNode["worker-2"] == nil {
+		t.Fatalf("want cleanup pods on worker-1 and worker-2 only, got %v", byNode)
+	}
+	if byNode["worker-1"].Name == byNode["worker-2"].Name {
+		t.Fatal("the cleanup pods need distinct names")
+	}
+
+	// The capture copy gone but a download copy not yet: the finalizer stays.
+	byNode["worker-1"].Status.Phase = corev1.PodSucceeded
+	if err := c.Status().Update(ctx, byNode["worker-1"]); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := r.handleS3Deletion(ctx, snap); err != nil || done {
+		t.Fatalf("a downloaded copy is still there; done=%v err=%v", done, err)
+	}
+	byNode["worker-2"].Status.Phase = corev1.PodSucceeded
+	if err := c.Status().Update(ctx, byNode["worker-2"]); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := r.handleS3Deletion(ctx, snap); err != nil || !done {
+		t.Fatalf("every copy is gone; done=%v err=%v", done, err)
+	}
+}
