@@ -326,7 +326,15 @@ spec:
 ```
 
 Its targets are the nodes running a slot of the pool, warm or claimed; a
-node joins when a slot lands on it and leaves when its last slot goes. On
+node joins when a slot lands on it (once scheduled, before it is warm) and
+leaves when its last slot goes. A claimed slot is a checkout whose workload
+still runs, so a one-slot pool keeps its node through a checkout, and its
+refill adds its own node when scheduled elsewhere; the node leaves when the
+workload ends or its sandbox is deleted. Only slots count: pods the pool
+controls, or the SwiftSandbox that claimed them. `NoTargetNodes` means no
+slot of the pool runs anywhere: a pool scaled to zero with no checkout left,
+or a refill not scheduled yet. A pool with `minWarm: 0` has no slots, so a
+placement for it prepares nothing: sandboxes it boots cold are not slots. On
 each, a prepare pod runs the same materializer as a checkout's fetch pod,
 with the placement's pull Secret and key, and is deleted when done. Nothing
 else changes: the pool and its slots are not touched or restarted, and a
@@ -334,7 +342,8 @@ checkout still names its artifacts in `spec.artifacts`.
 
 **Prepared** means the node's cache held the artifact at that digest, read
 from that repository and verified with that key, when last checked
-(`status.nodes[].preparedAt`; checked again every 15 minutes), and the
+(`status.nodes[].preparedAt`; checked again every 15 minutes, staying
+Prepared while the check runs unless it fails), and the
 registry authorized the placement's credentials for it within the last
 minute. A checkout uses the entry when it names the same repository, digest,
 layout and key, and among warm slots prefers one on a node prepared for
