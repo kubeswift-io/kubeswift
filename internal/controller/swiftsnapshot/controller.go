@@ -93,6 +93,17 @@ func (r *SwiftSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
+	// A capture that has a node may have written there; it needs the cleanup
+	// finalizer whatever its phase. New captures get it before they are sent
+	// (handlePendingLocal); this covers ones an earlier version began, which
+	// had it only once Ready, so a failed or in-flight snapshot deleted after
+	// the upgrade is still cleaned.
+	if capturesMemory(&snap) && snap.Status.NodeName != "" {
+		if err := r.ensureFinalizer(ctx, &snap); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Terminal states: ensure the cleanup finalizer is in place
 	// (no-op for csi-volume-snapshot) and otherwise nothing to do.
 	if snap.Status.Phase == snapshotv1alpha1.SwiftSnapshotPhaseReady {

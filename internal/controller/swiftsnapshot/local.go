@@ -25,6 +25,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -216,6 +217,12 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 	// node recorded it is the derived clonecommon.SnapshotDir, whatever the
 	// backend. swiftletd mkdir's it before capture.
 	destDir := captureDestDir(snap)
+	// A capture recorded on another node may have run there (its dispatch can
+	// outlive a lost Capturing write, and the guest has moved since): keep
+	// that node on the cleanup list instead of forgetting it.
+	if prev := snap.Status.NodeName; prev != "" && prev != pod.Spec.NodeName && !slices.Contains(status.NodeCopies, prev) {
+		status.NodeCopies = append(status.NodeCopies, prev)
+	}
 	status.NodeName = pod.Spec.NodeName
 	status.SnapshotDirVersion = SnapshotDirVersionV1
 	// Record the directory with the node, in the same status write, so the
@@ -257,6 +264,23 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
 		return false, 0, fmt.Errorf("marshal capture args: %w", err)
+	}
+
+	// Ownership before the side effect. The launcher writes the guest's
+	// memory into destDir on this node as soon as the action lands, so the
+	// cleanup finalizer and the node + directory are persisted first: a
+	// status write lost after the dispatch (a conflict, a controller restart)
+	// used to leave a capture no object recorded, and a snapshot deleted
+	// before Ready had no finalizer to clean it. If this write fails nothing
+	// has been written on the node yet; the next pass starts over.
+	if err := r.ensureFinalizer(ctx, snap); err != nil {
+		return false, 0, err
+	}
+	if err := r.persist(ctx, snap, status); err != nil {
+		if apierrors.IsConflict(err) {
+			return false, time.Second, nil
+		}
+		return false, 0, err
 	}
 
 	// Patch the launcher pod's annotations to drive the action handler,

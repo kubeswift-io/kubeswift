@@ -281,6 +281,12 @@ finalizer `kubeswift.io/snapshot-hostpath-cleanup` blocks deletion
 until cleanup completes. The controller deletes the pod once it has
 succeeded.
 
+The finalizer and the capture node are recorded before the capture is sent to
+the launcher, so a snapshot deleted while it is capturing, or after it failed,
+is cleaned too. A snapshot deleted while the launcher is still writing its
+capture waits for the capture to end (or for its deadline) before the
+directory is removed.
+
 The cleanup pod runs in the controller's namespace (`kubeswift-system` by
 default), not the snapshot's. A namespace being deleted accepts no new pods,
 so deleting a namespace that holds local snapshots cleans them up the same way
@@ -299,24 +305,35 @@ defaults to `baseline` or `restricted`, label it:
 kubectl label namespace kubeswift-system pod-security.kubernetes.io/enforce=privileged
 ```
 
-If the cleanup pod fails (e.g. node is unreachable, hostPath was
-already removed manually), the finalizer is retained and the
-operator can delete the pod to trigger a re-create on the next
-reconcile pass. Its labels name the snapshot:
+A directory that is already gone is not an error (`rm -rf` succeeds). If the
+cleanup pod fails, the controller replaces it, and records a
+`NodeCleanupRetry` Warning event on the snapshot each time: at once when the
+pod never ran (the kubelet rejected or evicted it, for example under
+`DiskPressure`), after five minutes when `rm` itself failed, so the error stays
+readable on the failed pod in the meantime. Its labels name the snapshot:
 
 ```bash
-kubectl -n kubeswift-system delete pod -l \
+kubectl -n kubeswift-system get pod -l \
   snapshot.kubeswift.io/swift-snapshot-namespace=<namespace>,snapshot.kubeswift.io/swift-snapshot=<name>
 ```
 
-If the source node is permanently lost, you can manually remove
-the finalizer to allow GC:
+If the capture node is no longer in the cluster, deletion does not wait for it:
+the finalizer is removed and a `NodeCleanupSkipped` Warning event names the
+directory, to remove by hand if the node rejoins with its disk.
+
+### Directories no snapshot owns
+
+Earlier versions could leave a capture directory behind: one written before
+v0.14.1 by an s3 or oci snapshot (named `<namespace>-<name>`), or one whose
+snapshot was deleted while capturing or after it failed, before v0.21.1. The
+controller does not remove a directory it has no record of. To find them,
+compare each node's `/var/lib/kubeswift/snapshots/` with the snapshots that
+exist:
 
 ```bash
-kubectl patch swiftsnapshot/<name> -p '{"metadata":{"finalizers":[]}}' --type=merge
+kubectl get swiftsnapshots -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"_"}{.metadata.name}{"\n"}{end}'
 ```
 
-The controller then deletes the snapshot's cleanup pod. The hostPath
-remains on the lost node's storage (or doesn't, if the node is truly
-gone). Orphan cleanup of pre-existing directories is not in Phase 2
-scope.
+A directory named `<namespace>_<name>` or `<namespace>-<name>` with no
+matching snapshot, and no restore or clone in progress from it, is safe to
+remove.

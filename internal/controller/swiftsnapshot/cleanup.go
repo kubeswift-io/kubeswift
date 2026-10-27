@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -145,8 +146,9 @@ func (r *SwiftSnapshotReconciler) cleanupPodNamespace(namespace string) string {
 	return namespace
 }
 
-// ensureFinalizer adds the backend's cleanup finalizer once a SwiftSnapshot
-// reaches Ready: HostPathFinalizer for Tier B (local), S3ObjectFinalizer for
+// ensureFinalizer adds the backend's cleanup finalizer before a capture is
+// sent to the launcher (and, for snapshots an earlier version began, once
+// one has a capture node or reaches Ready): HostPathFinalizer for Tier B (local), S3ObjectFinalizer for
 // Tier C (s3). No-op for csi-volume-snapshot — VolumeSnapshot deletion is
 // handled via OwnerReferences, not a finalizer.
 func (r *SwiftSnapshotReconciler) ensureFinalizer(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) error {
@@ -164,7 +166,14 @@ func (r *SwiftSnapshotReconciler) ensureFinalizer(ctx context.Context, snap *sna
 	}
 	patched := snap.DeepCopy()
 	patched.Finalizers = append(patched.Finalizers, fin)
-	return r.Patch(ctx, patched, client.MergeFrom(snap))
+	if err := r.Patch(ctx, patched, client.MergeFrom(snap)); err != nil {
+		return err
+	}
+	// Carry the write back, so a status write that follows in the same
+	// pass is made against the current resourceVersion.
+	snap.Finalizers = patched.Finalizers
+	snap.ResourceVersion = patched.ResourceVersion
+	return nil
 }
 
 // handleDeletion dispatches the backend-specific artifact cleanup when a
@@ -181,6 +190,12 @@ func (r *SwiftSnapshotReconciler) handleDeletion(
 	ctx context.Context,
 	snap *snapshotv1alpha1.SwiftSnapshot,
 ) (bool, error) {
+	// Removing the capture directory while the launcher is still writing it
+	// would leave whatever it writes afterwards behind. Wait for the capture
+	// to end (bounded by its deadline) before cleaning.
+	if inFlight, err := r.captureInFlight(ctx, snap); err != nil || inFlight {
+		return false, err
+	}
 	switch {
 	case hasFinalizer(snap, S3ObjectFinalizer):
 		return r.handleS3Deletion(ctx, snap)
@@ -191,6 +206,43 @@ func (r *SwiftSnapshotReconciler) handleDeletion(
 	default:
 		return true, nil
 	}
+}
+
+// captureInFlight reports whether the launcher may still be writing this
+// snapshot's capture: its action is in the launcher pod's slot, the pod runs on
+// the recorded node, the launcher has not reported it finished, and the
+// capture deadline has not passed.
+func (r *SwiftSnapshotReconciler) captureInFlight(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) (bool, error) {
+	if !capturesMemory(snap) || snap.Status.NodeName == "" {
+		return false, nil
+	}
+	switch snap.Status.Phase {
+	case "", snapshotv1alpha1.SwiftSnapshotPhasePending, snapshotv1alpha1.SwiftSnapshotPhaseCapturing:
+	default:
+		return false, nil
+	}
+	if exceeded, _ := captureDeadlineExceeded(snap); exceeded {
+		return false, nil
+	}
+	pod, err := r.findLauncherPod(ctx, snap.Namespace, snap.Spec.GuestRef.Name)
+	if err != nil || pod == nil {
+		return false, err
+	}
+	if pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning || pod.Spec.NodeName != snap.Status.NodeName {
+		return false, nil
+	}
+	id := capturingActionID(snap)
+	a := pod.Annotations
+	if a[annoActionID] != id {
+		return false, nil
+	}
+	if a[annoStatusID] == id {
+		switch a[annoStatus] {
+		case "ready", "failed", "rejected":
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // retainArtifacts reports whether the snapshot's deletionPolicy is Retain — in
@@ -245,9 +297,6 @@ func (r *SwiftSnapshotReconciler) handleLocalDeletion(
 	if err != nil || !done {
 		return false, err
 	}
-	if err := r.deleteCleanupPods(ctx, snap); err != nil {
-		return false, err
-	}
 	return r.removeFinalizer(ctx, snap)
 }
 
@@ -275,15 +324,23 @@ func (r *SwiftSnapshotReconciler) cleanupNodeDir(
 			if err != nil || done {
 				return done, err
 			}
-		} else {
-			// A copy on a node that has left the cluster went with it; a pod
-			// bound to that node would stay Pending, and the snapshot with it.
-			var n corev1.Node
-			if err := r.Get(ctx, client.ObjectKey{Name: node}, &n); apierrors.IsNotFound(err) {
-				return true, nil
-			} else if err != nil {
-				return false, err
+		}
+		// A pod bound to a node that is not in the cluster stays Pending, and
+		// the snapshot with it. Usually the node and its disk are gone, but a
+		// machine can rejoin under the same name with its disk, so say what
+		// may be left rather than hold the deletion.
+		var n corev1.Node
+		if err := r.Get(ctx, client.ObjectKey{Name: node}, &n); apierrors.IsNotFound(err) {
+			if r.Recorder != nil {
+				r.Recorder.Eventf(snap, corev1.EventTypeWarning, ReasonNodeCleanupSkipped,
+					"node %s is not in the cluster, so %s%s was not removed from it; remove it by hand if the node returns",
+					node, HostPathBaseDir, subdir)
 			}
+			log.FromContext(ctx).Info("snapshot node cleanup skipped: node not in the cluster",
+				"snapshot", snap.Namespace+"/"+snap.Name, "node", node, "dir", HostPathBaseDir+subdir)
+			return true, nil
+		} else if err != nil {
+			return false, err
 		}
 		if err := r.createCleanupPod(ctx, snap, key, node, subdir); err != nil {
 			return false, fmt.Errorf("create cleanup pod: %w", err)
@@ -303,18 +360,80 @@ func (r *SwiftSnapshotReconciler) cleanupNodeDir(
 		// finishing at different times would never all read done at once.
 		return true, nil
 	case corev1.PodFailed:
-		// Pod ran but failed (e.g. permission error, stale mount).
-		// Surface in status by leaving the finalizer; operator can
-		// see the failure via `kubectl describe pod`. We don't
-		// auto-retry (avoid loop on a permanent failure); operator
-		// can delete the pod (in the controller's namespace, found by
-		// its snapshot.kubeswift.io/swift-snapshot* labels) to get a
-		// re-create on the next reconcile.
+		// A failed cleanup pod used to hold the finalizer for good, waiting
+		// for an operator to delete it. Most never ran: the kubelet rejects
+		// or evicts a pod at admission (DiskPressure, OutOfcpu), and two such
+		// pods held their snapshots in Terminating for weeks. Removing a
+		// directory is idempotent, so the pod is replaced: at once when it
+		// never ran, after cleanupRetryBackoff when rm itself failed (it
+		// does not fail on a missing directory, so that is a real error,
+		// reported in a Warning event each time).
+		if pod.DeletionTimestamp != nil {
+			return false, nil
+		}
+		ran, finished, detail := cleanupPodOutcome(&pod)
+		if ran && time.Since(finished) < cleanupRetryBackoff {
+			return false, nil
+		}
+		r.warnCleanupRetry(snap, &pod, ran, detail)
+		if err := r.Delete(ctx, &pod); client.IgnoreNotFound(err) != nil {
+			return false, err
+		}
 		return false, nil
 	default:
 		// Pending / Running — requeue.
 		return false, nil
 	}
+}
+
+// cleanupRetryBackoff is how long a cleanup pod whose rm failed stays before
+// it is replaced, so a lasting error retries at a bounded rate.
+const cleanupRetryBackoff = 5 * time.Minute
+
+// ReasonNodeCleanupSkipped is the Warning event a deletion emits for a node
+// it could not clean because the node is not in the cluster.
+const ReasonNodeCleanupSkipped = "NodeCleanupSkipped"
+
+// ReasonNodeCleanupRetry is the Warning event a deletion emits each time it
+// replaces a failed cleanup pod.
+const ReasonNodeCleanupRetry = "NodeCleanupRetry"
+
+// cleanupPodOutcome reports whether a failed cleanup pod's container ran,
+// when the pod finished, and what happened, for the event.
+func cleanupPodOutcome(pod *corev1.Pod) (ran bool, finished time.Time, detail string) {
+	finished = pod.CreationTimestamp.Time
+	detail = pod.Status.Reason
+	if pod.Status.Message != "" {
+		detail = strings.TrimSpace(detail + ": " + pod.Status.Message)
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		t := cs.State.Terminated
+		if t == nil || t.StartedAt.IsZero() {
+			continue
+		}
+		ran = true
+		finished = t.FinishedAt.Time
+		detail = fmt.Sprintf("exit code %d", t.ExitCode)
+		if t.Message != "" {
+			detail += ": " + strings.TrimSpace(t.Message)
+		}
+	}
+	if detail == "" {
+		detail = "no reason reported"
+	}
+	return ran, finished, detail
+}
+
+func (r *SwiftSnapshotReconciler) warnCleanupRetry(snap *snapshotv1alpha1.SwiftSnapshot, pod *corev1.Pod, ran bool, detail string) {
+	if r.Recorder == nil {
+		return
+	}
+	what := "did not run"
+	if ran {
+		what = "failed"
+	}
+	r.Recorder.Eventf(snap, corev1.EventTypeWarning, ReasonNodeCleanupRetry,
+		"cleanup pod %s/%s on node %s %s (%s); replacing it", pod.Namespace, pod.Name, pod.Spec.NodeName, what, detail)
 }
 
 // legacyCleanupDone reports whether a cleanup pod an earlier version ran in
@@ -402,16 +521,15 @@ func (r *SwiftSnapshotReconciler) cleanupCaptureCopy(ctx context.Context, snap *
 		}
 		all = all && done
 	}
-	if !all {
-		return false, nil
-	}
-	return true, r.deleteCleanupPods(ctx, snap)
+	return all, nil
 }
 
-// deleteCleanupPods deletes the snapshot's cleanup pods once every node is
-// clean. They go before the finalizer does: nothing owns them, so nothing
-// else would delete them. Should the finalizer update then fail, the next
-// pass runs the pods again, harmlessly.
+// deleteCleanupPods deletes the snapshot's cleanup pods when its finalizer
+// goes (removeNamedFinalizer). A succeeded pod is the record that its node is
+// clean, so the pods stay while anything else (an object-store purge) is still
+// in progress: deleting them earlier made every pass run them again. Nothing
+// owns them, so nothing else would delete them; should the finalizer update
+// then fail, the next pass runs them again, harmlessly.
 func (r *SwiftSnapshotReconciler) deleteCleanupPods(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) error {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(r.cleanupPodNamespace(snap.Namespace)), client.MatchingLabels{
@@ -523,6 +641,9 @@ func (r *SwiftSnapshotReconciler) removeFinalizer(ctx context.Context, snap *sna
 // removeNamedFinalizer strips a specific finalizer and patches. Returns
 // (true, nil) on success so a caller can `return r.removeNamedFinalizer(...)`.
 func (r *SwiftSnapshotReconciler) removeNamedFinalizer(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot, name string) (bool, error) {
+	if err := r.deleteCleanupPods(ctx, snap); err != nil {
+		return false, err
+	}
 	patched := snap.DeepCopy()
 	out := patched.Finalizers[:0]
 	for _, f := range patched.Finalizers {
@@ -566,6 +687,11 @@ func (r *SwiftSnapshotReconciler) handleS3Deletion(
 	// Nothing to purge: never uploaded, or no s3 config. Drop the finalizer.
 	if snap.Status.S3 == nil || snap.Spec.Backend.S3 == nil || snap.Spec.Backend.S3.Bucket == "" {
 		return r.removeNamedFinalizer(ctx, snap, S3ObjectFinalizer)
+	}
+	// A purge Job mounting a Secret that no longer exists never starts (its
+	// pod waits in ContainerCreating), and the snapshot waited with it.
+	if done, skipped, err := r.skipPurgeWithoutCredentials(ctx, snap, S3ObjectFinalizer, s3DeleteJobName(snap), s3CredentialsSecret(snap), "the objects under "+s3Location(snap)); err != nil || skipped {
+		return done, err
 	}
 	// Can't purge without the snapshot-s3 image — don't wedge deletion forever.
 	if r.SnapshotS3Image == "" {
@@ -630,6 +756,9 @@ func (r *SwiftSnapshotReconciler) handleOCIDeletion(ctx context.Context, snap *s
 	if retainArtifacts(snap) || len(refs) == 0 {
 		return r.removeNamedFinalizer(ctx, snap, OCIArtifactFinalizer)
 	}
+	if done, skipped, err := r.skipPurgeWithoutCredentials(ctx, snap, OCIArtifactFinalizer, ociDeleteJobName(snap), ociConn(snap).CredentialsSecretName, "the artifacts "+ociRefList(refs)); err != nil || skipped {
+		return done, err
+	}
 	if r.SnapshotORASImage == "" {
 		logger.Info("snapshot-oras image not configured; dropping OCI cleanup finalizer without deleting the artifact", "snapshot", snap.Name)
 		return r.removeNamedFinalizer(ctx, snap, OCIArtifactFinalizer)
@@ -680,6 +809,51 @@ func (r *SwiftSnapshotReconciler) handleOCIDeletion(ctx context.Context, snap *s
 		}
 	}
 	return false, nil // still deleting
+}
+
+// s3CredentialsSecret names the Secret an s3 snapshot's purge Job reads.
+func s3CredentialsSecret(snap *snapshotv1alpha1.SwiftSnapshot) string {
+	if s3 := snap.Spec.Backend.S3; s3 != nil && s3.CredentialsSecretRef != nil {
+		return s3.CredentialsSecretRef.Name
+	}
+	return ""
+}
+
+// skipPurgeWithoutCredentials drops a remote backend's finalizer without
+// purging when the credentials Secret its purge Job needs is gone: that Job's
+// pod cannot mount it and waits forever, holding the snapshot (and its
+// namespace) in Terminating. The Job is deleted, and what is left in the store
+// is named in a Warning event and the log, as when a terminating namespace
+// refuses the Job. Reports skipped=false when there is no Secret to check or
+// it exists.
+func (r *SwiftSnapshotReconciler) skipPurgeWithoutCredentials(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot, finalizer, jobName, secret, left string) (done, skipped bool, err error) {
+	if secret == "" {
+		return false, false, nil
+	}
+	var sec corev1.Secret
+	err = r.Get(ctx, client.ObjectKey{Namespace: snap.Namespace, Name: secret}, &sec)
+	if err == nil {
+		return false, false, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return false, false, err
+	}
+	var job batchv1.Job
+	if gerr := r.Get(ctx, client.ObjectKey{Namespace: snap.Namespace, Name: jobName}, &job); gerr == nil {
+		if derr := r.Delete(ctx, &job, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(derr) != nil {
+			return false, false, derr
+		}
+	} else if !apierrors.IsNotFound(gerr) {
+		return false, false, gerr
+	}
+	msg := fmt.Sprintf("credentials Secret %s/%s no longer exists, so %s cannot be deleted; delete them by hand",
+		snap.Namespace, secret, left)
+	log.FromContext(ctx).Info(msg, "snapshot", snap.Namespace+"/"+snap.Name)
+	if r.Recorder != nil {
+		r.Recorder.Event(snap, corev1.EventTypeWarning, ReasonPurgeSkipped, msg)
+	}
+	done, err = r.removeNamedFinalizer(ctx, snap, finalizer)
+	return done, true, err
 }
 
 // skipPurge drops a remote backend's finalizer without purging, because the
