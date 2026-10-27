@@ -22,9 +22,9 @@ spec:
         s3:
           bucket: kubeswift-snapshots
           prefix: scheduled
-          endpoint: minio.minio.svc:9000
+          endpoint: s3.s3-demo.svc:9000
           forcePathStyle: true
-          insecure: true            # demo MinIO over HTTP; UNSAFE — drop for TLS endpoints
+          insecure: true            # the demo S3 server over HTTP; UNSAFE — drop for TLS endpoints
           region: us-east-1
           credentialsSecretRef:
             name: s3-creds

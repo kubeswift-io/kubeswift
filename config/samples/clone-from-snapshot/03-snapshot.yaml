@@ -4,7 +4,7 @@
 # want every clone to start from). The snapshot must reach Ready (its artifacts
 # uploaded to object storage) before the clone pool can boot.
 #
-# endpoint + forcePathStyle + insecure target the in-cluster demo MinIO; drop
+# endpoint + forcePathStyle + insecure target the in-cluster demo S3 server; drop
 # them and set a real region for AWS S3.
 apiVersion: snapshot.kubeswift.io/v1alpha1
 kind: SwiftSnapshot
@@ -19,9 +19,9 @@ spec:
     s3:
       bucket: kubeswift-snapshots
       prefix: clones
-      endpoint: minio.minio.svc:9000
+      endpoint: s3.s3-demo.svc:9000
       forcePathStyle: true
-      insecure: true            # demo MinIO serves plain HTTP; UNSAFE — drop for TLS
+      insecure: true            # the demo S3 server serves plain HTTP; UNSAFE — drop for TLS
       region: us-east-1
       credentialsSecretRef:
         name: s3-creds

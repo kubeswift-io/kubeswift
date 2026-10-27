@@ -1,7 +1,7 @@
 # Source SwiftGuest for the cloneFromSnapshot pool walkthrough (Snapshot Phase 4).
 #
 # Prerequisites (apply first):
-#   config/samples/s3-snapshots/00-minio.yaml          # in-cluster MinIO + bucket
+#   config/samples/s3-snapshots/00-s3-server.yaml      # in-cluster S3 server + bucket
 #   config/samples/local-snapshots/01-seed-profile.yaml # identity-regen seed
 #   config/samples/s3-snapshots/01-s3-creds.yaml         # s3 credentials Secret
 #

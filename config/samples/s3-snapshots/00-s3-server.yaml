@@ -1,0 +1,67 @@
+# In-cluster S3 server (Versity S3 Gateway over a POSIX directory) for
+# exercising the Tier C (s3) snapshot backend without an external object store.
+# NOT for production — single replica, emptyDir storage, demo credentials. For
+# production point spec.backend.s3.endpoint at your real S3-compatible store
+# (AWS S3, Ceph RGW, ...) and supply real credentials.
+#
+# The bucket the samples use (kubeswift-snapshots) is created at start: with
+# the posix backend a bucket is a top-level directory. The snapshot controller
+# does NOT create buckets.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: s3-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: s3
+  namespace: s3-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: s3
+  template:
+    metadata:
+      labels:
+        app: s3
+    spec:
+      initContainers:
+        - name: bucket
+          image: docker.io/library/busybox:1.36
+          command: ["mkdir", "-p", "/data/kubeswift-snapshots"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: s3
+          image: docker.io/versity/versitygw:v1.0.20
+          args: ["--port", ":9000", "posix", "/data"]
+          env:
+            - name: ROOT_ACCESS_KEY
+              value: kubeswift-demo
+            - name: ROOT_SECRET_KEY
+              value: kubeswift-demo-secret
+          ports:
+            - containerPort: 9000
+              name: s3
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: s3
+  namespace: s3-demo
+spec:
+  selector:
+    app: s3
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: 9000

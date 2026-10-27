@@ -5,7 +5,7 @@
 #   secretAccessKey  (required)
 #   sessionToken     (optional — for temporary STS credentials)
 #
-# These demo values match the MinIO root user in 00-minio.yaml. Replace with
+# These demo values match the root user in 00-s3-server.yaml. Replace with
 # real, least-privilege credentials for production (the IAM principal needs
 # s3:PutObject / s3:GetObject / s3:ListBucket on the bucket+prefix only).
 #
@@ -18,5 +18,5 @@ metadata:
   namespace: default
 type: Opaque
 stringData:
-  accessKeyId: minioadmin
-  secretAccessKey: minioadmin
+  accessKeyId: kubeswift-demo
+  secretAccessKey: kubeswift-demo-secret
