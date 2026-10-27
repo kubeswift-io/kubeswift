@@ -809,6 +809,19 @@ func (r *SwiftRestoreReconciler) ensureCloneTargetGuest(
 	// action (handleRestoringLocal stops there). A Stopped target has no
 	// launcher at all, so the restore waited for one forever.
 	target.Spec.RunPolicy = swiftv1alpha1.RunPolicyRunning
+	// spec.nodeName is target-owned too: the clone runs where its restore
+	// runs (spec.targetNode, or the capture node for local), which is where
+	// the snapshot's memory was downloaded. A source pinned with spec.nodeName
+	// handed its own node to the clone, and the launcher was bound there, not
+	// on the restore node: the restore waited for a CH socket that never came
+	// (or the pod was refused, OutOfcpu) and stayed Restoring for good. An
+	// unpinned source gives an unpinned clone; the restore pod's node selector
+	// places it.
+	if target.Spec.NodeName != "" {
+		if node := annos[swiftguestctrl.AnnotationRestoreNodeName]; node != "" {
+			target.Spec.NodeName = node
+		}
+	}
 	if err := r.Create(ctx, target); err != nil && !apierrors.IsAlreadyExists(err) {
 		return nil, err
 	}
