@@ -53,6 +53,15 @@ const (
 	EnvCheckHost = "CHECK_HOST" // server: peer SAN by env; client reads InputDir
 	EnvDstPodIP  = "DST_POD_IP" // server never sets it; client reads InputDir
 
+	// EnvFollowInputs marks a client sidecar whose entrypoint restarts
+	// stunnel when its inputs change. Sidecars injected before it existed
+	// start stunnel once, on the first destination they are given, and keep
+	// tunnelling there for the life of the pod: a second migration from that
+	// pod cannot reach its destination. The SwiftMigration controller refuses
+	// one up front (sourceSidecarStale).
+	EnvFollowInputs      = "STUNNEL_FOLLOW_INPUTS"
+	EnvFollowInputsValue = "1"
+
 	// Role values.
 	RoleServer = "server" // destination: TLS server, inputs by env at start
 	RoleClient = "client" // source: TLS client, idle-polls InputDir + TLSDir

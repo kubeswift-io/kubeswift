@@ -76,6 +76,7 @@ func sourceStunnelSidecar() corev1.Container {
 			{Name: migrationsidecar.EnvRole, Value: migrationsidecar.RoleClient},
 			{Name: migrationsidecar.EnvConfigDir, Value: migrationsidecar.ConfigDir},
 			{Name: migrationsidecar.EnvInputDir, Value: migrationsidecar.InputDir},
+			{Name: migrationsidecar.EnvFollowInputs, Value: migrationsidecar.EnvFollowInputsValue},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: migrationsidecar.ConfigVolumeName, MountPath: migrationsidecar.ConfigDir, ReadOnly: true},

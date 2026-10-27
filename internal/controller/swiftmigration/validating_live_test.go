@@ -512,3 +512,60 @@ func TestHandleValidating_SharedBaseDiskRefusesEveryMode(t *testing.T) {
 		})
 	}
 }
+
+// A failed mTLS migration leaves the guest on its source pod with the old
+// destination stamped on it. A sidecar from before input following started
+// stunnel on that destination and keeps tunnelling there, so the next
+// migration from the pod is refused up front; one that follows its inputs,
+// or a legacy one never stamped (stunnel not started), proceeds.
+func TestValidatingLive_MTLS_StaleLegacySidecar(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		follows bool
+		stamped bool
+		refused bool
+	}{
+		{"legacy sidecar, earlier destination stamped", false, true, true},
+		{"legacy sidecar, never stamped", false, false, false},
+		{"following sidecar, earlier destination stamped", true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := validatingScheme(t)
+			const sysNS = "kubeswift-system"
+			srcPod := withClientStunnelSidecar(newSourcePod("guest", "default", "src-pod-uid-1"))
+			if tc.follows {
+				sc := &srcPod.Spec.Containers[len(srcPod.Spec.Containers)-1]
+				sc.Env = append(sc.Env, corev1.EnvVar{Name: migrationsidecar.EnvFollowInputs, Value: migrationsidecar.EnvFollowInputsValue})
+			}
+			if tc.stamped {
+				if srcPod.Annotations == nil {
+					srcPod.Annotations = map[string]string{}
+				}
+				srcPod.Annotations[migrationsidecar.AnnotationDstPodIP] = "10.244.9.9"
+				srcPod.Annotations[migrationsidecar.AnnotationPeerSAN] = "worker-3"
+			}
+			mig := newMigration("m", "default")
+			mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+			mig.Spec.Timeout = &metav1.Duration{Duration: 5 * 60 * 1e9}
+			mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
+			c := fake.NewClientBuilder().WithScheme(scheme).
+				WithObjects(mig, newGuestForValidating("guest", "default", "class-default"), newGuestClass("class-default", 2, 2048),
+					newSpaciousNode("worker-2", 8, 65536), srcPod,
+					migrationNodeIdentitySecret(sysNS, "worker-1"), migrationNodeIdentitySecret(sysNS, "worker-2")).
+				WithStatusSubresource(mig).Build()
+			r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10),
+				MigrationMTLSEnabled: true, SystemNamespace: sysNS}
+
+			result := r.handleValidatingLive(context.Background(), mig, mig.Status.DeepCopy())
+			if tc.refused {
+				if result.FailureReason != migrationv1alpha1.FailureReasonSourceSidecarNotReady || !strings.Contains(result.FailureMsg, "10.244.9.9") {
+					t.Fatalf("want SourceSidecarNotReady naming the old destination, got reason=%q msg=%q", result.FailureReason, result.FailureMsg)
+				}
+				return
+			}
+			if result.Err != nil || result.FailureMsg != "" || !result.Advanced {
+				t.Fatalf("want advanced, got err=%v reason=%q msg=%q", result.Err, result.FailureReason, result.FailureMsg)
+			}
+		})
+	}
+}

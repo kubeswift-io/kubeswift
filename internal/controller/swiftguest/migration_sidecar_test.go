@@ -88,6 +88,11 @@ func TestApplyMigrationSourceSidecar_InjectsIdleClient(t *testing.T) {
 	if env[migrationsidecar.EnvRole] != migrationsidecar.RoleClient {
 		t.Errorf("sidecar role: want %q, got %q", migrationsidecar.RoleClient, env[migrationsidecar.EnvRole])
 	}
+	// The SwiftMigration controller reads this to tell a sidecar that follows
+	// a new destination from one that cannot.
+	if env[migrationsidecar.EnvFollowInputs] != migrationsidecar.EnvFollowInputsValue {
+		t.Errorf("sidecar %s: want %q, got %q", migrationsidecar.EnvFollowInputs, migrationsidecar.EnvFollowInputsValue, env[migrationsidecar.EnvFollowInputs])
+	}
 	// Idle client: peer SAN + dst IP are NOT env (they arrive via files).
 	if _, ok := env[migrationsidecar.EnvCheckHost]; ok {
 		t.Errorf("client sidecar must NOT set CHECK_HOST in env (reads from downward-API file)")

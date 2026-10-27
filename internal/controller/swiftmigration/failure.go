@@ -8,6 +8,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
@@ -85,6 +86,18 @@ func (r *SwiftMigrationReconciler) cleanupCopiedNodeIdentities(
 			continue
 		}
 		if err := r.Delete(ctx, &sec); err != nil && !apierrors.IsNotFound(err) {
+			// A controller without delete on Secrets (the chart did not grant
+			// it before v0.21.0) would hold the migration's finalizer for
+			// good, and the migration with it. Say what is left instead.
+			if apierrors.IsForbidden(err) {
+				msg := fmt.Sprintf("could not delete the node identity copy Secret %s/%s (%v); it holds a node's migration private key, so delete it by hand",
+					sec.Namespace, sec.Name, err)
+				log.FromContext(ctx).Info(msg)
+				if r.Recorder != nil {
+					r.Recorder.Event(mig, corev1.EventTypeWarning, "IdentityCleanupFailed", msg)
+				}
+				continue
+			}
 			return err
 		}
 	}

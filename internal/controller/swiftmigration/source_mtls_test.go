@@ -29,6 +29,14 @@ func TestIsLocalStunnelNotReady(t *testing.T) {
 		{"receive_migration: connection_refused", false}, // dst side, not src-local
 		{"", false},
 		{"some other error", false},
+		// CH >= v53: the send is accepted, then swiftletd's connection watch
+		// reports the loopback connection never opened.
+		{"the migration connection to 127.0.0.1:6790 never opened, and the source guest is still running (the transfer failed; Cloud Hypervisor resumed the source)", true},
+		{"the migration connection to 127.0.0.1:6790 never opened, and the source guest is still running (the transfer failed; CH v53 auto-resumed the source)", true}, // launchers built before the wording change
+		// The local client was up and the transfer then failed: not a not-ready race.
+		{"the migration connection to 127.0.0.1:6790 closed, and the source guest is still running (the transfer failed; Cloud Hypervisor resumed the source)", false},
+		// Plaintext transport straight to the destination: not the local client.
+		{"the migration connection to 10.244.1.42:6789 never opened, and the source guest is still running (the transfer failed; Cloud Hypervisor resumed the source)", false},
 	}
 	for _, tc := range cases {
 		if got := isLocalStunnelNotReady(tc.detail); got != tc.want {

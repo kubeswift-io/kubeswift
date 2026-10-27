@@ -68,6 +68,32 @@ func sourcePodMTLSReady(srcPod *corev1.Pod) bool {
 	return false // no sidecar
 }
 
+// sourceSidecarStale reports whether the source pod's client sidecar is one
+// that started stunnel for an earlier migration and will not follow a new
+// destination: it predates EnvFollowInputs, and a destination has already
+// been stamped on the pod (by a migration that failed and left the guest
+// here). Such a sidecar tunnels the new transfer to the old destination
+// address, so every send fails until the pod is replaced. A legacy sidecar
+// that was never stamped has not started stunnel yet and still works once.
+func sourceSidecarStale(srcPod *corev1.Pod) bool {
+	if srcPod.Annotations[migrationsidecar.AnnotationDstPodIP] == "" {
+		return false
+	}
+	for i := range srcPod.Spec.Containers {
+		c := &srcPod.Spec.Containers[i]
+		if c.Name != migrationsidecar.ContainerName {
+			continue
+		}
+		for _, e := range c.Env {
+			if e.Name == migrationsidecar.EnvFollowInputs {
+				return e.Value != migrationsidecar.EnvFollowInputsValue
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // isLocalStunnelNotReady reports whether a src-side migration-status-detail
 // indicates the LOCAL stunnel client (127.0.0.1:6790) was not yet
 // listening when the src CH tried to send — i.e. the source sidecar hasn't
@@ -79,9 +105,20 @@ func sourcePodMTLSReady(srcPod *corev1.Pod) bool {
 // connected to the up local client, which then failed reaching the dst),
 // NOT connection_refused — so this never misfires on a genuine dst failure.
 // Callers MUST additionally gate on r.MigrationMTLSEnabled.
+//
+// Cloud Hypervisor >= v53 accepts send-migration before it connects, so the
+// refused connect no longer comes back from the call: swiftletd's connection
+// watch (migconn.rs) reports that the connection to the loopback target
+// "never opened". A connection to the local client that never opened is the
+// same not-listening-yet case: when the client is up, the connection opens
+// even if the destination is unreachable (the client accepts, then fails
+// onward), which the watch reports as "closed".
 func isLocalStunnelNotReady(detail string) bool {
 	d := strings.ToLower(strings.TrimSpace(detail))
-	return strings.HasPrefix(d, "send_migration:") && strings.Contains(d, "connection_refused")
+	if strings.HasPrefix(d, "send_migration:") && strings.Contains(d, "connection_refused") {
+		return true
+	}
+	return strings.Contains(d, "migration connection to 127.0.0.1:") && strings.Contains(d, "never opened")
 }
 
 // isDestReceiverNotReady reports whether a src-side migration-status-detail

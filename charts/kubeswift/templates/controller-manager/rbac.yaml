@@ -78,9 +78,12 @@ rules:
   #      migrationcert controller copies a node's cert-manager-issued
   #      identity Secret into guest namespaces (distribution, not issuance),
   #      and is not registered at all when mTLS is disabled.
+  # delete: the SwiftMigration controller removes those node-identity copies
+  # from the guest namespace when the last migration using them ends, so a
+  # node-wide private key does not stay in a tenant namespace.
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "watch", "create", "update"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
