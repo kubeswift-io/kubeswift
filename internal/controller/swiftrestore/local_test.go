@@ -490,3 +490,46 @@ func TestEnsureCloneTargetGuest_NoResume_TargetStillRuns(t *testing.T) {
 		t.Errorf("target runPolicy = %q, want Running (the paused VM lives in a launcher)", got.Spec.RunPolicy)
 	}
 }
+
+// spec.nodeName is target-owned: a clone of a pinned source runs on the
+// restore's node (where its memory was downloaded), not the source's. The
+// copied pin bound the launcher to the source's node, and the restore stayed
+// Restoring for good. An unpinned source gives an unpinned clone.
+func TestEnsureCloneTargetGuest_NodeNameFollowsRestore(t *testing.T) {
+	for _, tc := range []struct {
+		name, sourceNode, want string
+	}{
+		{"pinned source", "worker-1", "worker-2"},
+		{"unpinned source", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := &swiftv1alpha1.SwiftGuest{
+				ObjectMeta: metav1.ObjectMeta{Name: "src", Namespace: "ns"},
+				Spec: swiftv1alpha1.SwiftGuestSpec{
+					ImageRef: &corev1.LocalObjectReference{Name: "img"},
+					NodeName: tc.sourceNode,
+				},
+			}
+			restore := &snapshotv1alpha1.SwiftRestore{
+				ObjectMeta: metav1.ObjectMeta{Name: "r1", Namespace: "ns"},
+				Spec: snapshotv1alpha1.SwiftRestoreSpec{
+					SnapshotRef: snapshotv1alpha1.SwiftRestoreSnapshotRef{Name: "snap"},
+					TargetGuest: snapshotv1alpha1.SwiftRestoreTarget{Name: "clone"},
+					TargetNode:  "worker-2",
+				},
+			}
+			r, _ := newReconciler(t, source, restore)
+			got, err := r.ensureCloneTargetGuest(context.Background(), restore, source,
+				map[string]string{swiftguestctrl.AnnotationRestoreNodeName: "worker-2"})
+			if err != nil {
+				t.Fatalf("ensureCloneTargetGuest: %v", err)
+			}
+			if got.Spec.NodeName != tc.want {
+				t.Errorf("clone spec.nodeName = %q, want %q", got.Spec.NodeName, tc.want)
+			}
+			if source.Spec.NodeName != tc.sourceNode {
+				t.Errorf("source spec changed: nodeName = %q", source.Spec.NodeName)
+			}
+		})
+	}
+}
