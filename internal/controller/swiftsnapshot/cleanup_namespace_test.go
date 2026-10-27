@@ -31,7 +31,7 @@ func newReconcilerIn(t *testing.T, terminating []string, objs ...client.Object) 
 	scheme := testScheme(t)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(objs...).
+		WithObjects(withTestNodes(objs)...).
 		WithStatusSubresource(&snapshotv1alpha1.SwiftSnapshot{}).
 		WithInterceptorFuncs(interceptor.Funcs{Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 			for _, ns := range terminating {

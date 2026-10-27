@@ -6,6 +6,15 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Upgrade
+
+- No CRD, value or template changed. Snapshots stuck in `Terminating` because their cleanup pod failed (for example, evicted under `DiskPressure`) finish deleting after the upgrade. Capture directories left by earlier versions are not removed automatically: see [local snapshots: Directories no snapshot owns](docs/snapshots/local-snapshots.md#directories-no-snapshot-owns).
+
+### Fixed
+
+- **A snapshot's capture could be left on its node for good.** The launcher writes a memory capture (local, s3 or oci) into a directory on its node as soon as the controller sends it, but the controller recorded the capture node only afterwards, and added the cleanup finalizer only once the snapshot was Ready. A snapshot deleted while capturing, uploading or after it failed was removed without cleaning its node, and a status write lost after the capture was sent (a conflict, a controller restart) left a capture no object named. The finalizer and the node are now persisted before the capture is sent; snapshots an earlier version began gain the finalizer once they have a node; and a deletion waits for a running capture to end before removing its directory.
+- **A failed snapshot cleanup pod held its snapshot in `Terminating` for good.** Any failed cleanup pod waited for an operator to delete it, including one the kubelet rejected before it ran (two were found evicted under `DiskPressure` three weeks earlier). It is now replaced, at once if it never ran and after five minutes if `rm` failed, with a `NodeCleanupRetry` Warning event each time. A capture node no longer in the cluster no longer holds the deletion; a `NodeCleanupSkipped` Warning event names the directory to remove if the node rejoins.
+
 ## [v0.21.0] — 2026-10-27
 
 A minor release. The launcher moves from Cloud Hypervisor v53.0 to **v54.0**, and guests keep the behaviour they had on v53: KubeSwift now sets explicitly the two things v54 changed by default (nested virtualization, virtio-net offloads). See [Node runtime: Cloud Hypervisor](docs/architecture/node-runtime.md#cloud-hypervisor-requirements). It also fixes live migration of guests with data disks or mTLS, image-backed data disks that were shared writable, and snapshot copies left on nodes. Release candidates: rc.1, rc.2, rc.3.

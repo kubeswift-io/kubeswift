@@ -61,12 +61,32 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
+// testNodes are the nodes every test cluster has, so node cleanup finds
+// the capture node it targets.
+var testNodes = []string{"worker-1", "worker-2", "worker-3"}
+
+// withTestNodes adds testNodes to objs (those objs already carry excepted).
+func withTestNodes(objs []client.Object) []client.Object {
+	have := map[string]bool{}
+	for _, o := range objs {
+		if _, ok := o.(*corev1.Node); ok {
+			have[o.GetName()] = true
+		}
+	}
+	for _, n := range testNodes {
+		if !have[n] {
+			objs = append(objs, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: n}})
+		}
+	}
+	return objs
+}
+
 func newReconciler(t *testing.T, objs ...client.Object) (*SwiftSnapshotReconciler, client.Client) {
 	t.Helper()
 	scheme := testScheme(t)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(objs...).
+		WithObjects(withTestNodes(objs)...).
 		WithStatusSubresource(&snapshotv1alpha1.SwiftSnapshot{}).
 		Build()
 	return &SwiftSnapshotReconciler{Client: c, Scheme: scheme}, c
