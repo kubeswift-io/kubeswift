@@ -105,9 +105,11 @@ of `namespace/name/interface-name`. This ensures:
   OVN-Kubernetes primary UDN
 - `status.network.podIP` — the launcher pod's IP
 - `status.network.interfaces[]` — all interfaces with name, MAC, and IP where discoverable
-- Secondary NIC IPs are NOT auto-discovered via dnsmasq. They come from the CNI
-  plugin's IPAM or static cloud-init `networkData`. Secondary IPs configured
-  statically are visible inside the guest but may not appear in SwiftGuest status.
+- A secondary NIC on a NAD with IPAM is handed its address by the launcher's
+  second dnsmasq, and that address appears in `status.network.interfaces[]` once
+  the guest has leased it (since v0.21.0). Other secondary IPs come from static
+  cloud-init `networkData`: they are visible inside the guest but not in
+  SwiftGuest status.
 
 ## Cloud-Init Network Configuration
 
@@ -189,7 +191,7 @@ see [OVN-Kubernetes Integration Guide](networking/ovn-kubernetes.md).
 
 ## Limitations
 
-- Secondary NIC IPs are not auto-discovered in `status.network.interfaces`
+- Secondary NIC IPs set statically in the guest (no DHCP) are not shown in `status.network.interfaces`
 - SR-IOV NIC passthrough uses VFIO — see [SR-IOV guide](networking/sriov.md) for setup
 - No live NIC hotplug — interfaces are fixed at pod creation time
 - Maximum number of NICs is limited by virtio-net PCI slot availability (practical limit ~28)

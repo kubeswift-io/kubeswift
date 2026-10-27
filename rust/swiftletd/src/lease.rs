@@ -62,6 +62,32 @@ pub(crate) fn parse_first_lease(contents: &str) -> Option<String> {
     None
 }
 
+/// The secondary NAD NIC's dnsmasq (launcher-entrypoint.sh) writes its leases
+/// here, next to the primary's `dnsmasq.leases`, and network-init writes
+/// `secondary-nad.env` there when the guest has such a NIC.
+const SECONDARY_LEASE_FILE: &str = "secondary-dnsmasq.leases";
+const SECONDARY_NAD_ENV: &str = "secondary-nad.env";
+
+/// How long to keep looking for the secondary NIC's lease once the primary's
+/// is reported (each attempt 2 s apart). A guest DHCPs on both NICs at boot,
+/// so this is short.
+const SECONDARY_LEASE_ATTEMPTS: u32 = 60;
+
+/// Every lease in a dnsmasq lease file, by lower-case MAC.
+pub(crate) fn parse_leases_by_mac(contents: &str) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for line in contents.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 3
+            && !parts[0].starts_with('#')
+            && parts[2].parse::<std::net::IpAddr>().is_ok()
+        {
+            out.insert(parts[1].to_ascii_lowercase(), parts[2].to_string());
+        }
+    }
+    out
+}
+
 /// Spawns a background thread that polls the lease file and patches the pod annotation when IP found.
 /// Lease-poll attempt caps (each attempt is `INTERVAL` = 2s apart).
 ///
@@ -134,6 +160,7 @@ pub fn spawn_lease_poller(
             };
             let nics_ref = nics.as_deref();
             let egress = read_egress_marker(&path);
+            let secondary = read_secondary_leases(&path);
             // patched is true iff patch_pod_annotation returned Ok.
             // We continue polling on transient errors (kube-client
             // unavailable, 403 RBAC gap during initial namespace
@@ -153,6 +180,7 @@ pub fn spawn_lease_poller(
                     &pod_name,
                     &ip,
                     nics_ref,
+                    &secondary,
                     egress.as_deref(),
                 )
                 .await
@@ -168,6 +196,17 @@ pub fn spawn_lease_poller(
                 }
             });
             if patched {
+                if awaits_secondary_lease(&path, nics_ref, &secondary) {
+                    report_secondary_lease(
+                        &path,
+                        &rt,
+                        &namespace,
+                        &pod_name,
+                        &ip,
+                        nics_ref,
+                        egress.as_deref(),
+                    );
+                }
                 return;
             }
             // else: continue polling; transient error or RBAC gap.
@@ -229,10 +268,81 @@ fn report_network_unready(namespace: &str, pod_name: &str, waited_secs: u64) {
     );
 }
 
+/// The secondary NAD NIC's leases (by MAC), read next to the primary's lease
+/// file; empty when there are none.
+fn read_secondary_leases(lease_path: &Path) -> std::collections::HashMap<String, String> {
+    lease_path
+        .parent()
+        .and_then(|d| std::fs::read_to_string(d.join(SECONDARY_LEASE_FILE)).ok())
+        .map(|c| parse_leases_by_mac(&c))
+        .unwrap_or_default()
+}
+
+/// Whether the guest has a secondary NAD NIC whose lease has not been seen.
+fn awaits_secondary_lease(
+    lease_path: &Path,
+    nics: Option<&[crate::intent::NICIntent]>,
+    secondary: &std::collections::HashMap<String, String>,
+) -> bool {
+    let has_env = lease_path
+        .parent()
+        .is_some_and(|d| d.join(SECONDARY_NAD_ENV).is_file());
+    has_env
+        && nics.is_some_and(|nics| {
+            nics.iter().any(|n| {
+                !n.primary && !n.is_sriov() && !secondary.contains_key(&n.mac.to_ascii_lowercase())
+            })
+        })
+}
+
+/// After the primary IP is reported: wait (bounded) for the secondary NAD
+/// NIC's lease and report the interfaces again with its address. Its dnsmasq
+/// hands the guest a fixed address, but the address is only reported once the
+/// guest has taken it. Best-effort: on timeout the interface stays listed
+/// without an address, as before.
+fn report_secondary_lease(
+    lease_path: &Path,
+    rt: &tokio::runtime::Runtime,
+    namespace: &str,
+    pod_name: &str,
+    ip: &str,
+    nics: Option<&[crate::intent::NICIntent]>,
+    egress: Option<&str>,
+) {
+    for _ in 0..SECONDARY_LEASE_ATTEMPTS {
+        thread::sleep(Duration::from_secs(2));
+        let secondary = read_secondary_leases(lease_path);
+        if awaits_secondary_lease(lease_path, nics, &secondary) {
+            continue;
+        }
+        let patched = rt.block_on(async {
+            let Ok(client) = crate::kube_client::create_client().await else {
+                return false;
+            };
+            patch_pod_annotation(&client, namespace, pod_name, ip, nics, &secondary, egress)
+                .await
+                .map_err(|e| {
+                    log::warn!("patch_pod_annotation_failed (secondary, will retry): {}", e)
+                })
+                .is_ok()
+        });
+        if patched {
+            log::info!("secondary_lease_reported");
+            return;
+        }
+    }
+    log::warn!("secondary_lease_not_seen; the secondary interface is reported without an address");
+}
+
 /// Build the interfaces JSON for pod annotation.
 /// Includes the primary NIC with its discovered IP, plus any secondary NICs
-/// with their MACs (IPs not discoverable via dnsmasq for secondary NICs).
-fn build_interfaces_json(ip: &str, nics: Option<&[crate::intent::NICIntent]>) -> String {
+/// with their MACs, and a secondary NAD NIC's address once its dnsmasq has
+/// leased it (`secondary`, by MAC). SR-IOV NICs have no lease to read.
+fn build_interfaces_json(
+    ip: &str,
+    nics: Option<&[crate::intent::NICIntent]>,
+    secondary: &std::collections::HashMap<String, String>,
+) -> String {
     match nics {
         Some(nics) if !nics.is_empty() => {
             let entries: Vec<serde_json::Value> = nics
@@ -243,6 +353,8 @@ fn build_interfaces_json(ip: &str, nics: Option<&[crate::intent::NICIntent]>) ->
                     } else if n.is_sriov() {
                         // SR-IOV: no MAC from controller, no DHCP IP discovery.
                         json!({"name": n.name})
+                    } else if let Some(sip) = secondary.get(&n.mac.to_ascii_lowercase()) {
+                        json!({"name": n.name, "mac": n.mac, "ip": sip})
                     } else {
                         json!({"name": n.name, "mac": n.mac})
                     }
@@ -263,9 +375,10 @@ async fn patch_pod_annotation(
     name: &str,
     ip: &str,
     nics: Option<&[crate::intent::NICIntent]>,
+    secondary: &std::collections::HashMap<String, String>,
     egress: Option<&str>,
 ) -> Result<(), kube::Error> {
-    let interfaces_json = build_interfaces_json(ip, nics);
+    let interfaces_json = build_interfaces_json(ip, nics, secondary);
 
     let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
     let mut annotations = std::collections::BTreeMap::new();
@@ -373,10 +486,43 @@ mod tests {
     #[test]
     fn build_interfaces_json_legacy_single_nic() {
         // No NIC list → emit the legacy single-NIC entry shape.
-        let s = build_interfaces_json("10.0.0.5", None);
+        let s = build_interfaces_json("10.0.0.5", None, &Default::default());
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
         assert_eq!(v[0]["name"], "eth0");
         assert_eq!(v[0]["ip"], "10.0.0.5");
+    }
+
+    // A secondary NAD NIC is reported with the address its dnsmasq leased,
+    // matched by MAC (any case); without a lease it is listed without one.
+    #[test]
+    fn build_interfaces_json_secondary_nad_lease() {
+        let nics: Vec<crate::intent::NICIntent> = serde_json::from_value(json!([
+            {"name": "eth0", "primary": true, "tapDevice": "tap0", "mac": "52:54:00:00:00:01"},
+            {"name": "net1", "primary": false, "tapDevice": "tap1", "mac": "52:54:00:00:00:02"}
+        ]))
+        .unwrap();
+        let leases = parse_leases_by_mac(
+            "0 52:54:00:00:00:02 192.168.110.10 guest *\n# comment\n0 bad garbage x *\n",
+        );
+        let v: serde_json::Value = serde_json::from_str(&build_interfaces_json(
+            "192.168.99.12",
+            Some(&nics),
+            &leases,
+        ))
+        .unwrap();
+        assert_eq!(v[0]["ip"], "192.168.99.12");
+        assert_eq!(v[1]["ip"], "192.168.110.10");
+
+        let v: serde_json::Value = serde_json::from_str(&build_interfaces_json(
+            "192.168.99.12",
+            Some(&nics),
+            &Default::default(),
+        ))
+        .unwrap();
+        assert!(v[1].get("ip").is_none());
+
+        let upper = parse_leases_by_mac("0 52:54:00:00:00:02 192.168.110.10 guest *\n");
+        assert!(upper.contains_key("52:54:00:00:00:02"));
     }
 
     // The retry-on-failure invariant inside `spawn_lease_poller` (W4
