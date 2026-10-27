@@ -87,7 +87,7 @@ func TestBuildDeleteJob(t *testing.T) {
 
 func TestHandleS3Deletion_CreatesDeleteJob(t *testing.T) {
 	snap := s3SnapReady("snap1", "team-a")
-	r, c := newReconciler(t, snap)
+	r, c := newReconciler(t, snap, s3CredsSecret(snap))
 	r.SnapshotS3Image = "img"
 	done, err := r.handleS3Deletion(context.Background(), snap)
 	if err != nil || done {
@@ -117,7 +117,7 @@ func TestHandleS3Deletion_JobComplete_RemovesFinalizer(t *testing.T) {
 
 func TestHandleS3Deletion_JobFailed_RetainsFinalizer(t *testing.T) {
 	snap := s3SnapReady("snap1", "team-a")
-	r, c := newReconciler(t, snap, deleteJobWith(snap, batchv1.JobFailed))
+	r, c := newReconciler(t, snap, deleteJobWith(snap, batchv1.JobFailed), s3CredsSecret(snap))
 	r.SnapshotS3Image = "img"
 	done, err := r.handleS3Deletion(context.Background(), snap)
 	if err != nil || done {
@@ -134,7 +134,7 @@ func TestHandleS3Deletion_JobFailed_WarnsWithTheError(t *testing.T) {
 	snap := s3SnapReady("snap1", "team-a")
 	job := deleteJobWith(snap, batchv1.JobFailed)
 	job.UID = "delete-uid"
-	r, _, rec := newReconcilerIn(t, nil, snap, job, failedTransferPod(job, "snapshot-s3: delete: AccessDenied: Access Denied"))
+	r, _, rec := newReconcilerIn(t, nil, snap, job, failedTransferPod(job, "snapshot-s3: delete: AccessDenied: Access Denied"), s3CredsSecret(snap))
 	r.SnapshotS3Image = "img"
 	if done, err := r.handleS3Deletion(context.Background(), snap); err != nil || done {
 		t.Fatalf("done=%v err=%v", done, err)
@@ -203,7 +203,7 @@ func TestHandleS3Deletion_Retain(t *testing.T) {
 // s3 snapshot to the S3 path (creates the delete Job).
 func TestHandleDeletion_DispatchesS3(t *testing.T) {
 	snap := s3SnapReady("snap1", "team-a")
-	r, c := newReconciler(t, snap)
+	r, c := newReconciler(t, snap, s3CredsSecret(snap))
 	r.SnapshotS3Image = "img"
 	if _, err := r.handleDeletion(context.Background(), snap); err != nil {
 		t.Fatal(err)
@@ -211,5 +211,39 @@ func TestHandleDeletion_DispatchesS3(t *testing.T) {
 	var job batchv1.Job
 	if err := c.Get(context.Background(), client.ObjectKey{Name: s3DeleteJobName(snap), Namespace: snap.Namespace}, &job); err != nil {
 		t.Errorf("handleDeletion should route s3 backend to the delete-Job path: %v", err)
+	}
+}
+
+// s3CredsSecret is the credentials Secret s3Snap's snapshots reference.
+func s3CredsSecret(snap *snapshotv1alpha1.SwiftSnapshot) *corev1.Secret {
+	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "s3-creds", Namespace: snap.Namespace}}
+}
+
+// The purge Job mounts the credentials Secret; once that Secret is gone the
+// Job's pod never starts and the snapshot waited in Terminating for good. The
+// purge is skipped instead: the Job is deleted, the finalizer goes, and a
+// Warning names what is left in the store.
+func TestS3Deletion_MissingCredentialsSkipsThePurge(t *testing.T) {
+	snap := s3SnapReady("snap1", "team-a")
+	r, c, rec := newReconcilerIn(t, nil, snap, deleteJobWith(snap, ""))
+	r.SnapshotS3Image = "img"
+	done, err := r.handleS3Deletion(context.Background(), snap)
+	if err != nil || !done {
+		t.Fatalf("done=%v err=%v; a purge that cannot run must not hold the snapshot", done, err)
+	}
+	if hasFin(t, c, snap, S3ObjectFinalizer) {
+		t.Error("finalizer kept")
+	}
+	var job batchv1.Job
+	if err := c.Get(context.Background(), client.ObjectKey{Name: s3DeleteJobName(snap), Namespace: snap.Namespace}, &job); !apierrors.IsNotFound(err) {
+		t.Errorf("the stuck purge Job was not deleted: %v", err)
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, ReasonPurgeSkipped) || !strings.Contains(ev, "s3-creds") || !strings.Contains(ev, "kubeswift/team-a/snap1") {
+			t.Errorf("event = %q", ev)
+		}
+	default:
+		t.Error("no Warning event naming what is left")
 	}
 }

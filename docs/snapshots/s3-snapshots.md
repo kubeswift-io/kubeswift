@@ -230,5 +230,8 @@ there. A namespace being deleted accepts no new Job, so when a snapshot is
 deleted with its namespace and its purge has not started, the controller
 drops the finalizer without purging rather than hold the namespace in
 `Terminating`, and logs the prefix that may remain (`admits no purge Job`).
-Delete snapshots before their namespace to have them purged. The oci backend
+The same happens when the credentials Secret the purge needs no longer exists
+(`credentials Secret ... no longer exists`): the purge cannot run, so it is
+skipped and named in a `PurgeSkipped` Warning event. Delete snapshots before
+their namespace, and before their credentials Secret, to have them purged. The oci backend
 does the same with its registry artifacts.

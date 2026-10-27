@@ -297,9 +297,6 @@ func (r *SwiftSnapshotReconciler) handleLocalDeletion(
 	if err != nil || !done {
 		return false, err
 	}
-	if err := r.deleteCleanupPods(ctx, snap); err != nil {
-		return false, err
-	}
 	return r.removeFinalizer(ctx, snap)
 }
 
@@ -524,16 +521,15 @@ func (r *SwiftSnapshotReconciler) cleanupCaptureCopy(ctx context.Context, snap *
 		}
 		all = all && done
 	}
-	if !all {
-		return false, nil
-	}
-	return true, r.deleteCleanupPods(ctx, snap)
+	return all, nil
 }
 
-// deleteCleanupPods deletes the snapshot's cleanup pods once every node is
-// clean. They go before the finalizer does: nothing owns them, so nothing
-// else would delete them. Should the finalizer update then fail, the next
-// pass runs the pods again, harmlessly.
+// deleteCleanupPods deletes the snapshot's cleanup pods when its finalizer
+// goes (removeNamedFinalizer). A succeeded pod is the record that its node is
+// clean, so the pods stay while anything else (an object-store purge) is still
+// in progress: deleting them earlier made every pass run them again. Nothing
+// owns them, so nothing else would delete them; should the finalizer update
+// then fail, the next pass runs them again, harmlessly.
 func (r *SwiftSnapshotReconciler) deleteCleanupPods(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) error {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(r.cleanupPodNamespace(snap.Namespace)), client.MatchingLabels{
@@ -645,6 +641,9 @@ func (r *SwiftSnapshotReconciler) removeFinalizer(ctx context.Context, snap *sna
 // removeNamedFinalizer strips a specific finalizer and patches. Returns
 // (true, nil) on success so a caller can `return r.removeNamedFinalizer(...)`.
 func (r *SwiftSnapshotReconciler) removeNamedFinalizer(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot, name string) (bool, error) {
+	if err := r.deleteCleanupPods(ctx, snap); err != nil {
+		return false, err
+	}
 	patched := snap.DeepCopy()
 	out := patched.Finalizers[:0]
 	for _, f := range patched.Finalizers {
@@ -688,6 +687,11 @@ func (r *SwiftSnapshotReconciler) handleS3Deletion(
 	// Nothing to purge: never uploaded, or no s3 config. Drop the finalizer.
 	if snap.Status.S3 == nil || snap.Spec.Backend.S3 == nil || snap.Spec.Backend.S3.Bucket == "" {
 		return r.removeNamedFinalizer(ctx, snap, S3ObjectFinalizer)
+	}
+	// A purge Job mounting a Secret that no longer exists never starts (its
+	// pod waits in ContainerCreating), and the snapshot waited with it.
+	if done, skipped, err := r.skipPurgeWithoutCredentials(ctx, snap, S3ObjectFinalizer, s3DeleteJobName(snap), s3CredentialsSecret(snap), "the objects under "+s3Location(snap)); err != nil || skipped {
+		return done, err
 	}
 	// Can't purge without the snapshot-s3 image — don't wedge deletion forever.
 	if r.SnapshotS3Image == "" {
@@ -752,6 +756,9 @@ func (r *SwiftSnapshotReconciler) handleOCIDeletion(ctx context.Context, snap *s
 	if retainArtifacts(snap) || len(refs) == 0 {
 		return r.removeNamedFinalizer(ctx, snap, OCIArtifactFinalizer)
 	}
+	if done, skipped, err := r.skipPurgeWithoutCredentials(ctx, snap, OCIArtifactFinalizer, ociDeleteJobName(snap), ociConn(snap).CredentialsSecretName, "the artifacts "+ociRefList(refs)); err != nil || skipped {
+		return done, err
+	}
 	if r.SnapshotORASImage == "" {
 		logger.Info("snapshot-oras image not configured; dropping OCI cleanup finalizer without deleting the artifact", "snapshot", snap.Name)
 		return r.removeNamedFinalizer(ctx, snap, OCIArtifactFinalizer)
@@ -802,6 +809,51 @@ func (r *SwiftSnapshotReconciler) handleOCIDeletion(ctx context.Context, snap *s
 		}
 	}
 	return false, nil // still deleting
+}
+
+// s3CredentialsSecret names the Secret an s3 snapshot's purge Job reads.
+func s3CredentialsSecret(snap *snapshotv1alpha1.SwiftSnapshot) string {
+	if s3 := snap.Spec.Backend.S3; s3 != nil && s3.CredentialsSecretRef != nil {
+		return s3.CredentialsSecretRef.Name
+	}
+	return ""
+}
+
+// skipPurgeWithoutCredentials drops a remote backend's finalizer without
+// purging when the credentials Secret its purge Job needs is gone: that Job's
+// pod cannot mount it and waits forever, holding the snapshot (and its
+// namespace) in Terminating. The Job is deleted, and what is left in the store
+// is named in a Warning event and the log, as when a terminating namespace
+// refuses the Job. Reports skipped=false when there is no Secret to check or
+// it exists.
+func (r *SwiftSnapshotReconciler) skipPurgeWithoutCredentials(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot, finalizer, jobName, secret, left string) (done, skipped bool, err error) {
+	if secret == "" {
+		return false, false, nil
+	}
+	var sec corev1.Secret
+	err = r.Get(ctx, client.ObjectKey{Namespace: snap.Namespace, Name: secret}, &sec)
+	if err == nil {
+		return false, false, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return false, false, err
+	}
+	var job batchv1.Job
+	if gerr := r.Get(ctx, client.ObjectKey{Namespace: snap.Namespace, Name: jobName}, &job); gerr == nil {
+		if derr := r.Delete(ctx, &job, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(derr) != nil {
+			return false, false, derr
+		}
+	} else if !apierrors.IsNotFound(gerr) {
+		return false, false, gerr
+	}
+	msg := fmt.Sprintf("credentials Secret %s/%s no longer exists, so %s cannot be deleted; delete them by hand",
+		snap.Namespace, secret, left)
+	log.FromContext(ctx).Info(msg, "snapshot", snap.Namespace+"/"+snap.Name)
+	if r.Recorder != nil {
+		r.Recorder.Event(snap, corev1.EventTypeWarning, ReasonPurgeSkipped, msg)
+	}
+	done, err = r.removeNamedFinalizer(ctx, snap, finalizer)
+	return done, true, err
 }
 
 // skipPurge drops a remote backend's finalizer without purging, because the

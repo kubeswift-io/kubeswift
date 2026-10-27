@@ -336,7 +336,7 @@ func TestOCIDeletion_TerminatingNamespaceSkipsThePurgeWithAWarning(t *testing.T)
 // before: only a refused creation drops the finalizer.
 func TestS3Deletion_LiveNamespaceStillWaitsForThePurge(t *testing.T) {
 	snap := s3SnapReady("snap1", "team-a")
-	r, c, rec := newReconcilerIn(t, nil, snap, deleteJobWith(snap, ""))
+	r, c, rec := newReconcilerIn(t, nil, snap, deleteJobWith(snap, ""), s3CredsSecret(snap))
 	r.SnapshotS3Image = "img"
 	if done, err := r.handleS3Deletion(context.Background(), snap); err != nil || done {
 		t.Fatalf("done=%v err=%v", done, err)

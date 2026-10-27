@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -357,4 +358,50 @@ func TestCapture_GuestMovedSinceRecordedNode_KeepsOldNode(t *testing.T) {
 
 func reqFor(name, ns string) ctrl.Request {
 	return ctrl.Request{NamespacedName: client.ObjectKey{Name: name, Namespace: ns}}
+}
+
+// While an object-store purge is still running, a succeeded cleanup pod is
+// kept as the record that its node is clean: deleting it made every pass run a
+// new one. It goes with the finalizer.
+func TestCleanupPods_KeptUntilTheFinalizerGoes(t *testing.T) {
+	snap := s3SnapReady("snap1", "team-a")
+	snap.Status.NodeName = "worker-1"
+	now := metav1.Now()
+	snap.DeletionTimestamp = &now
+	job := deleteJobWith(snap, "")
+	r, c, _ := newLifecycleReconciler(t, interceptor.Funcs{}, snap, job, s3CredsSecret(snap))
+	r.SnapshotS3Image = "img"
+	ctx := context.Background()
+
+	if done, err := r.handleS3Deletion(ctx, snap); err != nil || done {
+		t.Fatalf("done=%v err=%v", done, err)
+	}
+	pods := cleanupPods(t, c)
+	if len(pods) != 1 {
+		t.Fatalf("want one cleanup pod, got %d", len(pods))
+	}
+	pods[0].Status.Phase = corev1.PodSucceeded
+	if err := c.Status().Update(ctx, &pods[0]); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if done, err := r.handleS3Deletion(ctx, snap); err != nil || done {
+			t.Fatalf("pass %d: done=%v err=%v; the purge is still running", i, done, err)
+		}
+		got := cleanupPods(t, c)
+		if len(got) != 1 || got[0].UID != pods[0].UID {
+			t.Fatalf("pass %d: the succeeded cleanup pod was replaced (%d pods)", i, len(got))
+		}
+	}
+
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := r.handleS3Deletion(ctx, snap); err != nil || !done {
+		t.Fatalf("done=%v err=%v after the purge completed", done, err)
+	}
+	if len(cleanupPods(t, c)) != 0 {
+		t.Fatal("cleanup pod left after the finalizer went")
+	}
 }
