@@ -140,8 +140,8 @@ the agent to get independently-addressable clones.
 ## Quick start (walkthrough)
 
 ```bash
-# Prereqs: in-cluster MinIO + bucket, the identity-regen seed, and s3 creds.
-kubectl apply -f config/samples/s3-snapshots/00-minio.yaml      # + create the bucket
+# Prereqs: in-cluster S3 server + bucket, the identity-regen seed, and s3 creds.
+kubectl apply -f config/samples/s3-snapshots/00-s3-server.yaml  # creates the bucket too
 kubectl apply -f config/samples/local-snapshots/01-seed-profile.yaml
 kubectl apply -f config/samples/s3-snapshots/01-s3-creds.yaml
 

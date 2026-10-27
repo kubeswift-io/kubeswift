@@ -10,7 +10,7 @@
 # Set false for a disk-only export.
 #
 # The bucket must already exist; prefix is optional (objects land at
-# <prefix>/<namespace>/<snapshot>/). endpoint + forcePathStyle target MinIO;
+# <prefix>/<namespace>/<snapshot>/). endpoint + forcePathStyle target the demo S3 server;
 # drop both and set a real region for AWS S3.
 apiVersion: snapshot.kubeswift.io/v1alpha1
 kind: SwiftSnapshot
@@ -25,9 +25,9 @@ spec:
     s3:
       bucket: kubeswift-snapshots
       prefix: demo
-      endpoint: minio.minio.svc:9000
+      endpoint: s3.s3-demo.svc:9000
       forcePathStyle: true
-      insecure: true            # demo MinIO serves plain HTTP; UNSAFE — drop for TLS endpoints
+      insecure: true            # the demo S3 server serves plain HTTP; UNSAFE — drop for TLS endpoints
       region: us-east-1
       credentialsSecretRef:
         name: s3-creds

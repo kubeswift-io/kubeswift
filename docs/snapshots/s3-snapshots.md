@@ -67,8 +67,9 @@ restore proceeds. A checksum or size mismatch fails the download loudly.
 
 1. **An S3-compatible object store** reachable from the cluster — AWS S3,
    MinIO, or Ceph RGW. For a quick in-cluster test store, apply
-   [`config/samples/s3-snapshots/00-minio.yaml`](../../config/samples/s3-snapshots/00-minio.yaml)
-   (demo-grade: single replica, emptyDir, `minioadmin`/`minioadmin`).
+   [`config/samples/s3-snapshots/00-s3-server.yaml`](../../config/samples/s3-snapshots/00-s3-server.yaml)
+   (Versity S3 Gateway; demo-grade: single replica, emptyDir, demo credentials;
+   it creates the samples' bucket).
 2. **The bucket must already exist** — the controller does not create it.
 3. **A credentials Secret** in the SwiftSnapshot's namespace with keys
    `accessKeyId`, `secretAccessKey`, and optional `sessionToken`
@@ -82,10 +83,7 @@ restore proceeds. A checksum or size mismatch fails the download loudly.
 
 ```bash
 # In-cluster test store (skip if you have a real S3 endpoint).
-kubectl apply -f config/samples/s3-snapshots/00-minio.yaml
-# create the bucket once, e.g. via the MinIO console (:9001) or mc:
-#   mc alias set local http://minio.minio.svc:9000 minioadmin minioadmin
-#   mc mb local/kubeswift-snapshots
+kubectl apply -f config/samples/s3-snapshots/00-s3-server.yaml   # creates the bucket too
 
 kubectl apply -f config/samples/local-snapshots/01-seed-profile.yaml   # shared seed
 kubectl apply -f config/samples/s3-snapshots/01-s3-creds.yaml

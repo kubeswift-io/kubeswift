@@ -87,7 +87,7 @@ you time.
 | Directory | Description |
 |-----------|-------------|
 | [local-snapshots/](local-snapshots/) | Tier B local memory+disk snapshots; in-place and clone restore |
-| [s3-snapshots/](s3-snapshots/) | Tier C snapshots on S3 object storage (MinIO); cross-node clone |
+| [s3-snapshots/](s3-snapshots/) | Tier C snapshots on S3 object storage (in-cluster demo server); cross-node clone |
 | [oci-snapshots/](oci-snapshots/) | Snapshots pushed to an OCI registry (`backend.type: oci`); underpins cold migration |
 | [clone-from-snapshot/](clone-from-snapshot/) | `cloneFromSnapshot`: fan out a pool from one snapshot |
 | [snapshot-schedule/](snapshot-schedule/) | Cron-scheduled snapshots + keep-N retention (CSI, S3+TTL) |
