@@ -158,6 +158,11 @@ func (r *SwiftRestoreReconciler) ensureOCIDownloadJob(
 	if err != nil {
 		return err
 	}
+	// Recorded first, so deleting the snapshot removes the copy even if the
+	// download is interrupted.
+	if err := clonecommon.RecordNodeCopy(ctx, r.Client, snap, node); err != nil {
+		return fmt.Errorf("record the downloaded copy on node %s: %w", node, err)
+	}
 	job := buildOCIDownloadJob(restore, snap, r.SnapshotORASImage, node, ca)
 	if err := ctrl.SetControllerReference(restore, job, r.Scheme); err != nil {
 		return err

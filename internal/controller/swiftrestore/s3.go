@@ -130,6 +130,11 @@ func (r *SwiftRestoreReconciler) ensureDownloadJob(
 	if r.SnapshotS3Image == "" {
 		return fmt.Errorf("snapshot-s3 image not configured (set KUBESWIFT_SNAPSHOT_S3_IMAGE)")
 	}
+	// Recorded first, so deleting the snapshot removes the copy even if the
+	// download is interrupted.
+	if err := clonecommon.RecordNodeCopy(ctx, r.Client, snap, node); err != nil {
+		return fmt.Errorf("record the downloaded copy on node %s: %w", node, err)
+	}
 	job := buildDownloadJob(restore, snap, r.SnapshotS3Image, node)
 	if err := ctrl.SetControllerReference(restore, job, r.Scheme); err != nil {
 		return err

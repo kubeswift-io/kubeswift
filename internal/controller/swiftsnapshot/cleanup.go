@@ -29,6 +29,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -240,31 +241,51 @@ func (r *SwiftSnapshotReconciler) handleLocalDeletion(
 		return r.removeFinalizer(ctx, snap)
 	}
 
-	done, err := r.cleanupNodeDir(ctx, snap, subdir)
+	done, err := r.cleanupNodeDir(ctx, snap, snap.Status.NodeName, subdir)
 	if err != nil || !done {
+		return false, err
+	}
+	if err := r.deleteCleanupPods(ctx, snap); err != nil {
 		return false, err
 	}
 	return r.removeFinalizer(ctx, snap)
 }
 
-// cleanupNodeDir removes <HostPathBaseDir>/<subdir> on the snapshot's capture
-// node with a one-shot pod, reporting done once the pod has succeeded.
+// cleanupNodeDir removes <HostPathBaseDir>/<subdir> on node -- the snapshot's
+// capture node, or a node holding a downloaded copy (status.nodeCopies) --
+// with a one-shot pod, reporting done once the pod has succeeded.
 func (r *SwiftSnapshotReconciler) cleanupNodeDir(
 	ctx context.Context,
 	snap *snapshotv1alpha1.SwiftSnapshot,
-	subdir string,
+	node, subdir string,
 ) (bool, error) {
-	key := client.ObjectKey{Namespace: r.cleanupPodNamespace(snap.Namespace), Name: cleanupPodName(snap)}
+	capture := node == snap.Status.NodeName
+	name := cleanupPodName(snap)
+	if !capture {
+		name = nodeCopyCleanupPodName(snap, node)
+	}
+	key := client.ObjectKey{Namespace: r.cleanupPodNamespace(snap.Namespace), Name: name}
 	var pod corev1.Pod
 	getErr := r.Get(ctx, key, &pod)
 	if apierrors.IsNotFound(getErr) {
-		// A pod an earlier version started in the snapshot's namespace may
-		// already have done the work.
-		done, err := r.legacyCleanupDone(ctx, snap)
-		if err != nil || done {
-			return done, err
+		if capture {
+			// A pod an earlier version started in the snapshot's namespace may
+			// already have done the work.
+			done, err := r.legacyCleanupDone(ctx, snap)
+			if err != nil || done {
+				return done, err
+			}
+		} else {
+			// A copy on a node that has left the cluster went with it; a pod
+			// bound to that node would stay Pending, and the snapshot with it.
+			var n corev1.Node
+			if err := r.Get(ctx, client.ObjectKey{Name: node}, &n); apierrors.IsNotFound(err) {
+				return true, nil
+			} else if err != nil {
+				return false, err
+			}
 		}
-		if err := r.createCleanupPod(ctx, snap, key, subdir); err != nil {
+		if err := r.createCleanupPod(ctx, snap, key, node, subdir); err != nil {
 			return false, fmt.Errorf("create cleanup pod: %w", err)
 		}
 		// Pod just created; requeue.
@@ -276,12 +297,10 @@ func (r *SwiftSnapshotReconciler) cleanupNodeDir(
 
 	switch pod.Status.Phase {
 	case corev1.PodSucceeded:
-		// Cleanup done. The pod goes before the finalizer does: nothing
-		// owns it, so nothing else would delete it. Should the finalizer
-		// update then fail, the next pass runs a second, harmless pod.
-		if err := r.Delete(ctx, &pod); client.IgnoreNotFound(err) != nil {
-			return false, err
-		}
+		// Cleanup done on this node. The pod stays until every node is done
+		// (deleteCleanupPods): it is the record that this node is, and
+		// deleting it now would re-run it on the next pass, so several nodes
+		// finishing at different times would never all read done at once.
 		return true, nil
 	case corev1.PodFailed:
 		// Pod ran but failed (e.g. permission error, stale mount).
@@ -358,24 +377,66 @@ func (r *SwiftSnapshotReconciler) deleteOrphanCleanupPods(ctx context.Context, n
 	return nil
 }
 
-// cleanupCaptureCopy removes the node-local copy an s3/oci capture leaves on
-// its capture node (the directory the upload/push Job read from). It holds
-// the guest's full RAM image and was never removed: every s3/oci snapshot
-// ever taken stayed on its node's disk -- secrets and all -- after the
-// snapshot was deleted. Done immediately when there is no node to clean.
+// cleanupCaptureCopy removes the node-local copies of an s3/oci snapshot: the
+// one its capture leaves on the capture node (the directory the upload/push Job
+// read from), and the ones restores and clones downloaded to other nodes
+// (status.nodeCopies), all in the same directory. Each holds the guest's full
+// RAM image, secrets and all. The capture copy was never removed until
+// v0.16.x; the downloaded ones were never removed before v0.21.0. The pods run
+// side by side; done once every one has succeeded. Done immediately when there
+// is no node to clean.
 func (r *SwiftSnapshotReconciler) cleanupCaptureCopy(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) (bool, error) {
-	if snap.Status.NodeName == "" {
-		return true, nil
-	}
 	subdir := pathSubdir(captureDestDir(snap))
 	if subdir == "" || subdir == "." || subdir == "/" {
 		return true, nil
 	}
-	return r.cleanupNodeDir(ctx, snap, subdir)
+	nodes := slices.Clone(snap.Status.NodeCopies)
+	if snap.Status.NodeName != "" {
+		nodes = append([]string{snap.Status.NodeName}, nodes...)
+	}
+	all := true
+	for _, node := range nodes {
+		done, err := r.cleanupNodeDir(ctx, snap, node, subdir)
+		if err != nil {
+			return false, err
+		}
+		all = all && done
+	}
+	if !all {
+		return false, nil
+	}
+	return true, r.deleteCleanupPods(ctx, snap)
+}
+
+// deleteCleanupPods deletes the snapshot's cleanup pods once every node is
+// clean. They go before the finalizer does: nothing owns them, so nothing
+// else would delete them. Should the finalizer update then fail, the next
+// pass runs the pods again, harmlessly.
+func (r *SwiftSnapshotReconciler) deleteCleanupPods(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) error {
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(r.cleanupPodNamespace(snap.Namespace)), client.MatchingLabels{
+		cleanupRoleLabel: cleanupRoleValue,
+		snapshotUIDLabel: string(snap.UID),
+	}); err != nil {
+		return err
+	}
+	for i := range pods.Items {
+		if err := r.Delete(ctx, &pods.Items[i]); client.IgnoreNotFound(err) != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// nodeCopyCleanupPodName names the pod that removes the snapshot's downloaded
+// copy on node: one per (snapshot, node), stable like cleanupPodName.
+func nodeCopyCleanupPodName(snap *snapshotv1alpha1.SwiftSnapshot, node string) string {
+	sum := sha256.Sum256([]byte(snap.Namespace + "/" + snap.Name + "/" + string(snap.UID) + "@" + node))
+	return names.Bounded(cleanupPodPrefix+snap.Name, "-"+hex.EncodeToString(sum[:5]), maxCleanupPodName)
 }
 
 // createCleanupPod schedules a one-shot Pod that removes the snapshot
-// subdir on the source node. The Pod mounts the parent
+// subdir on node. The Pod mounts the parent
 // /var/lib/kubeswift/snapshots/ and runs `rm -rf /snapshots/<subdir>/`.
 //
 // The pod carries no owner reference: one cannot cross namespaces. The
@@ -386,7 +447,7 @@ func (r *SwiftSnapshotReconciler) createCleanupPod(
 	ctx context.Context,
 	snap *snapshotv1alpha1.SwiftSnapshot,
 	key client.ObjectKey,
-	subdir string,
+	node, subdir string,
 ) error {
 	// We mount the parent dir, not the snapshot dir itself, so that
 	// `rm -rf` can act on a subdir from inside the pod's namespace.
@@ -406,7 +467,7 @@ func (r *SwiftSnapshotReconciler) createCleanupPod(
 			},
 		},
 		Spec: corev1.PodSpec{
-			NodeName:      snap.Status.NodeName,
+			NodeName:      node,
 			RestartPolicy: corev1.RestartPolicyNever,
 			// rm needs no API access, so the pod gets no token.
 			AutomountServiceAccountToken: ptr.To(false),
