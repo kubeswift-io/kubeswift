@@ -10,6 +10,7 @@ import (
 	kernelv1alpha1 "github.com/kubeswift-io/kubeswift/api/kernel/v1alpha1"
 	seedv1alpha1 "github.com/kubeswift-io/kubeswift/api/seed/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -440,8 +441,10 @@ func TestResolve_DataDiskRef_Success(t *testing.T) {
 	if !rg.DataDisks[0].Ready {
 		t.Error("DataDisks[0].Ready should be true")
 	}
-	if rg.DataDisks[0].PVCName != "pvc-data" {
-		t.Errorf("DataDisks[0].PVCName = %q, want pvc-data", rg.DataDisks[0].PVCName)
+	// The guest attaches its own Block copy, never the image's PVC.
+	d := rg.DataDisks[0]
+	if d.PVCName != BlankDataDiskPVCName(guest.Name, "data") || !d.Block || d.SourcePVC != "pvc-data" {
+		t.Errorf("DataDisks[0] = %+v, want the guest's Block copy of pvc-data", d)
 	}
 }
 
@@ -629,15 +632,14 @@ func TestResolve_PluralImageDataDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
+	// The guest attaches its own Block copy (filled from the image's PVC by
+	// the controller), never the image's PVC itself.
 	d := rg.DataDisks[0]
-	if d.Block {
-		t.Error("image-backed data disk should be Filesystem")
+	if !d.Block || d.MountPath != "" || d.HostPath != runtimeintent.DataDiskDevicePath("extra") {
+		t.Errorf("image-backed data disk should be the guest's Block copy: %+v", d)
 	}
-	if d.PVCName != "pvc-dimg" {
-		t.Errorf("PVCName = %q, want pvc-dimg", d.PVCName)
-	}
-	if d.MountPath != "/var/lib/kubeswift/disks/data-extra" {
-		t.Errorf("MountPath = %q, want .../data-extra", d.MountPath)
+	if d.PVCName != BlankDataDiskPVCName(guest.Name, "extra") || d.SourcePVC != "pvc-dimg" {
+		t.Errorf("PVCName = %q SourcePVC = %q, want the guest's copy of pvc-dimg", d.PVCName, d.SourcePVC)
 	}
 }
 

@@ -53,11 +53,11 @@ func TestLiveMigrationVolumesError(t *testing.T) {
 			[]client.Object{livePVC(BlankDataDiskPVCName("g", "scratch"), corev1.ReadWriteMany, false)}, "volumeMode Filesystem"},
 		{"blank PVC missing", func(s *swiftv1alpha1.SwiftGuestSpec) { s.DataDiskRefs = []swiftv1alpha1.DataDiskRef{blank("scratch")} },
 			nil, "does not exist"},
-		{"image-backed dataDiskRefs", func(s *swiftv1alpha1.SwiftGuestSpec) {
+		{"image-backed dataDiskRefs (guest copy RWO)", func(s *swiftv1alpha1.SwiftGuestSpec) {
 			s.DataDiskRefs = []swiftv1alpha1.DataDiskRef{{Name: "seeded", ImageRef: &corev1.LocalObjectReference{Name: "img"}}}
-		}, nil, `SwiftImage "img"`},
-		{"image-backed dataDiskRef", func(s *swiftv1alpha1.SwiftGuestSpec) { s.DataDiskRef = &corev1.LocalObjectReference{Name: "img"} },
-			nil, `SwiftImage "img"`},
+		}, []client.Object{livePVC(BlankDataDiskPVCName("g", "seeded"), corev1.ReadWriteOnce, true)}, `data disk "seeded"`},
+		{"image-backed dataDiskRef (no copy yet)", func(s *swiftv1alpha1.SwiftGuestSpec) { s.DataDiskRef = &corev1.LocalObjectReference{Name: "img"} },
+			nil, `data disk "data" PVC "g-data-data" does not exist`},
 		{"pvcRef attachAsDisk RWX Block", func(s *swiftv1alpha1.SwiftGuestSpec) {
 			s.DataDiskRefs = []swiftv1alpha1.DataDiskRef{pvcDisk("d", "user-pvc", true)}
 		},

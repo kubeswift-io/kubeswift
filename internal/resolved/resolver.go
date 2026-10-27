@@ -169,15 +169,7 @@ func (r *resolver) resolveDataDisks(ctx context.Context, guest *swiftv1alpha1.Sw
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, ResolvedDataDisk{
-			Name:      "data",
-			PVCName:   pi.PVCName,
-			Block:     false,
-			HostPath:  runtimeintent.DisksDataPath + "/" + runtimeintent.DataDiskImageFile,
-			MountPath: runtimeintent.DisksDataPath,
-			Format:    "raw",
-			Ready:     pi.Ready,
-		})
+		out = append(out, imageDataDisk(guest.Name, "data", pi))
 	}
 
 	for i := range guest.Spec.DataDiskRefs {
@@ -205,15 +197,7 @@ func (r *resolver) resolveDataDisks(ctx context.Context, guest *swiftv1alpha1.Sw
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, ResolvedDataDisk{
-				Name:      d.Name,
-				PVCName:   pi.PVCName,
-				Block:     false,
-				HostPath:  runtimeintent.DataDiskDir(d.Name) + "/" + runtimeintent.DataDiskImageFile,
-				MountPath: runtimeintent.DataDiskDir(d.Name),
-				Format:    "raw",
-				Ready:     pi.Ready,
-			})
+			out = append(out, imageDataDisk(guest.Name, d.Name, pi))
 
 		case d.PVCRef != nil && d.AttachAsDisk:
 			// Attach an operator-supplied PVC as a raw VM disk. Block PVCs
@@ -245,6 +229,24 @@ func (r *resolver) resolveDataDisks(ctx context.Context, guest *swiftv1alpha1.Sw
 	}
 
 	return out, nil
+}
+
+// imageDataDisk is an image-backed data disk: the guest's own Block copy of
+// the image (named like a blank data disk), filled once from the SwiftImage's
+// prepared PVC by the SwiftGuest controller. The image's PVC is never attached
+// to a guest: guests wrote into it, changing it for every later guest, and a
+// second guest using the image could not start while one ran.
+func imageDataDisk(guestName, name string, pi *PreparedImage) ResolvedDataDisk {
+	return ResolvedDataDisk{
+		Name:       name,
+		PVCName:    BlankDataDiskPVCName(guestName, name),
+		Block:      true,
+		HostPath:   runtimeintent.DataDiskDevicePath(name),
+		Format:     "raw",
+		Ready:      pi.Ready,
+		SourcePVC:  pi.PVCName,
+		SourceSize: pi.Size,
+	}
 }
 
 // BlankDataDiskPVCName is the deterministic name of the guest-owned PVC

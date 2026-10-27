@@ -191,7 +191,7 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 		if hasImageBackedDataDisk(&guest) {
 			setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseFailed)
 			setReadyCondition(status, metav1.ConditionFalse, ReasonSnapshotFailed,
-				"includeDisk capture: source "+guest.Name+" has an image-backed data disk (dataDiskRef / dataDiskRefs[].imageRef), which attaches the image's shared PVC and cannot be captured full-state; only blank and attachAsDisk data disks are supported")
+				"includeDisk capture: source "+guest.Name+" has an image-backed data disk (dataDiskRef / dataDiskRefs[].imageRef), which full-state capture does not support yet; only blank and attachAsDisk data disks are supported")
 			return false, 0, nil
 		}
 		if got, rerr := resolved.NewResolver(r.Client).Resolve(ctx, &guest); rerr == nil {

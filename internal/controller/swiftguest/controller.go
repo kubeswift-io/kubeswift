@@ -692,7 +692,11 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 	// guest must never boot with a missing data disk (Principle #6) — hold it
 	// in Scheduling, with DataDisksReady=False naming the blocker, until ready.
 	// Works on every boot path (disk, kernel, GPU), so it runs unconditionally.
-	if err := r.EnsureBlankDataDisks(ctx, &guest, rg); err != nil {
+	ddErr := r.EnsureBlankDataDisks(ctx, &guest, rg)
+	if ddErr == nil {
+		ddErr = r.EnsureImageDataDisks(ctx, &guest, rg)
+	}
+	if err := ddErr; err != nil {
 		status.Phase = swiftv1alpha1.SwiftGuestPhaseScheduling
 		SetDataDisksReadyCondition(status, false, "DataDisksProvisioning", err.Error())
 		if patchErr := r.patchStatus(ctx, &guest, status); patchErr != nil {

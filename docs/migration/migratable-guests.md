@@ -24,10 +24,9 @@ A guest is eligible for `mode: live` only when **all** of these hold:
    destination hold every volume at once, on two nodes. Every data disk in
    `dataDiskRefs` must be a `ReadWriteMany` + `Block` PVC (a `pvcRef` with
    `attachAsDisk`); a `pvcRef` mounted without `attachAsDisk` must be
-   `ReadWriteMany`. `blank` data disks are created `ReadWriteOnce`, and
-   image-backed data disks (`imageRef`, `dataDiskRef`) are a file on the
-   image's PVC, so a guest with either is **offline-only**. This applies to
-   kernel-boot guests too.
+   `ReadWriteMany`. `blank` and image-backed (`imageRef`, `dataDiskRef`) data
+   disks get a guest-owned `ReadWriteOnce` PVC, so a guest with either is
+   **offline-only**. This applies to kernel-boot guests too.
 
 The controller checks all of these before it starts: an ineligible
 `mode: live` fails at once with `EligibilityMismatch` naming the reason, and

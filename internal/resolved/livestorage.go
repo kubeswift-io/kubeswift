@@ -48,9 +48,8 @@ func LiveMigrationStorageError(guest *swiftv1alpha1.SwiftGuest, class *swiftv1al
 // migration could only fail later, after its Preparing budget.
 //
 //   - A disk the VM writes to (every data disk) needs ReadWriteMany AND Block,
-//     the root disk's rule. Image-backed data disks (dataDiskRef, dataDiskRefs
-//     imageRef) are a file on the SwiftImage's Filesystem PVC, so they never
-//     qualify.
+//     the root disk's rule. Blank and image-backed data disks are guest-owned
+//     ReadWriteOnce PVCs today, so they do not qualify.
 //   - A PVC mounted into the launcher as a directory (dataDiskRefs pvcRef
 //     without attachAsDisk, filesystems pvcRef) needs ReadWriteMany.
 //
@@ -63,9 +62,6 @@ func LiveMigrationVolumesError(ctx context.Context, c client.Reader, guest *swif
 	refuse := func(format string, a ...any) error {
 		return fmt.Errorf("SwiftGuest %q cannot be live-migrated: "+format+
 			"; the source and destination hold every volume at once on two nodes. Use spec.mode=offline", append([]any{guest.Name}, a...)...)
-	}
-	if guest.Spec.DataDiskRef != nil {
-		return refuse("its data disk from SwiftImage %q is a file on the image's Filesystem PVC (a data disk needs ReadWriteMany+Block)", guest.Spec.DataDiskRef.Name), nil
 	}
 	check := func(what, pvcName string, needBlock bool) (error, error) {
 		pvc := &corev1.PersistentVolumeClaim{}
@@ -88,13 +84,17 @@ func LiveMigrationVolumesError(ctx context.Context, c client.Reader, guest *swif
 		}
 		return nil, nil
 	}
+	if guest.Spec.DataDiskRef != nil {
+		if gate, err := check(`data disk "data"`, BlankDataDiskPVCName(guest.Name, "data"), true); gate != nil || err != nil {
+			return gate, err
+		}
+	}
 	for i := range guest.Spec.DataDiskRefs {
 		d := &guest.Spec.DataDiskRefs[i]
 		var gate, err error
 		switch {
-		case d.ImageRef != nil:
-			gate = refuse("data disk %q from SwiftImage %q is a file on the image's Filesystem PVC (a data disk needs ReadWriteMany+Block)", d.Name, d.ImageRef.Name)
-		case d.Blank != nil:
+		case d.ImageRef != nil, d.Blank != nil:
+			// The guest's own copy of an image-backed disk is named like a blank one.
 			gate, err = check(fmt.Sprintf("data disk %q", d.Name), BlankDataDiskPVCName(guest.Name, d.Name), true)
 		case d.PVCRef != nil:
 			gate, err = check(fmt.Sprintf("data disk %q", d.Name), d.PVCRef.Name, d.AttachAsDisk)

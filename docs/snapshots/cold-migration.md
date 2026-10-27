@@ -36,8 +36,7 @@ fanning out many *fresh* clones from one snapshot, use
 > under the same names — so a clone gets the data-disk state its resumed
 > RAM references, not fresh blank disks. A source with an **image-backed**
 > data disk (the legacy `dataDiskRef`, or `dataDiskRefs[].imageRef`) is
-> rejected for full-state export (that disk is the SwiftImage's shared PVC,
-> owned by the image, not the guest).
+> rejected for full-state export (not supported yet).
 
 ## How it works
 
@@ -188,8 +187,8 @@ kubectl -n team-a patch swiftsnapshot db-export --subresource=status \
   captured + materialized on import (byte-round-tripped through the registry,
   attached under the same names). A source with an **image-backed** data disk
   (legacy `dataDiskRef` / `dataDiskRefs[].imageRef`) is rejected for full-state
-  export — that disk is the SwiftImage's shared PVC; re-export without it, or
-  convert it to a `blank`/`attachAsDisk` disk.
+  export (not supported yet); re-export without it, or convert it to a
+  `blank`/`attachAsDisk` disk.
 - **Placeholder seed.** When the source had a seed profile, the clone gets a
   minimal placeholder seed.iso purely so CH `--restore` can re-open the seed
   disk — the resumed guest never reads it. A later *reboot* of such a clone
