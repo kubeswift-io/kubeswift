@@ -6,11 +6,28 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.21.0] — 2026-10-27
+
+A minor release. The launcher moves from Cloud Hypervisor v53.0 to **v54.0**, and guests keep the behaviour they had on v53: KubeSwift now sets explicitly the two things v54 changed by default (nested virtualization, virtio-net offloads). See [Node runtime: Cloud Hypervisor](docs/architecture/node-runtime.md#cloud-hypervisor-requirements). It also fixes live migration of guests with data disks or mTLS, image-backed data disks that were shared writable, and snapshot copies left on nodes. Release candidates: rc.1, rc.2, rc.3.
+
 ### Upgrade
 
+- **Apply `crds/`.** The `swiftsnapshots` CRD gains `status.nodeCopies`; without it the API server drops the field and downloaded snapshot copies are not removed. The `swiftrestores` CRD changes in a field description only. No other CRD changed.
 - **The controller ClusterRole gains `delete` on Secrets** (mTLS node-identity cleanup, below). An mTLS migration stuck on its finalizer since an earlier version finishes by itself after the upgrade; check `kubectl get secrets -A -l app.kubernetes.io/component=migration-mtls` for node-identity copies left in guest namespaces.
-- **Apply `crds/`: the `swiftsnapshots` CRD gains `status.nodeCopies`.** Without it the API server drops the field and downloaded snapshot copies are not removed. Copies downloaded by earlier versions were never recorded: remove by hand the directories under `/var/lib/kubeswift/snapshots/` on each node whose snapshot no longer exists ([s3 snapshots: Deletion](docs/snapshots/s3-snapshots.md#deletion)).
+- **Running guests stay on Cloud Hypervisor v53.** A chart upgrade does not change the launcher of guests that are already running; live migration and node drain keep each guest on its launcher (the v0.20.1 contract). A guest moves to v54 when its launcher pod is recreated: a stop and start, an offline migration, or a new guest. Live-migrating a running v53 guest onto v54 is not supported. New sandboxes and warm-pool slots start on v54; existing slots keep v53 until they are used or replaced. v54 restores memory snapshots taken on v53, including `cloneFromSnapshot`.
 - **Image-backed data disks are now copied per guest.** A guest with `dataDiskRef` or `dataDiskRefs[].imageRef` gets its own `ReadWriteOnce` Block PVC (`<guest>-data-<name>`), filled from the SwiftImage once by a `<guest>-dataclone-<name>` Job before it boots. Guests running before the upgrade keep the image's PVC attached until their launcher pod is recreated (stop and start, offline migration), when their copy is taken from the image as it is then. SwiftImages already used this way may contain data written by guests: re-import any image that must be pristine.
+- **Live migration now refuses guests whose volumes cannot move** (#877): a `ReadWriteOnce` data disk (every `blank` and image-backed one) makes a guest offline-only. `mode: live` fails at once with `EligibilityMismatch`; `mode: auto` and node drains move such guests offline.
+- Snapshot copies downloaded to restore or clone nodes by earlier versions were never recorded: remove by hand the directories under `/var/lib/kubeswift/snapshots/` on each node whose snapshot no longer exists ([s3 snapshots: Deletion](docs/snapshots/s3-snapshots.md#deletion)).
+- An mTLS source launcher pod created by an earlier version whose migration failed after a destination was set must be recycled (stop and start) before it can live-migrate again (`SourceSidecarNotReady`).
+- The chart's `ui.image.tag` default moves to `v0.13.1` (kubeswift-ui v0.13.1). No value was added or removed.
+- Live migration between nodes whose CPUs differ may now be refused by Cloud Hypervisor's stricter CPU checks; validated between identical CPUs only.
+
+### Changed
+
+- **Cloud Hypervisor v54.0** in the swiftletd image (checksum-pinned; the CLOUDHV.fd firmware is unchanged). v54 fixes silent guest-memory corruption after a live migration, adds VM Generation ID, and is faster at live migration (2 GiB guest: 27-29 s against 36-37 s on v53, same nodes).
+- **Nested virtualization stays on:** `--cpus nested=on` for every guest (v54's default is off). Guests keep VMX/SVM and a working `/dev/kvm`, as on v53. This is compatibility behaviour; an explicit control is tracked in #874.
+- **virtio-net offloads stay on:** `offload_csum=on,offload_tso=on,offload_ufo=on` on every NIC (tap and vhost-user). With v54's default (off), guest-to-pod TCP on the same node fell from about 13 Gbps to under 1 Gbps; with them, v54 measures 13.2-15.6 Gbps against 13.7-16.9 Gbps on v53.
+- Both settings are part of the VM's configuration, so snapshots, restores and live migrations keep them.
 
 ### Fixed
 
@@ -27,34 +44,18 @@ All notable changes to KubeSwift are documented here.
 
 - **The in-cluster S3 sample no longer used a pullable image.** `config/samples/s3-snapshots/00-minio.yaml` ran `quay.io/minio/minio:latest`, which (like `docker.io/minio/minio`) now refuses pulls. It is replaced by `00-s3-server.yaml`: a pinned Versity S3 Gateway (`versitygw` v1.0.20, POSIX backend) in namespace `s3-demo` that also creates the samples' bucket. The s3 samples now point at `s3.s3-demo.svc:9000`.
 
-## [v0.21.0-rc.1] — 2026-10-26
-
-Release candidate for v0.21.0: the launcher moves from Cloud Hypervisor v53.0 to **v54.0**. Guests keep the behaviour they had on v53: KubeSwift now sets explicitly the two things v54 changed by default (nested virtualization, virtio-net offloads). See [Node runtime: Cloud Hypervisor](docs/architecture/node-runtime.md#cloud-hypervisor-requirements).
-
-### Upgrade
-
-- **Running guests stay on Cloud Hypervisor v53.** A chart upgrade does not change the launcher of guests that are already running; live migration and node drain keep each guest on its launcher (the v0.20.1 contract). A guest moves to v54 when its launcher pod is recreated: a stop and start, an offline migration, or a new guest. Live-migrating a running v53 guest onto v54 is not supported. New sandboxes and warm-pool slots start on v54; existing slots keep v53 until they are used or replaced.
-- v54 restores memory snapshots taken on v53, including `cloneFromSnapshot`.
-- No CRD changed; applying `crds/` is not needed. The chart's `ui.image.tag` default moves to `v0.13.1` (kubeswift-ui v0.13.1). No other value or template changed.
-- Live migration between nodes whose CPUs differ may now be refused by Cloud Hypervisor's stricter CPU checks; validated between identical CPUs only.
-
-### Changed
-
-- **Cloud Hypervisor v54.0** in the swiftletd image (checksum-pinned; the CLOUDHV.fd firmware is unchanged). v54 fixes silent guest-memory corruption after a live migration, adds VM Generation ID, and is faster at live migration (2 GiB guest: 27-29 s against 36-37 s on v53, same nodes).
-- **Nested virtualization stays on:** `--cpus nested=on` for every guest (v54's default is off). Guests keep VMX/SVM and a working `/dev/kvm`, as on v53. This is compatibility behaviour; an explicit control is tracked in #874.
-- **virtio-net offloads stay on:** `offload_csum=on,offload_tso=on,offload_ufo=on` on every NIC (tap and vhost-user). With v54's default (off), guest-to-pod TCP on the same node fell from about 13 Gbps to under 1 Gbps; with them, v54 measures 13.2-15.6 Gbps against 13.7-16.9 Gbps on v53.
-- Both settings are part of the VM's configuration, so snapshots, restores and live migrations keep them.
-
 ### Validation
 
 On a three-node KVM cluster, v53 baseline against v54: Ubuntu 24.04 disk boot and kernel boot; root, seed and data disks (`image_type=raw`, `direct=on`, O_DIRECT read/write); Windows Server 2025 (`direct=on` root disk, write and unbuffered copy, in-guest reboot, stop and start); SwiftSandbox cold and warm (console, live warm output, exit codes, refill); v53 snapshot restored and cloned on v54 (`ondemand`, identity regenerated); a v53 guest kept running across the upgrade, then live-migrated and node-drained on its v53 launcher; v54 live migrations across nodes with RAM and boot ID preserved; snapshot after migration and migration after snapshot; GTX 1080 passthrough (legacy VFIO) with the NVIDIA driver and `nvidia-smi`; DNS, Service and outbound HTTPS from guests; nested KVM (`KVM_GET_API_VERSION`) in a guest.
 
+Before the release, on Cloud Hypervisor v54: vhost-user NICs (offloads on, ~22 Gbps guest to backend); a secondary NIC on a bridge NAD (no default route on it, 1 GiB transfer intact); hugepages, vCPU pinning and core scheduling; s3 and oci memory snapshots and cross-node restores; a full-state oci export and import; live migration with mTLS, including a second migration after a failed one; SwiftSandbox output export (`test/sandbox/outputs.sh`), warm-pool checkout (`test/sandbox/warm-pool-checkout.sh`), Secrets and an egress allowlist.
+
 ### Known issues
 
-- A Windows image whose GPT backup header is not at the end of the disk fails the root-disk clone (`sgdisk -e` exits 4 though it repairs the table); not new, workaround in #875.
 - v54's iommufd backend fails to map a GPU's BARs for P2P DMA unless `vfio_p2p_dma=off` (#873); KubeSwift uses legacy VFIO.
 - Ubuntu cloud images do not load the VM Generation ID driver, so clones do not reseed their RNG (#870).
 - GPUs that need a PCIe root port per device (HGX SXM) still run on QEMU; v54 has no hierarchical PCIe topology.
+- The control-plane node gets no live-migration mTLS identity, so with mTLS on, guests there cannot be live-migrated.
 
 ## [v0.20.1] — 2026-10-26
 
