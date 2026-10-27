@@ -13,6 +13,7 @@ import (
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/migrationcert"
+	"github.com/kubeswift-io/kubeswift/internal/migrationsidecar"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 )
 
@@ -237,6 +238,12 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 		if !sourcePodMTLSReady(&srcPod) {
 			return phaseFailure(
 				fmt.Sprintf("source pod %q is not mTLS-source-ready (no client-role migration-stunnel sidecar); it predates mTLS enablement or is a post-cutover destination pod — recycle the guest's pod before live-migrating with mTLS", srcPod.Name),
+				migrationv1alpha1.FailureReasonSourceSidecarNotReady)
+		}
+		if sourceSidecarStale(&srcPod) {
+			return phaseFailure(
+				fmt.Sprintf("source pod %q has an mTLS sidecar that is still tunnelling to the destination of an earlier migration (%s) and cannot follow a new one; it was created by an earlier KubeSwift version. Restart the guest so it gets a new launcher pod, then migrate again (or use spec.mode=offline)",
+					srcPod.Name, srcPod.Annotations[migrationsidecar.AnnotationDstPodIP]),
 				migrationv1alpha1.FailureReasonSourceSidecarNotReady)
 		}
 		if status.SourceNode == "" || status.DestinationNode == "" {

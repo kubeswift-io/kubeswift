@@ -154,8 +154,9 @@ and recoverable (no data loss).
 |---|---|---|
 | Launcher pod stuck `1/2`, sidecar `ImagePullBackOff` / `401` | migration-stunnel ghcr package private | Make the package public (§2) or add an imagePullSecret |
 | Migration fails fast, `failureReason=SourceSidecarNotReady` | Source pod has no client sidecar — it predates mTLS enablement **or** is a post-cutover destination pod (server-role sidecar) | Recycle the guest's pod (stop/start); see §3 + the chain-migration note below |
+| `SourceSidecarNotReady` naming "the destination of an earlier migration" | An earlier mTLS migration from this pod failed, and its sidecar was created before KubeSwift v0.21.0: it keeps tunnelling to that migration's destination | Recycle the guest's pod (stop/start), then migrate again. Sidecars created since v0.21.0 follow each new destination |
 | Migration fails, `failureReason=MigrationIdentityNotReady` | A participating node's per-node identity Secret isn't issued yet | `kubectl get certificate -n kubeswift-system`; wait for cert-manager, or check the migration CA Issuer is Ready |
-| Migration fails, `failureReason=ReceiveDisconnect` after retries | Source sidecar never came up (rare timing race), or the dst is unreachable | The controller bounded-retries the send on `connection_refused`; if it still fails, recycle the source pod |
+| Migration fails, `failureReason=ReceiveDisconnect` after retries | Source sidecar never came up (rare timing race), or the dst is unreachable | The controller retries the send (up to 10 times) while the source sidecar is not yet listening ("connection to 127.0.0.1:6790 never opened"); if it still fails, recycle the source pod |
 | Migration pathologically slow then fails | A CPU *limit* on the stunnel sidecar (do not add one — §5) | — |
 
 ### Chain migrations under mTLS need a pod recycle (known limitation)

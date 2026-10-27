@@ -139,7 +139,7 @@ impl Watch {
         failed.then(|| {
             format!(
                 "the migration connection to {} {}, and the source guest is still running \
-                 (the transfer failed; CH v53 auto-resumed the source)",
+                 (the transfer failed; Cloud Hypervisor resumed the source)",
                 self.target,
                 if self.seen { "closed" } else { "never opened" }
             )

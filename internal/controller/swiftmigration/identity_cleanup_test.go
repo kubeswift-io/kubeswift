@@ -2,13 +2,18 @@ package swiftmigration
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/migrationcert"
@@ -95,5 +100,35 @@ func TestCleanupCopiedNodeIdentities_IgnoresUnlabeledSecret(t *testing.T) {
 	var got corev1.Secret
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(sec), &got); err != nil {
 		t.Errorf("an unlabeled Secret must not be deleted: %v", err)
+	}
+}
+
+// A controller that may not delete Secrets (the chart did not grant it before
+// v0.21.0) must not hold the migration's finalizer for good: the cleanup
+// reports the Secret it left and returns.
+func TestCleanupCopiedNodeIdentities_ForbiddenDoesNotWedge(t *testing.T) {
+	mig := terminalLiveMig("m", "default", "worker-2")
+	sec := copiedNodeIdentity("default", "worker-2")
+	scheme := validatingScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(mig, sec).
+		WithInterceptorFuncs(interceptor.Funcs{Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, ok := obj.(*corev1.Secret); ok {
+				return apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, obj.GetName(), errors.New("no delete verb"))
+			}
+			return cl.Delete(ctx, obj, opts...)
+		}}).Build()
+	rec := record.NewFakeRecorder(10)
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: rec, MigrationMTLSEnabled: true, SystemNamespace: "kubeswift-system"}
+
+	if err := r.cleanupCopiedNodeIdentities(context.Background(), mig); err != nil {
+		t.Fatalf("a Forbidden delete must not fail the cleanup: %v", err)
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "IdentityCleanupFailed") || !strings.Contains(ev, sec.Name) {
+			t.Errorf("event should name the Secret left behind: %q", ev)
+		}
+	default:
+		t.Error("no Warning event for the Secret left behind")
 	}
 }

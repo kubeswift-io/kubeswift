@@ -217,7 +217,9 @@ const (
 	// source pod predates mTLS enablement (the sidecar is only injected on
 	// newly created launcher pods) or is a post-cutover destination pod
 	// from a prior migration (server-role sidecar; chain migrations under
-	// mTLS need a pod recycle). Operators recycle the guest's pod and
+	// mTLS need a pod recycle). Also set when the source pod's sidecar
+	// predates input following and was already pointed at an earlier
+	// migration's destination. Operators recycle the guest's pod and
 	// retry. Untyped string (TFU #21).
 	FailureReasonSourceSidecarNotReady FailureReasonCode = "SourceSidecarNotReady"
 )
