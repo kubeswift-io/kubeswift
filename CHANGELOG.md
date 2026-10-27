@@ -6,9 +6,14 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.21.1] — 2026-10-27
+
+A patch release for snapshot cleanup. A memory snapshot's capture (the guest's RAM, written on the launcher's node) could be left on the node after its snapshot was deleted, and a snapshot could stay `Terminating` for good when its cleanup pod failed or its object-store credentials were gone. Only the controller changed.
+
 ### Upgrade
 
-- No CRD, value or template changed. Snapshots stuck in `Terminating` because their cleanup pod failed (for example, evicted under `DiskPressure`) finish deleting after the upgrade. Capture directories left by earlier versions are not removed automatically: see [local snapshots: Directories no snapshot owns](docs/snapshots/local-snapshots.md#directories-no-snapshot-owns).
+- No CRD, value or template changed; applying `crds/` is not needed. Only the controller changed; the other images are rebuilt at the new version but unchanged. No running guest, sandbox or warm slot is restarted.
+- Snapshots stuck in `Terminating` because their cleanup pod failed (for example, evicted under `DiskPressure`) finish deleting after the upgrade. Capture directories left by earlier versions are not removed automatically: see [local snapshots: Directories no snapshot owns](docs/snapshots/local-snapshots.md#directories-no-snapshot-owns).
 
 ### Fixed
 
