@@ -417,9 +417,10 @@ func main() {
 
 	// Prepares artifacts on the nodes of a warm pool before checkouts need them.
 	if err = (&swiftsandbox.ArtifactPlacementReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("swiftartifactplacement-controller"),
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorderFor("swiftartifactplacement-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftArtifactPlacement controller")
 		os.Exit(1)

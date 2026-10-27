@@ -40,10 +40,12 @@ func testPlacement(digest string) *sandboxv1alpha1.SwiftArtifactPlacement {
 }
 
 func poolSlot(name, node string) *corev1.Pod {
+	isController := true
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: map[string]string{PoolLabelKey: "pool", SlotStateLabelKey: slotStateWarm}},
-		Spec:       corev1.PodSpec{NodeName: node},
-		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: map[string]string{PoolLabelKey: "pool", SlotStateLabelKey: slotStateWarm},
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: sandboxv1alpha1.GroupName + "/v1alpha1", Kind: "SwiftSandboxPool", Name: "pool", UID: "pool-uid", Controller: &isController}}},
+		Spec:   corev1.PodSpec{NodeName: node},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
@@ -65,8 +66,11 @@ const (
 // ArtifactPlacementReconciler reconciles SwiftArtifactPlacement.
 type ArtifactPlacementReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	// APIReader reads the placement itself, uncached (the manager's API
+	// reader; the cached client when nil). See Reconcile.
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
+	Recorder  record.EventRecorder
 	// resolver is the registry resolver (sharedResolver when nil): the same
 	// cache of authorizations the checkouts use.
 	resolver *registryResolver
@@ -106,8 +110,18 @@ func placementView(p *sandboxv1alpha1.SwiftArtifactPlacement, now time.Time) *sa
 
 func (r *ArtifactPlacementReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
 	defer requeueOnConflict(ctx, &res, &err)
+	// The placement is read past the cache. This controller reconciles on
+	// every slot and prepare pod event, often before the cache holds its own
+	// last status write; a pass working from that older status saw a node it
+	// had just recorded prepared as unprepared, started another prepare pod,
+	// and wrote Preparing over Prepared, so the placement flapped between the
+	// two for as long as the loop kept winning the race.
+	var reader client.Reader = r.Client
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
 	var p sandboxv1alpha1.SwiftArtifactPlacement
-	if err := r.Get(ctx, req.NamespacedName, &p); err != nil {
+	if err := reader.Get(ctx, req.NamespacedName, &p); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if p.DeletionTimestamp != nil {
@@ -179,6 +193,13 @@ func (r *ArtifactPlacementReconciler) Reconcile(ctx context.Context, req ctrl.Re
 // targetNodes maps each node running a slot of the placement's pool to one
 // of its slot pods (for the tolerations and image pull Secrets the node's
 // launcher pods use).
+//
+// The targets are the nodes of the pool's running slot pods: warm (idle or
+// still booting, once scheduled) and claimed, that is a slot checked out by a
+// SwiftSandbox whose workload still runs there. A claimed slot keeps the pool
+// label, so a one-slot pool keeps its node while the checkout runs, and the
+// replacement slot adds its own node once scheduled. A slot leaves the set
+// when its pod finishes or is deleted.
 func (r *ArtifactPlacementReconciler) targetNodes(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement) (map[string]*corev1.Pod, error) {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(p.Namespace), client.MatchingLabels{PoolLabelKey: p.Spec.PoolRef.Name}); err != nil {
@@ -187,7 +208,7 @@ func (r *ArtifactPlacementReconciler) targetNodes(ctx context.Context, p *sandbo
 	out := map[string]*corev1.Pod{}
 	for i := range pods.Items {
 		pod := &pods.Items[i]
-		if pod.Spec.NodeName == "" || pod.DeletionTimestamp != nil || podFinished(pod) {
+		if pod.Spec.NodeName == "" || pod.DeletionTimestamp != nil || podFinished(pod) || !isPoolSlot(pod, p.Spec.PoolRef.Name) {
 			continue
 		}
 		if _, ok := out[pod.Spec.NodeName]; !ok {
@@ -195,6 +216,27 @@ func (r *ArtifactPlacementReconciler) targetNodes(ctx context.Context, p *sandbo
 		}
 	}
 	return out, nil
+}
+
+// isPoolSlot reports whether a pod labelled with the pool is one of its slots:
+// controlled by the pool (a warm slot) or, once claimed, by the SwiftSandbox
+// that checked it out. The label alone is not enough: anyone who can label a
+// pod in the namespace could otherwise add its node to the targets.
+func isPoolSlot(pod *corev1.Pod, pool string) bool {
+	ref := metav1.GetControllerOf(pod)
+	if ref == nil {
+		return false
+	}
+	if gv, err := schema.ParseGroupVersion(ref.APIVersion); err != nil || gv.Group != sandboxv1alpha1.GroupName {
+		return false
+	}
+	switch ref.Kind {
+	case "SwiftSandboxPool":
+		return ref.Name == pool
+	case "SwiftSandbox":
+		return pod.Labels[SlotStateLabelKey] == slotStateClaimed && ref.Name == pod.Labels[SandboxLabelKey]
+	}
+	return false
 }
 
 // authorize looks every artifact up with its own credentials through the
@@ -354,8 +396,13 @@ func (r *ArtifactPlacementReconciler) reconcileNode(ctx context.Context, p *sand
 			}
 			return st, time.Second, nil
 		default:
-			st.Prepared = false
-			st.Reason, st.Message = sandboxv1alpha1.PlacementReasonPreparing, ""
+			// A node already prepared (under these requirements) stays so
+			// while its recheck runs: only a recheck that fails unprepares
+			// it. Reporting it unprepared for the length of every recheck
+			// told consumers to skip artifacts the node holds.
+			if !st.Prepared {
+				st.Reason, st.Message = sandboxv1alpha1.PlacementReasonPreparing, ""
+			}
 			return st, placementResync, nil
 		}
 	}
@@ -617,16 +664,18 @@ func (r *ArtifactPlacementReconciler) summarize(p *sandboxv1alpha1.SwiftArtifact
 	apimeta.SetStatusCondition(&p.Status.Conditions, cond)
 }
 
-// finish writes the status when it changed and requeues after. A merge
-// patch of what changed: this controller is the status's only writer, and
-// it reconciles on every slot pod event, often from a cached copy older
-// than its own last write, which a full update turned into a conflict
-// (#758).
+// finish writes the status when it changed and requeues after: a merge patch
+// of what changed, made against the resourceVersion Reconcile read (#758
+// moved off a full update; the placement is now read uncached, so a conflict
+// means someone else wrote it in between).
 func (r *ArtifactPlacementReconciler) finish(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement, orig *sandboxv1alpha1.SwiftArtifactPlacementStatus, after time.Duration) (ctrl.Result, error) {
 	if !apiequality.Semantic.DeepEqual(orig, &p.Status) {
 		base := p.DeepCopy()
 		base.Status = *orig
-		if err := r.Status().Patch(ctx, p, client.MergeFrom(base)); err != nil {
+		// Locked: status.nodes is a list a merge patch replaces whole, so a
+		// write from an older read must fail (and be retried) rather than
+		// put back what it read.
+		if err := r.Status().Patch(ctx, p, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
