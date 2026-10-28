@@ -6,14 +6,24 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.21.2] — 2026-10-28
+
+A patch release for `SwiftArtifactPlacement` on warm pools (#889, #890). A placement reported `Preparing` far more often than its nodes' caches justified, so a consumer that attaches an optional artifact only while the placement is `Prepared` (a local application, a compiled cache, model files) gave some workloads none. Workloads stayed correct throughout: the artifact is optional and they fell back. Only the controller changed.
+
+### Upgrade
+
+- **No new CRD field.** The `swiftartifactplacements` CRD changes in one field description (`status.nodes[].reason` documents `NotATarget`); applying `crds/` updates the description and is otherwise not needed. No chart value or template changed. The other images are rebuilt at the new version but unchanged. No running guest, sandbox or warm slot is restarted.
+- `minWarm: 0` pools are unchanged: they have no slots, so a placement for one still has no target and reports `NoTargetNodes`.
+
 ### Fixed
 
-- **A `SwiftArtifactPlacement` flapped between `Prepared` and `Preparing` while its pool's slots came and went.** The controller often reconciled before its own last status write had reached its cache (the deletion of a finished prepare pod triggers a pass at once): that pass saw a node it had just recorded prepared as unprepared, started another prepare pod and wrote `Preparing` over `Prepared`, and the new pod finishing started the loop again. On a one-slot pool this took the condition to `False` about once per checkout, and a consumer that attaches an optional artifact only while the placement is `Prepared` (a local application, a compiled cache) gave those replicas none. The placement is now read past the cache and its status written with an optimistic lock. A prepared node also stays `Prepared` while its 15-minute recheck runs, and while the registry has not yet answered after a controller restart (every placement used to drop for the seconds the first lookups took); a failed recheck or a refusal still unprepares it.
+- **False `Prepared` to `Preparing` flaps.** The controller often reconciled before its own last status write had reached its cache (the deletion of a finished prepare pod triggers a pass at once). That pass saw a node it had just recorded prepared as unprepared, started another prepare pod and wrote `Preparing` over `Prepared`, and the new pod finishing started the loop again: about once per checkout on a one-slot pool. The placement is now read past the cache and its status written with an optimistic lock.
+- **`Prepared` is kept during rechecks and after a controller restart.** A prepared node read `Preparing` for the length of every 15-minute recheck, and every placement read unprepared for the seconds the registry took to answer the first authorization lookups after a controller restart. A prepared node now stays `Prepared` through both; a failed recheck or a registry refusal still unprepares it. A node that was never prepared still reports `Preparing` until its preparation completes.
 
 ### Changed
 
-- **A placement keeps a prepared node that stops running a slot.** When a pool's slot left a node, the placement forgot it, so a refill landing back on it (a one-slot pool alternating between two nodes) had it prepared again and reported `Preparing` meanwhile, although its cache held every artifact. Such a node now stays in `status.nodes` with reason `NotATarget`, uncounted and without a prepare pod, until its recheck would be due (15 minutes) or the node leaves the cluster, and a slot returning to it finds it `Prepared` at once. The `swiftartifactplacements` CRD changes in a field description only.
-- A placement's target nodes count only the pool's slots: pods the pool controls, or the SwiftSandbox that claimed them. A pod that carries the pool label without that ownership no longer adds its node.
+- **Recently prepared non-target nodes are remembered for the existing recheck window.** When a pool's slot left a node, the placement forgot it, so a refill landing back on it (a one-slot pool alternating between two nodes) was prepared again. Such a node now stays in `status.nodes` with reason `NotATarget` (not counted as a target, no prepare pod, no effect on the condition) until its 15-minute recheck would be due or the node leaves the cluster, and a slot returning to it finds it `Prepared` at once.
+- A placement's target nodes count only the pool's slots: pods the pool controls, or the SwiftSandbox that claimed them; the pool label alone no longer adds a node.
 
 ## [v0.21.1] — 2026-10-27
 
