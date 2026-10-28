@@ -325,7 +325,9 @@ spec:
                     reason:
                       description: |-
                         Reason is Prepared, Preparing, VerificationFailed, ClaimMismatch or
-                        PrepareFailed.
+                        PrepareFailed; NotATarget for a prepared node that no longer runs a slot
+                        of the pool, kept (and not counted) until its recheck would be due, so
+                        that a slot returning to it finds it prepared.
                       type: string
                     requirements:
                       description: |-

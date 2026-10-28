@@ -287,3 +287,101 @@ func finishPod(t *testing.T, e *placementEnv, pod string) {
 		t.Fatal(err)
 	}
 }
+
+func node(name string) *corev1.Node { return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}} }
+
+func moveSlot(t *testing.T, e *placementEnv, from, to string) {
+	t.Helper()
+	var p corev1.Pod
+	if err := e.c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: from}, &p); err == nil {
+		if err := e.c.Delete(context.Background(), &p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.c.Create(context.Background(), poolSlot(from+"x", to)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A one-slot pool whose refill alternates between two nodes: a node whose slot
+// left stays known as prepared (NotATarget, not counted) until its recheck
+// would be due, so the slot returning to it finds it prepared at once, with no
+// prepare pod and no Preparing in between.
+func TestPlacement_KeptNode_SlotReturns(t *testing.T) {
+	e := newPlacementEnv(t, testPlacement(plDigestA), poolSlot("s1", "node-a"), node("node-a"), node("node-b"))
+	preparedNow(t, e)
+
+	moveSlot(t, e, "s1", "node-b") // the refill lands on node-b; node-a has no slot
+	e.reconcile()
+	p := e.placement()
+	if a := nodeStatus(p, "node-a"); a == nil || !a.Prepared || a.Reason != sandboxv1alpha1.PlacementReasonNotATarget {
+		t.Fatalf("node-a %+v, want kept prepared (NotATarget)", a)
+	}
+	if p.Status.TargetNodes != 1 || p.Status.PreparedNodes != 0 {
+		t.Fatalf("targets=%d prepared=%d; a kept node is not counted", p.Status.TargetNodes, p.Status.PreparedNodes)
+	}
+	e.finish("node-b", nil)
+	e.reconcile()
+	assertTargets(t, e, true, "node-b")
+
+	moveSlot(t, e, "s1x", "node-a") // and back to node-a
+	e.reconcile()
+	if pods := e.preparePods(); pods["node-a"] != nil {
+		t.Error("node-a was prepared again within its recheck interval")
+	}
+	assertTargets(t, e, true, "node-a")
+	if b := nodeStatus(e.placement(), "node-b"); b == nil || b.Reason != sandboxv1alpha1.PlacementReasonNotATarget {
+		t.Errorf("node-b %+v, want kept", b)
+	}
+}
+
+// A kept node goes once its recheck would be due, or when the node leaves the
+// cluster: nothing is kept for longer than a target is trusted.
+func TestPlacement_KeptNode_Expires(t *testing.T) {
+	e := newPlacementEnv(t, testPlacement(plDigestA), poolSlot("s1", "node-a"), node("node-a"), node("node-b"))
+	preparedNow(t, e)
+	moveSlot(t, e, "s1", "node-b")
+	e.reconcile()
+	if nodeStatus(e.placement(), "node-a") == nil {
+		t.Fatal("node-a not kept")
+	}
+	e.now = e.now.Add(placementRecheck)
+	e.reconcile()
+	if a := nodeStatus(e.placement(), "node-a"); a != nil {
+		t.Errorf("node-a %+v kept past its recheck", a)
+	}
+
+	e = newPlacementEnv(t, testPlacement(plDigestA), poolSlot("s1", "node-a"), node("node-a"), node("node-b"))
+	preparedNow(t, e)
+	moveSlot(t, e, "s1", "node-b")
+	if err := e.c.Delete(context.Background(), node("node-a")); err != nil {
+		t.Fatal(err)
+	}
+	e.reconcile()
+	if a := nodeStatus(e.placement(), "node-a"); a != nil {
+		t.Errorf("node-a %+v kept after the node left the cluster", a)
+	}
+}
+
+// Scaled to zero: no targets, NoTargetNodes, and a kept node does not make it
+// look otherwise; it goes when its time is up.
+func TestPlacement_KeptNode_ScaleToZero(t *testing.T) {
+	e := newPlacementEnv(t, testPlacement(plDigestA), poolSlot("s1", "node-a"), node("node-a"))
+	preparedNow(t, e)
+	if err := e.c.Delete(context.Background(), poolSlot("s1", "node-a")); err != nil {
+		t.Fatal(err)
+	}
+	e.reconcile()
+	p := e.placement()
+	if p.Status.TargetNodes != 0 {
+		t.Fatalf("targets=%d after scale to zero", p.Status.TargetNodes)
+	}
+	if c := preparedCondition(p); c == nil || c.Reason != sandboxv1alpha1.PlacementReasonNoTargetNodes {
+		t.Errorf("Prepared = %+v, want NoTargetNodes", c)
+	}
+	e.now = e.now.Add(placementRecheck)
+	e.reconcile()
+	if len(e.placement().Status.Nodes) != 0 {
+		t.Errorf("nodes %+v remain after their time", e.placement().Status.Nodes)
+	}
+}

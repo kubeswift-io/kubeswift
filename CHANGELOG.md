@@ -12,6 +12,7 @@ All notable changes to KubeSwift are documented here.
 
 ### Changed
 
+- **A placement keeps a prepared node that stops running a slot.** When a pool's slot left a node, the placement forgot it, so a refill landing back on it (a one-slot pool alternating between two nodes) had it prepared again and reported `Preparing` meanwhile, although its cache held every artifact. Such a node now stays in `status.nodes` with reason `NotATarget`, uncounted and without a prepare pod, until its recheck would be due (15 minutes) or the node leaves the cluster, and a slot returning to it finds it `Prepared` at once. The `swiftartifactplacements` CRD changes in a field description only.
 - A placement's target nodes count only the pool's slots: pods the pool controls, or the SwiftSandbox that claimed them. A pod that carries the pool label without that ownership no longer adds its node.
 
 ## [v0.21.1] — 2026-10-27

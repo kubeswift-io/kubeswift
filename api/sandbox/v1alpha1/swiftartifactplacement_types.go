@@ -116,7 +116,9 @@ type PlacementNodeStatus struct {
 	// +optional
 	PreparedAt *metav1.Time `json:"preparedAt,omitempty"`
 	// Reason is Prepared, Preparing, VerificationFailed, ClaimMismatch or
-	// PrepareFailed.
+	// PrepareFailed; NotATarget for a prepared node that no longer runs a slot
+	// of the pool, kept (and not counted) until its recheck would be due, so
+	// that a slot returning to it finds it prepared.
 	// +optional
 	Reason string `json:"reason,omitempty"`
 	// Message says what failed, when something did.
@@ -173,6 +175,7 @@ const (
 	PlacementReasonArtifactRefused    = "ArtifactRefused"
 	PlacementReasonPoolNotFound       = "PoolNotFound"
 	PlacementReasonNoTargetNodes      = "NoTargetNodes"
+	PlacementReasonNotATarget         = "NotATarget"
 	PlacementReasonAuthorized         = "Authorized"
 	PlacementReasonResolving          = "Resolving"
 )

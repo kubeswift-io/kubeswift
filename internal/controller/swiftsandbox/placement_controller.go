@@ -175,6 +175,12 @@ func (r *ArtifactPlacementReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			requeue = after
 		}
 	}
+	kept, err := r.keptNodes(ctx, &p, orig.Nodes, targets, reqs, now)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	nodes = append(nodes, kept...)
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Name < nodes[j].Name })
 	p.Status.Nodes = nodes
 
 	reason, msg := sandboxv1alpha1.PlacementReasonPreparing, ""
@@ -214,6 +220,38 @@ func (r *ArtifactPlacementReconciler) targetNodes(ctx context.Context, p *sandbo
 		if _, ok := out[pod.Spec.NodeName]; !ok {
 			out[pod.Spec.NodeName] = pod
 		}
+	}
+	return out, nil
+}
+
+// keptNodes returns the prepared nodes that no longer run a slot of the pool,
+// as NotATarget entries, while what was found there still holds: prepared
+// under this generation and these requirements, less than placementRecheck
+// ago (the time a target node is trusted without a check), and the node still
+// in the cluster. A one-slot pool's refill often lands on the node its
+// previous slot left; forgetting that node made the placement prepare it again
+// and report Preparing in the meantime, although its cache held everything.
+// Kept entries are not targets: they are not counted, get no prepare pod and
+// do not affect the Prepared condition, and they go once their time is up.
+func (r *ArtifactPlacementReconciler) keptNodes(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement, prev []sandboxv1alpha1.PlacementNodeStatus, targets map[string]*corev1.Pod, reqs string, now time.Time) ([]sandboxv1alpha1.PlacementNodeStatus, error) {
+	var out []sandboxv1alpha1.PlacementNodeStatus
+	for _, n := range prev {
+		if _, ok := targets[n.Name]; ok {
+			continue
+		}
+		if !n.Prepared || n.PreparedAt == nil || now.Sub(n.PreparedAt.Time) >= placementRecheck ||
+			n.ObservedGeneration != p.Generation || n.Requirements != reqs {
+			continue
+		}
+		var node corev1.Node
+		if err := r.Get(ctx, types.NamespacedName{Name: n.Name}, &node); apierrors.IsNotFound(err) {
+			continue
+		} else if err != nil {
+			return nil, err
+		}
+		n.Reason = sandboxv1alpha1.PlacementReasonNotATarget
+		n.Message = "no slot of the pool runs here; kept as prepared until its recheck would be due"
+		out = append(out, n)
 	}
 	return out, nil
 }
@@ -372,6 +410,10 @@ func (r *ArtifactPlacementReconciler) reconcileNode(ctx context.Context, p *sand
 		st.PreparedAt, st.LastFailureTime = prev.PreparedAt, prev.LastFailureTime
 		st.Prepared, st.Reason, st.Message = prev.Prepared, prev.Reason, prev.Message
 		st.Failures = prev.Failures
+		if prev.Reason == sandboxv1alpha1.PlacementReasonNotATarget {
+			// A kept node a slot returned to: prepared, as it was.
+			st.Reason, st.Message = sandboxv1alpha1.PlacementReasonPrepared, ""
+		}
 	}
 	want := wantedArtifacts(p, authorized)
 
@@ -624,11 +666,15 @@ func (r *ArtifactPlacementReconciler) deletePreparePods(ctx context.Context, p *
 // used when not every target node is prepared (or there is none).
 func (r *ArtifactPlacementReconciler) summarize(p *sandboxv1alpha1.SwiftArtifactPlacement, reason, msg string) {
 	p.Status.ObservedGeneration = p.Generation
-	p.Status.TargetNodes = int32(len(p.Status.Nodes))
+	p.Status.TargetNodes = 0
 	p.Status.PreparedNodes = 0
 	count := map[string]int32{}
 	var failing []string
 	for _, n := range p.Status.Nodes {
+		if n.Reason == sandboxv1alpha1.PlacementReasonNotATarget {
+			continue // kept, not a target
+		}
+		p.Status.TargetNodes++
 		if n.Prepared {
 			p.Status.PreparedNodes++
 			for _, a := range p.Spec.Artifacts {

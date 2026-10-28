@@ -334,7 +334,11 @@ workload ends or its sandbox is deleted. Only slots count: pods the pool
 controls, or the SwiftSandbox that claimed them. `NoTargetNodes` means no
 slot of the pool runs anywhere: a pool scaled to zero with no checkout left,
 or a refill not scheduled yet. A pool with `minWarm: 0` has no slots, so a
-placement for it prepares nothing: sandboxes it boots cold are not slots. On
+placement for it prepares nothing: sandboxes it boots cold are not slots.
+A prepared node whose last slot left stays in `status.nodes` as
+`NotATarget` (not counted, no prepare pod) until its 15-minute recheck would
+be due, or until the node leaves the cluster: a slot returning to it, as a
+one-slot pool's refill often does, finds it prepared at once. On
 each, a prepare pod runs the same materializer as a checkout's fetch pod,
 with the placement's pull Secret and key, and is deleted when done. Nothing
 else changes: the pool and its slots are not touched or restarted, and a
