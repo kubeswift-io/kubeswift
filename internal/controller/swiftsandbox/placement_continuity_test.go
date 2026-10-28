@@ -15,6 +15,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
+
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 )
 
@@ -383,5 +385,25 @@ func TestPlacement_KeptNode_ScaleToZero(t *testing.T) {
 	e.reconcile()
 	if len(e.placement().Status.Nodes) != 0 {
 		t.Errorf("nodes %+v remain after their time", e.placement().Status.Nodes)
+	}
+}
+
+// After a controller restart the registry has not answered yet: a node
+// prepared within its recheck interval stays Prepared (not authorized yet is
+// not a refusal); a refusal still unprepares it.
+func TestPlacement_RestartKeepsPreparedUntilRefused(t *testing.T) {
+	e := newPlacementEnv(t, testPlacement(plDigestA), poolSlot("s1", "node-a"))
+	preparedNow(t, e)
+
+	e.res = stubResolver(hang) // a fresh controller: no authorization yet
+	e.reconcile()
+	if c := preparedCondition(e.placement()); c == nil || c.Status != metav1.ConditionTrue {
+		t.Errorf("Prepared = %+v while the first lookup after a restart is pending, want True", c)
+	}
+
+	e.res = stubResolver(answers(map[string]error{"reg.example/art@" + plDigestA: &transport.Error{StatusCode: 404}}))
+	e.reconcile()
+	if n := nodeStatus(e.placement(), "node-a"); n == nil || n.Prepared {
+		t.Errorf("node-a %+v still prepared after the registry refused the artifact", n)
 	}
 }

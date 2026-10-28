@@ -166,7 +166,7 @@ func (r *ArtifactPlacementReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	var nodes []sandboxv1alpha1.PlacementNodeStatus
 	requeue := placementResync
 	for _, name := range sortedKeys(targets) {
-		ns, after, err := r.reconcileNode(ctx, &p, name, targets[name], authorized, decisions, reqs, now)
+		ns, after, err := r.reconcileNode(ctx, &p, name, targets[name], authorized, refused != "", decisions, reqs, now)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -401,7 +401,7 @@ func (r *ArtifactPlacementReconciler) lookup(p *sandboxv1alpha1.SwiftArtifactPla
 
 // reconcileNode moves one node toward holding every authorized artifact and
 // returns its status, and when the placement should look at it again.
-func (r *ArtifactPlacementReconciler) reconcileNode(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement, node string, slot *corev1.Pod, authorized map[string]bool, decisions []artifactpolicy.Decision, reqs string, now time.Time) (sandboxv1alpha1.PlacementNodeStatus, time.Duration, error) {
+func (r *ArtifactPlacementReconciler) reconcileNode(ctx context.Context, p *sandboxv1alpha1.SwiftArtifactPlacement, node string, slot *corev1.Pod, authorized map[string]bool, refused bool, decisions []artifactpolicy.Decision, reqs string, now time.Time) (sandboxv1alpha1.PlacementNodeStatus, time.Duration, error) {
 	prev := nodeStatus(p, node)
 	st := sandboxv1alpha1.PlacementNodeStatus{Name: node, ObservedGeneration: p.Generation, Requirements: reqs}
 	// A node prepared under other platform requirements (a policy changed
@@ -452,8 +452,15 @@ func (r *ArtifactPlacementReconciler) reconcileNode(ctx context.Context, p *sand
 	// No prepare pod. A prepared node stays so until its recheck; a failed
 	// one waits out its backoff; otherwise one is started.
 	if len(want) == 0 {
-		st.Prepared = false
-		st.Reason, st.Message = sandboxv1alpha1.PlacementReasonPreparing, "waiting for the registry to authorize the artifacts"
+		// Nothing authorized yet. Right after a controller restart the
+		// registry has not answered for anything: that is not a refusal, so
+		// a node prepared within its recheck interval stays so (every
+		// placement used to drop to unprepared for the seconds the first
+		// lookups took). A refusal unprepares it, as before.
+		if refused || !st.Prepared || st.PreparedAt == nil || now.Sub(st.PreparedAt.Time) >= placementRecheck {
+			st.Prepared = false
+			st.Reason, st.Message = sandboxv1alpha1.PlacementReasonPreparing, "waiting for the registry to authorize the artifacts"
+		}
 		return st, placementResync, nil
 	}
 	if st.Prepared && st.PreparedAt != nil && now.Sub(st.PreparedAt.Time) < placementRecheck {
