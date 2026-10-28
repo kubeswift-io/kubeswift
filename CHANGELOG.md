@@ -6,6 +6,15 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `SwiftArtifactPlacement` flapped between `Prepared` and `Preparing` while its pool's slots came and went.** The controller often reconciled before its own last status write had reached its cache (the deletion of a finished prepare pod triggers a pass at once): that pass saw a node it had just recorded prepared as unprepared, started another prepare pod and wrote `Preparing` over `Prepared`, and the new pod finishing started the loop again. On a one-slot pool this took the condition to `False` about once per checkout, and a consumer that attaches an optional artifact only while the placement is `Prepared` (a local application, a compiled cache) gave those replicas none. The placement is now read past the cache and its status written with an optimistic lock. A prepared node also stays `Prepared` while its 15-minute recheck runs, and while the registry has not yet answered after a controller restart (every placement used to drop for the seconds the first lookups took); a failed recheck or a refusal still unprepares it.
+
+### Changed
+
+- **A placement keeps a prepared node that stops running a slot.** When a pool's slot left a node, the placement forgot it, so a refill landing back on it (a one-slot pool alternating between two nodes) had it prepared again and reported `Preparing` meanwhile, although its cache held every artifact. Such a node now stays in `status.nodes` with reason `NotATarget`, uncounted and without a prepare pod, until its recheck would be due (15 minutes) or the node leaves the cluster, and a slot returning to it finds it `Prepared` at once. The `swiftartifactplacements` CRD changes in a field description only.
+- A placement's target nodes count only the pool's slots: pods the pool controls, or the SwiftSandbox that claimed them. A pod that carries the pool label without that ownership no longer adds its node.
+
 ## [v0.21.1] — 2026-10-27
 
 A patch release for snapshot cleanup. A memory snapshot's capture (the guest's RAM, written on the launcher's node) could be left on the node after its snapshot was deleted, and a snapshot could stay `Terminating` for good when its cleanup pod failed or its object-store credentials were gone. Only the controller changed.
