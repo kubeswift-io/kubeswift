@@ -141,8 +141,19 @@ pub const BRIDGE_FEATURES_ANNOTATION: &str = "kubeswift.io/bridge-features";
 pub const LAUNCHER_FEATURES_ANNOTATION: &str = "kubeswift.io/launcher-features";
 pub const LAUNCHER_FEATURES: &str = "artifact-requirements";
 
+/// This launcher's features: [`LAUNCHER_FEATURES`] plus what its Cloud
+/// Hypervisor and event stream support (`migration-events`,
+/// `migration-cancel`; see migevents.rs). `ch_major` is the running Cloud
+/// Hypervisor's major version, when known.
+pub fn launcher_features(ch_major: Option<u32>) -> String {
+    let mut f = vec![LAUNCHER_FEATURES];
+    f.extend(crate::migevents::features(ch_major));
+    f.join(" ")
+}
+
 /// Reports runtime and console to the launcher pod annotations.
 /// The controller maps these annotations to SwiftGuest status.
+#[allow(clippy::too_many_arguments)]
 pub async fn report_guest_runtime(
     client: &Client,
     namespace: &str,
@@ -151,6 +162,7 @@ pub async fn report_guest_runtime(
     serial_socket: &str,
     hypervisor: &str,
     bridge_features: &str,
+    launcher_features: &str,
 ) -> Result<(), kube::Error> {
     let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
     let mut annotations = std::collections::BTreeMap::new();
@@ -163,7 +175,7 @@ pub async fn report_guest_runtime(
     }
     annotations.insert(
         LAUNCHER_FEATURES_ANNOTATION.to_string(),
-        LAUNCHER_FEATURES.to_string(),
+        launcher_features.to_string(),
     );
     annotations.insert(
         "kubeswift.io/guest-runtime-pid".to_string(),

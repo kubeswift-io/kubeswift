@@ -494,6 +494,7 @@ fn parse_migration_verb(verb: &str) -> ActionKind {
         "send" => ActionKind::MigrationSend,
         "receive" => ActionKind::MigrationReceive,
         "cancel" => ActionKind::MigrationCancel,
+        "cancel-send" => ActionKind::MigrationCancelSend,
         other => ActionKind::Unknown(other.to_string()),
     }
 }
@@ -545,6 +546,11 @@ pub enum ActionKind {
     /// Destination-side cancel primitive: SIGKILL the local CH child.
     /// The source CH automatically resumes on the dst-kill (Q1d-F2).
     MigrationCancel,
+    /// Source-side cancel (CH >= v54): `vm.cancel-migration` on the send in
+    /// progress. Only a launcher advertising `migration-cancel` is sent one.
+    /// It reports whether the cancel was delivered (migration-cancel-result);
+    /// the send's own status says how the migration ended.
+    MigrationCancelSend,
 
     // Identity namespace — `kubeswift.io/identity-action` verbs.
     /// Regenerate a cloneFromSnapshot clone's identity in place over vsock:
@@ -734,7 +740,10 @@ pub fn decide(
     // follow the normal RejectInFlight rule. Whether an accepted cancel then
     // interrupts the running action is `handle_namespace`'s call: only a
     // receive is.
-    let is_cancel = matches!(kind, ActionKind::MigrationCancel);
+    let is_cancel = matches!(
+        kind,
+        ActionKind::MigrationCancel | ActionKind::MigrationCancelSend
+    );
     if let Some(current) = in_flight_id {
         if current == id {
             // Same action still being processed — quiet no-op.
@@ -829,6 +838,7 @@ pub async fn dispatch(action: &PendingAction, api_socket: &Path) -> Result<Actio
         ActionKind::MigrationSend => dispatch_migration_send(action, api_socket).await,
         ActionKind::MigrationReceive => dispatch_migration_receive(action, api_socket).await,
         ActionKind::MigrationCancel => dispatch_migration_cancel(action, api_socket).await,
+        ActionKind::MigrationCancelSend => dispatch_migration_cancel_send(action, api_socket),
         ActionKind::IdentityRegenerate => dispatch_identity_regenerate(action, api_socket).await,
         ActionKind::SandboxExec => dispatch_sandbox_exec(action, api_socket).await,
         ActionKind::Unknown(verb) => {
@@ -1365,6 +1375,8 @@ async fn dispatch_migration_send(
     action: &PendingAction,
     api_socket: &Path,
 ) -> Result<ActionOutcome, String> {
+    // In progress until this returns, for a source cancel (migevents.rs).
+    let in_progress = crate::migevents::SendInProgress::requesting();
     // SECURITY-S1: target_url is read from the operator-writable pod
     // annotation args. Phase 3c PR 4 mitigates the annotation-trust-boundary
     // issue under mTLS by validating the URL is loopback below (a tampered
@@ -1425,6 +1437,10 @@ async fn dispatch_migration_send(
     // to exit on any return path (success, error, async cancellation).
     let _progress = spawn_progress_emitter(action.id.clone(), args.guest_ram_mib);
 
+    // The event stream's position before the request: everything this send
+    // emits comes after it (migevents::wait_send).
+    let events = crate::migevents::stream();
+    let cursor = events.map(|s| s.cursor());
     let started = std::time::Instant::now();
     if let Err(e) = client.send_migration(&args.target_url, args.downtime_ms, args.connections) {
         return Err(format!(
@@ -1432,6 +1448,8 @@ async fn dispatch_migration_send(
             sanitize_ch_error(&format!("{:?}", e))
         ));
     }
+    in_progress.accepted();
+    let mut evidence = None;
 
     // Completion detection (W1 completion-gate, load-bearing item C).
     // `send_migration` returning Ok is necessary but not sufficient — the
@@ -1468,22 +1486,46 @@ async fn dispatch_migration_send(
         let deadline = started + timeout;
         // The deadline used to be the only way a failed transfer ended the
         // wait: after a cancel, 600 s with this action slot busy. Watch the
-        // transfer's connection too (crate::migconn).
+        // transfer's connection too (crate::migconn) -- with Cloud
+        // Hypervisor's events, only once they turn out to be unavailable.
+        let accepted_at = std::time::Instant::now();
         let mut watch = crate::migconn::parse_target(&args.target_url)
-            .map(|target| crate::migconn::Watch::new(target, std::time::Instant::now()));
-        let outcome = client.wait_for_send_migration_terminal_until(
-            deadline,
-            MIGRATION_SEND_POLL_INTERVAL,
-            |sample| {
-                let w = watch.as_mut()?;
-                let running = matches!(sample, Ok(info) if info.state == "Running");
-                w.sample(
-                    std::time::Instant::now(),
-                    running,
-                    crate::migconn::connected_to(w.target),
-                )
-            },
-        );
+            .map(|target| crate::migconn::Watch::new(target, accepted_at));
+        let mut watch_sample = |now: std::time::Instant, running: bool| {
+            let w = watch.as_mut()?;
+            w.sample(now, running, crate::migconn::connected_to(w.target))
+        };
+        let outcome = match (events, cursor) {
+            (Some(stream), Some(cursor)) => {
+                let info = swift_ch_client::ApiClient::new(api_socket)
+                    .with_timeout(Duration::from_secs(5));
+                let w = crate::migevents::wait_send(
+                    stream,
+                    cursor,
+                    deadline,
+                    &crate::migevents::Timing::default(),
+                    || info.vm_info(),
+                    &mut watch_sample,
+                );
+                log::info!(
+                    "migration_send_wait id={} evidence={} iterations={} vm_info_calls={}",
+                    action.id,
+                    w.evidence.as_str(),
+                    w.iterations,
+                    w.info_calls
+                );
+                evidence = Some(w.evidence);
+                w.outcome
+            }
+            _ => client.wait_for_send_migration_terminal_until(
+                deadline,
+                MIGRATION_SEND_POLL_INTERVAL,
+                |sample| {
+                    let running = matches!(sample, Ok(info) if info.state == "Running");
+                    watch_sample(std::time::Instant::now(), running)
+                },
+            ),
+        };
         if matches!(outcome, swift_ch_client::SendMigrationOutcome::Failed(_)) {
             // Migration did not complete — the source guest is still Running
             // (v53 auto-resumed it) and CH did NOT exit, so main.rs's
@@ -1517,8 +1559,17 @@ async fn dispatch_migration_send(
                 elapsed_ms,
                 non_blocking
             );
+            let detail = match evidence {
+                Some(e) => format!(
+                    "sent to {} ({}ms, evidence={})",
+                    args.target_url,
+                    elapsed_ms,
+                    e.as_str()
+                ),
+                None => format!("sent to {} ({}ms)", args.target_url, elapsed_ms),
+            };
             Ok(ActionOutcome {
-                detail: Some(format!("sent to {} ({}ms)", args.target_url, elapsed_ms)),
+                detail: Some(detail),
                 pause_window_ms: Some(elapsed_ms),
                 // Source-side migration success verb per design §3.1:
                 // "complete" (CH gone, guest now running on destination).
@@ -1606,6 +1657,11 @@ async fn dispatch_migration_receive(
             if let Some(ip) = &args.guest_ip {
                 propagate_guest_ip_annotation(ip).await;
             }
+            // This pod is the guest's launcher from cutover on, and the
+            // source of its next migration: say what it supports. A receiver
+            // reports no runtime at start (it has no VM then), so this is
+            // the first time it can.
+            propagate_launcher_features(&client).await;
             // W16: flip SwiftGuest's GuestRunning condition to True on
             // the destination side. Without this, the controller's
             // Resuming-live handler waits indefinitely for a signal
@@ -1756,6 +1812,33 @@ async fn dispatch_migration_cancel(
     Err(CANCELLED.to_string())
 }
 
+/// Source-side cancel: `vm.cancel-migration` on this launcher's send (see
+/// [`crate::migevents::cancel_send`]). Runs beside the send it cancels, in the
+/// cancel slot; with no send in progress it reports `not-active` without
+/// asking Cloud Hypervisor.
+fn dispatch_migration_cancel_send(
+    action: &PendingAction,
+    api_socket: &Path,
+) -> Result<ActionOutcome, String> {
+    log::info!("dispatch_migration_cancel_send id={}", action.id);
+    let client = swift_ch_client::ApiClient::new(api_socket).with_timeout(Duration::from_secs(5));
+    let result = crate::migevents::cancel_send(|| client.cancel_migration())?;
+    Ok(ActionOutcome {
+        detail: Some(match result {
+            crate::migevents::CancelResult::Requested => {
+                "Cloud Hypervisor accepted the cancel; the send reports how the migration ended"
+                    .to_string()
+            }
+            crate::migevents::CancelResult::NotActive => {
+                "no migration is in progress on the source".to_string()
+            }
+        }),
+        pause_window_ms: None,
+        success_status: Some(result.as_str()),
+        suppress_status: false,
+    })
+}
+
 /// The error a migration cancel returns once it has killed the destination:
 /// written as the `failed` status detail the controller matches for its
 /// cancel acknowledgement.
@@ -1871,6 +1954,41 @@ async fn propagate_guest_ip_annotation(ip: &str) {
     }
 }
 
+/// Write this launcher's features (report::launcher_features) on its pod
+/// after a receive. Best-effort: without them the next migration uses the
+/// destination-kill cancel, as for any older launcher.
+async fn propagate_launcher_features(ch: &swift_ch_client::ApiClient) {
+    let features = crate::report::launcher_features(probe_ch_major(ch));
+    let (namespace, pod_name) = match (
+        std::env::var("POD_NAMESPACE").ok(),
+        std::env::var("POD_NAME").ok(),
+    ) {
+        (Some(ns), Some(name)) if !ns.is_empty() && !name.is_empty() => (ns, name),
+        _ => return,
+    };
+    let client = match crate::kube_client::create_client().await {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("launcher_features_kube_client_unavailable: {}", e);
+            return;
+        }
+    };
+    let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client, &namespace);
+    let mut annotations = BTreeMap::new();
+    annotations.insert(
+        crate::report::LAUNCHER_FEATURES_ANNOTATION,
+        features.as_str(),
+    );
+    let patch = json!({"metadata": {"annotations": annotations}});
+    match api
+        .patch(&pod_name, &PatchParams::default(), &Patch::Merge(&patch))
+        .await
+    {
+        Ok(_) => log::info!("launcher_features_reported features={}", features),
+        Err(e) => log::warn!("launcher_features_patch_failed: {}", e),
+    }
+}
+
 /// W16: post-receive SwiftGuest GuestRunning condition flip on dst.
 ///
 /// In receiver mode, main.rs skips the on_socket_ready callback (CH
@@ -1983,7 +2101,7 @@ fn extract_guest_name_from_labels(
 /// error strings — Phase 2 spike S3 finding. Conservative default:
 /// pattern-match on the leading error variant; collapse longer
 /// messages into a category token.
-fn sanitize_ch_error(raw: &str) -> &'static str {
+pub(crate) fn sanitize_ch_error(raw: &str) -> &'static str {
     // Match against the leading variant produced by ApiError's
     // Debug impl. The variants are stable in swift-ch-client.
     if raw.contains("Connect") {
@@ -2008,7 +2126,7 @@ fn sanitize_ch_error(raw: &str) -> &'static str {
 }
 
 /// The local Cloud Hypervisor's major version, asked up to three times.
-fn probe_ch_major(client: &swift_ch_client::ApiClient) -> Option<u32> {
+pub(crate) fn probe_ch_major(client: &swift_ch_client::ApiClient) -> Option<u32> {
     for attempt in 0..3 {
         if attempt > 0 {
             std::thread::sleep(std::time::Duration::from_millis(200));
@@ -2346,6 +2464,65 @@ pub async fn write_migration_status(
     });
     let pp = PatchParams::default();
     api.patch(pod_name, &pp, &Patch::Merge(&patch)).await?;
+    Ok(())
+}
+
+/// Annotations a `cancel-send` reports on, apart from the migration status:
+/// that belongs to the send it cancelled, whose outcome it is.
+#[cfg_attr(test, allow(dead_code))]
+pub const MIGRATION_CANCEL_RESULT_KEY: &str = "kubeswift.io/migration-cancel-result";
+#[cfg_attr(test, allow(dead_code))]
+pub const MIGRATION_CANCEL_RESULT_ID_KEY: &str = "kubeswift.io/migration-cancel-result-id";
+#[cfg_attr(test, allow(dead_code))]
+pub const MIGRATION_CANCEL_RESULT_DETAIL_KEY: &str = "kubeswift.io/migration-cancel-result-detail";
+
+#[cfg(not(test))]
+async fn report_cancel_result(
+    client: &Client,
+    namespace: &str,
+    pod_name: &str,
+    action_id: &str,
+    result: &'static str,
+    detail: &str,
+) {
+    if let Err(e) =
+        write_cancel_result(client, namespace, pod_name, action_id, result, detail).await
+    {
+        log::error!("action_status_write_failed: {}", e);
+    }
+}
+
+#[cfg(test)]
+async fn report_cancel_result(
+    _: &Client,
+    _: &str,
+    _: &str,
+    action_id: &str,
+    result: &'static str,
+    detail: &str,
+) {
+    loop_tests::record_cancel_result(action_id, result, detail);
+}
+
+/// Write a `cancel-send`'s result: `requested`, `not-active` or `failed`.
+#[cfg_attr(test, allow(dead_code))]
+pub async fn write_cancel_result(
+    client: &Client,
+    namespace: &str,
+    pod_name: &str,
+    action_id: &str,
+    result: &str,
+    detail: &str,
+) -> Result<(), kube::Error> {
+    let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
+    let mut annotations = BTreeMap::new();
+    annotations.insert(MIGRATION_CANCEL_RESULT_KEY, result);
+    annotations.insert(MIGRATION_CANCEL_RESULT_ID_KEY, action_id);
+    annotations.insert(MIGRATION_CANCEL_RESULT_DETAIL_KEY, detail);
+    let patch = json!({ "metadata": { "annotations": annotations } });
+    api.patch(pod_name, &PatchParams::default(), &Patch::Merge(&patch))
+        .await?;
+    log::info!("migration_cancel_result id={} result={}", action_id, result);
     Ok(())
 }
 
@@ -2940,6 +3117,7 @@ async fn finish_main(
     // (MIGRATION_SEND_COMPLETE_WRITTEN): a failed or cancelled send's
     // signal must not let a later completed send's exit skip its write.
     if done.pending.kind == ActionKind::MigrationSend {
+        crate::migevents::send_settled_by_loop();
         let completed = done.result.is_ok();
         if completed {
             MIGRATION_SEND_COMPLETE_WRITTEN.store(true, Ordering::SeqCst);
@@ -2965,6 +3143,25 @@ async fn write_terminal(
     done: &Completion,
     write: StatusWriter,
 ) {
+    if done.pending.kind == ActionKind::MigrationCancelSend {
+        let (result, detail) = match &done.result {
+            Ok(outcome) => (
+                outcome.success_status.unwrap_or("requested"),
+                outcome.detail.clone().unwrap_or_default(),
+            ),
+            Err(d) => ("failed", d.clone()),
+        };
+        report_cancel_result(
+            client,
+            namespace,
+            pod_name,
+            &done.pending.id,
+            result,
+            &detail,
+        )
+        .await;
+        return;
+    }
     let (status, detail, pause_window_ms) = match &done.result {
         Ok(outcome) if outcome.suppress_status => {
             log::info!(
@@ -3279,6 +3476,8 @@ fn pre_dispatch_status(kind: &ActionKind) -> Option<StatusKind> {
         ActionKind::MigrationReceive => Some(StatusKind::Custom("receive-ready")),
         ActionKind::MigrationSend => Some(StatusKind::Custom("sending")),
         ActionKind::SandboxExec => None,
+        // Writes its own result annotation; the send's status must stand.
+        ActionKind::MigrationCancelSend => None,
         _ => Some(StatusKind::Running),
     }
 }
@@ -3398,14 +3597,22 @@ async fn handle_namespace(
         }
         ActionDecision::Accept(pending) => {
             let mut slot = Slot::Main;
-            if pending.kind == ActionKind::MigrationCancel {
+            if matches!(
+                pending.kind,
+                ActionKind::MigrationCancel | ActionKind::MigrationCancelSend
+            ) {
                 if let Some(running) = &state.in_flight {
-                    // A cancel interrupts only the destination's receive, the
-                    // one action it is defined against: it SIGKILLs the
-                    // receiving Cloud Hypervisor. Anything else it waits for,
-                    // as before; interrupting a send would kill the source
-                    // VM mid-transfer.
-                    if running.kind != ActionKind::MigrationReceive || state.cancel_id.is_some() {
+                    // Each cancel interrupts only the action it is defined
+                    // against: a destination cancel the receive (it SIGKILLs
+                    // the receiving Cloud Hypervisor), a source cancel the
+                    // send (vm.cancel-migration). Anything else it waits for,
+                    // as before.
+                    let target = if pending.kind == ActionKind::MigrationCancel {
+                        ActionKind::MigrationReceive
+                    } else {
+                        ActionKind::MigrationSend
+                    };
+                    if running.kind != target || state.cancel_id.is_some() {
                         log::debug!(
                             "action_wait namespace={} cancel={} running={}",
                             keys.namespace,
@@ -3432,6 +3639,9 @@ async fn handle_namespace(
                 pending.id,
                 slot
             );
+            if pending.kind == ActionKind::MigrationSend {
+                crate::migevents::send_accepted_by_loop();
+            }
             match slot {
                 Slot::Main => state.in_flight = Some(pending.clone()),
                 Slot::Cancel => {
@@ -4288,6 +4498,10 @@ mod tests {
             ActionKind::MigrationReceive
         );
         assert_eq!(parse_migration_verb("cancel"), ActionKind::MigrationCancel);
+        assert_eq!(
+            parse_migration_verb("cancel-send"),
+            ActionKind::MigrationCancelSend
+        );
         assert_eq!(
             parse_migration_verb("xyz"),
             ActionKind::Unknown("xyz".to_string())
@@ -5377,6 +5591,20 @@ mod loop_tests {
         record
     }
 
+    /// A `cancel-send`'s result, recorded with the status writes as
+    /// `cancel-result:<result>` so their order shows.
+    pub(super) fn record_cancel_result(id: &str, result: &'static str, detail: &str) {
+        let kind: &'static str = match result {
+            "requested" => "cancel-result:requested",
+            "not-active" => "cancel-result:not-active",
+            _ => "cancel-result:failed",
+        };
+        WRITES.with(|w| {
+            w.borrow_mut()
+                .push((id.to_string(), kind, Some(detail.to_string())))
+        });
+    }
+
     fn writes() -> Vec<(String, &'static str, Option<String>)> {
         WRITES.with(|w| w.borrow().clone())
     }
@@ -5573,6 +5801,117 @@ mod loop_tests {
         assert!(rig.state.migration.cancel_id.is_none());
         assert_eq!(writes().len(), 1, "only the send's pre-dispatch status");
         send.send(Ok(ActionOutcome::default())).unwrap();
+        rig.settle().await;
+    }
+
+    // A source cancel interrupts the send it cancels. It writes only its own
+    // result: the send's status -- the controller's evidence of how the
+    // migration ended -- is never replaced, and is written after it.
+    #[tokio::test]
+    async fn a_source_cancel_interrupts_a_send_and_leaves_its_status() {
+        let mut rig = Rig::new();
+        let send = gate("snd-5");
+        let cancel = gate("csd-5");
+        rig.tick(Ns::Migration, "send", "snd-5").await;
+        rig.tick(Ns::Migration, "cancel-send", "csd-5").await;
+        assert!(rig.state.migration.cancel_running, "dispatched mid-send");
+        assert_eq!(
+            writes(),
+            vec![("snd-5".to_string(), "sending", None)],
+            "no pre-dispatch status for the cancel"
+        );
+        cancel
+            .send(Ok(ActionOutcome {
+                detail: Some("accepted".to_string()),
+                success_status: Some("requested"),
+                ..Default::default()
+            }))
+            .unwrap();
+        assert_eq!(rig.settle().await.slot, Slot::Cancel);
+        send.send(Err("cancelled: stopped".to_string())).unwrap();
+        assert_eq!(rig.settle().await.slot, Slot::Main);
+        assert_eq!(
+            writes(),
+            vec![
+                ("snd-5".to_string(), "sending", None),
+                (
+                    "csd-5".to_string(),
+                    "cancel-result:requested",
+                    Some("accepted".to_string())
+                ),
+                (
+                    "snd-5".to_string(),
+                    "failed",
+                    Some("cancelled: stopped".to_string())
+                ),
+            ]
+        );
+        assert_eq!(
+            rig.state.migration.last_completed_id.as_deref(),
+            Some("csd-5")
+        );
+        // Not dispatched again.
+        rig.tick(Ns::Migration, "cancel-send", "csd-5").await;
+        assert!(rig.nothing_pending());
+    }
+
+    // The cancel lost the race: the send completed. Its `complete` is
+    // written and stands.
+    #[tokio::test]
+    async fn a_send_that_completes_under_a_source_cancel_reports_complete() {
+        let mut rig = Rig::new();
+        let send = gate("snd-6");
+        let cancel = gate("csd-6");
+        rig.tick(Ns::Migration, "send", "snd-6").await;
+        rig.tick(Ns::Migration, "cancel-send", "csd-6").await;
+        send.send(Ok(ActionOutcome {
+            detail: Some("sent".to_string()),
+            success_status: Some("complete"),
+            ..Default::default()
+        }))
+        .unwrap();
+        rig.settle().await; // held until the cancel finishes
+        cancel
+            .send(Ok(ActionOutcome {
+                success_status: Some("not-active"),
+                ..Default::default()
+            }))
+            .unwrap();
+        rig.settle().await;
+        let w = writes();
+        assert_eq!(
+            w.last(),
+            Some(&("snd-6".to_string(), "complete", Some("sent".to_string())))
+        );
+    }
+
+    // A source cancel with no send in progress runs on its own and reports;
+    // during a receive (the destination's action) it waits, as a destination
+    // cancel does during a send.
+    #[tokio::test]
+    async fn a_source_cancel_alone_reports_and_waits_for_a_receive() {
+        let mut rig = Rig::new();
+        rig.tick(Ns::Migration, "cancel-send", "csd-7").await;
+        assert!(
+            rig.state.migration.in_flight.is_some(),
+            "runs in the main slot"
+        );
+        rig.settle().await;
+        assert_eq!(
+            writes(),
+            vec![(
+                "csd-7".to_string(),
+                "cancel-result:requested",
+                Some("done".to_string())
+            )]
+        );
+
+        let mut rig = Rig::new();
+        let receive = gate("rcv-8");
+        rig.tick(Ns::Migration, "receive", "rcv-8").await;
+        rig.tick(Ns::Migration, "cancel-send", "csd-8").await;
+        assert!(rig.state.migration.cancel_id.is_none(), "waits");
+        receive.send(Ok(ActionOutcome::default())).unwrap();
         rig.settle().await;
     }
 

@@ -118,7 +118,22 @@ func isLocalStunnelNotReady(detail string) bool {
 	if strings.HasPrefix(d, "send_migration:") && strings.Contains(d, "connection_refused") {
 		return true
 	}
-	return strings.Contains(d, "migration connection to 127.0.0.1:") && strings.Contains(d, "never opened")
+	if strings.Contains(d, "migration connection to 127.0.0.1:") && strings.Contains(d, "never opened") {
+		return true
+	}
+	// Cloud Hypervisor >= v54 says so itself: its migration failed before the
+	// connection was set up (no migration-started event), so no guest state
+	// left the source. Under mTLS the connection is to the local client; it
+	// failing to set up is the not-listening-yet case (or the destination's
+	// receiver not being up yet, which is as safe to retry).
+	return isConnectionNeverEstablished(d)
+}
+
+// isConnectionNeverEstablished reports a source detail from swiftletd's
+// event-driven send wait (migevents::failure_detail): the migration failed
+// before its connection was established.
+func isConnectionNeverEstablished(detail string) bool {
+	return strings.Contains(strings.ToLower(detail), "before its connection to the destination was established")
 }
 
 // isDestReceiverNotReady reports whether a src-side migration-status-detail

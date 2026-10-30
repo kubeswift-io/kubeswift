@@ -1,7 +1,9 @@
 //! Spawn Cloud Hypervisor and connect to socket.
 
+use std::os::fd::RawFd;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::Child;
+use std::process::{Child, Command};
 use std::time::Duration;
 
 use crate::config::DEFAULT_CH_BINARY;
@@ -29,9 +31,35 @@ fn rm_stale_api_socket(api_socket: &Path) {
     let _ = std::fs::remove_file(api_socket);
 }
 
+/// The Cloud Hypervisor command, with `--event-monitor fd=<events>` when an
+/// event pipe is given (see [`crate::EventStream::pipe`]).
+///
+/// The pipe's write end is close-on-exec in this process, so no other child
+/// inherits it and the stream ends when Cloud Hypervisor exits; it is
+/// unmarked only in the forked child, just before exec.
+fn ch_command(binary: &str, args: Vec<String>, events: Option<RawFd>) -> Command {
+    let mut cmd = Command::new(binary);
+    cmd.args(args);
+    if let Some(fd) = events {
+        cmd.arg("--event-monitor").arg(format!("fd={}", fd));
+        // SAFETY: fcntl is async-signal-safe and touches only this
+        // descriptor, which the parent keeps open until spawn returns.
+        unsafe {
+            cmd.pre_exec(move || {
+                if libc::fcntl(fd, libc::F_SETFD, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    cmd
+}
+
 /// Spawns the Cloud Hypervisor process with the given config.
 /// Returns the child process. The API socket will be created by CH when ready.
-pub fn spawn_ch(config: &VmConfig) -> Result<Child, std::io::Error> {
+/// `events` is the write end of an event pipe, if any.
+pub fn spawn_ch(config: &VmConfig, events: Option<RawFd>) -> Result<Child, std::io::Error> {
     config
         .validate_option_values()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
@@ -40,9 +68,7 @@ pub fn spawn_ch(config: &VmConfig) -> Result<Child, std::io::Error> {
 
     rm_stale_api_socket(Path::new(config.api_socket()));
 
-    let args = config.to_args();
-
-    std::process::Command::new(&binary).args(&args).spawn()
+    ch_command(&binary, config.to_args(), events).spawn()
 }
 
 /// Spawn Cloud Hypervisor in restore-receive mode.
@@ -69,12 +95,13 @@ pub fn spawn_ch_restore(
     source_url: &str,
     auto_resume: bool,
     memory_restore_mode: Option<&str>,
+    events: Option<RawFd>,
 ) -> Result<Child, std::io::Error> {
     let binary =
         std::env::var("KUBESWIFT_CH_BINARY").unwrap_or_else(|_| DEFAULT_CH_BINARY.to_string());
     rm_stale_api_socket(api_socket);
     let args = restore_args(api_socket, source_url, auto_resume, memory_restore_mode);
-    std::process::Command::new(&binary).args(&args).spawn()
+    ch_command(&binary, args, events).spawn()
 }
 
 /// Spawn Cloud Hypervisor in receive-migration mode (live-migration Phase 2).
@@ -95,12 +122,12 @@ pub fn spawn_ch_restore(
 /// The receive listener is opened only when the action handler invokes
 /// [`crate::ApiClient::receive_migration`]; spawning CH alone does not
 /// bind the migration TCP listener.
-pub fn spawn_ch_receive(api_socket: &Path) -> Result<Child, std::io::Error> {
+pub fn spawn_ch_receive(api_socket: &Path, events: Option<RawFd>) -> Result<Child, std::io::Error> {
     let binary =
         std::env::var("KUBESWIFT_CH_BINARY").unwrap_or_else(|_| DEFAULT_CH_BINARY.to_string());
     rm_stale_api_socket(api_socket);
     let args = receive_args(api_socket);
-    std::process::Command::new(&binary).args(&args).spawn()
+    ch_command(&binary, args, events).spawn()
 }
 
 /// Build the argv for a receive-migration CH invocation. Split out from
@@ -319,6 +346,7 @@ mod tests {
             "file:///var/lib/kubeswift/snapshots/x/",
             false,
             None,
+            None,
         )
         .expect("spawn fake CH");
         let status = child.wait().expect("wait fake CH");
@@ -434,7 +462,8 @@ mod tests {
         unsafe {
             std::env::set_var("KUBESWIFT_CH_BINARY", &script_path);
         }
-        let mut child = spawn_ch_receive(Path::new("/run/foo/ch.sock")).expect("spawn fake CH");
+        let mut child =
+            spawn_ch_receive(Path::new("/run/foo/ch.sock"), None).expect("spawn fake CH");
         let status = child.wait().expect("wait fake CH");
         assert!(status.success());
         // SAFETY: same as above.
@@ -449,6 +478,58 @@ mod tests {
         let lines: Vec<&str> = logged.lines().collect();
         assert_eq!(lines.len(), 1, "argv had {:?}", lines);
         assert_eq!(lines[0], "--api-socket=/run/foo/ch.sock");
+    }
+
+    // The event pipe end to end: Cloud Hypervisor is told its descriptor,
+    // can write to it, and the stream ends when it exits -- no other copy of
+    // the write end is left open in this process.
+    #[test]
+    fn spawn_ch_receive_hands_the_event_pipe_to_the_child_only() {
+        let _guard = env_lock().lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let script_path = tmp.path().join("fake-ch.sh");
+        // The last two args are `--event-monitor fd=<n>`: write one event to
+        // fd n, as Cloud Hypervisor would.
+        let script = "#!/bin/sh\nfor a in \"$@\"; do last=\"$a\"; done\nfd=${last#fd=}\n\
+            printf '{\\n  \"timestamp\": {\\n    \"secs\": 1,\\n    \"nanos\": 0\\n  },\\n  \"source\": \"vm\",\\n  \"event\": \"migration-receive-ready\",\\n  \"properties\": null\\n}\\n\\n' >&$fd\nexit 0\n";
+        std::fs::write(&script_path, script).unwrap();
+        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).unwrap();
+
+        let prev = std::env::var("KUBESWIFT_CH_BINARY").ok();
+        unsafe {
+            std::env::set_var("KUBESWIFT_CH_BINARY", &script_path);
+        }
+        let (stream, write) = crate::EventStream::pipe().unwrap();
+        let cursor = stream.cursor();
+        let mut child = spawn_ch_receive(
+            &tmp.path().join("ch.sock"),
+            Some(crate::events::fd_arg(&write)),
+        )
+        .expect("spawn fake CH");
+        drop(write);
+        let status = child.wait().expect("wait fake CH");
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("KUBESWIFT_CH_BINARY", v),
+                None => std::env::remove_var("KUBESWIFT_CH_BINARY"),
+            }
+        }
+        assert!(status.success());
+        let mut cur = cursor;
+        let mut seen = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let b = stream.wait_since(cur, Duration::from_millis(200));
+            cur = b.cursor;
+            seen.extend(b.events.into_iter().map(|e| e.event));
+            if b.closed {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "stream never ended");
+        }
+        assert_eq!(seen, ["migration-receive-ready"]);
     }
 
     #[test]
@@ -483,7 +564,7 @@ mod tests {
         unsafe {
             std::env::set_var("KUBESWIFT_CH_BINARY", &script_path);
         }
-        let mut child = spawn_ch_receive(&socket_path).expect("spawn fake CH");
+        let mut child = spawn_ch_receive(&socket_path, None).expect("spawn fake CH");
         let _ = child.wait();
         unsafe {
             match prev {
