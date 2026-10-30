@@ -282,6 +282,9 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("swiftguest-controller"),
+		// Re-reads a guest uncached before creating its launcher, so a cache
+		// that predates a migration cutover never boots a second VM.
+		APIReader: mgr.GetAPIReader(),
 		// Phase 3c (Option B): when mTLS is enabled, migration-eligible
 		// launcher pods carry an idle source-side stunnel client sidecar so
 		// a later live migration has its TLS client already in the
