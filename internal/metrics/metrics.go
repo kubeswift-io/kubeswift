@@ -97,18 +97,23 @@ var (
 		[]string{"mode", "reason"},
 	)
 
-	// MigrationCancelTotal counts live-migration cancels by the path that
-	// carried them (source: Cloud Hypervisor's vm.cancel-migration on the
-	// source; destination: killing the receiving Cloud Hypervisor) and their
-	// outcome (cancelled; ignored, when the migration had committed and
-	// completed instead; fallback, when a source cancel was handed to the
+	// MigrationCancelTotal counts live migrations abandoned before their
+	// commit point, by what abandoned them (trigger: explicit
+	// spec.cancelRequested, deadline spec.timeout, deletion of the
+	// SwiftMigration, failure of any other kind), the mechanism that settled
+	// who owns the guest (path: source = Cloud Hypervisor's
+	// vm.cancel-migration on the source, destination = stopping the
+	// receiving Cloud Hypervisor, none = nothing had been sent), and the
+	// outcome (not-started, cancelled, committed -- the transfer completed
+	// first and the migration completed --, unresolved -- no answer, the
+	// fallback cleanup ran --, fallback -- a source cancel handed to the
 	// destination path).
 	MigrationCancelTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kubeswift_migration_cancel_total",
-			Help: "Live-migration cancels by path (source | destination) and outcome (cancelled | ignored | fallback)",
+			Help: "Live migrations abandoned before commit, by trigger (explicit | deadline | deletion | failure), path (source | destination | none) and outcome (not-started | cancelled | committed | unresolved | fallback)",
 		},
-		[]string{"path", "outcome"},
+		[]string{"trigger", "path", "outcome"},
 	)
 
 	// MigrationDowntimeSeconds observes status.observedDowntime for completed

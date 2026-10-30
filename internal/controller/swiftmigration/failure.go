@@ -191,6 +191,31 @@ func (r *SwiftMigrationReconciler) handleCancellation(
 		return ctrl.Result{}, fmt.Errorf("cancellation: determine commit point: %w", err)
 	}
 
+	// A live migration deleted before its commit point: settle the source's
+	// send before the destination goes (#893). The finalizer holds the
+	// SwiftMigration until then; the resolution is bounded
+	// (sourceCancelTimeout, then cancelAckTimeout). If the transfer wins,
+	// the next pass drives the cutover forward (finishCutoverBeforeDeletion).
+	var resolution abortResolution
+	if !committed && mig.Status.Mode == migrationv1alpha1.SwiftMigrationModeLive && !isTerminalPhase(mig.Status.Phase) {
+		resolution, err = r.resolveSourceOwnership(ctx, mig, abortDeletion)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("cancellation: %w", err)
+		}
+		switch resolution.outcome {
+		case abortPending:
+			return resolution.requeue, nil
+		case abortCommitted:
+			return ctrl.Result{Requeue: true}, nil
+		}
+		if err := r.deleteAbandonedDestination(ctx, mig, resolution); err != nil {
+			return ctrl.Result{}, fmt.Errorf("cleanup destination pod on cancellation: %w", err)
+		}
+		if err := r.clearLauncherCancel(ctx, mig); err != nil {
+			return ctrl.Result{}, fmt.Errorf("clear cancel action on the source launcher: %w", err)
+		}
+	}
+
 	if err := r.cleanupSourceGuest(ctx, mig, !committed); err != nil {
 		return ctrl.Result{}, fmt.Errorf("cleanup source guest on cancellation: %w", err)
 	}
@@ -222,6 +247,9 @@ func (r *SwiftMigrationReconciler) handleCancellation(
 
 	if err := r.removeFinalizer(ctx, mig); err != nil {
 		return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
+	}
+	if resolution.path != "" {
+		recordAbort(abortDeletion, resolution)
 	}
 	return ctrl.Result{}, nil
 }

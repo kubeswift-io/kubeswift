@@ -141,9 +141,13 @@ func TestCommitPoint_CancelBeforeSrcCompleteStillCancels(t *testing.T) {
 }
 
 // Deleting the SwiftMigration object mid-transfer, before the source has
-// reported complete, is an abort: the destination pod must be deleted so it
-// cannot complete the receive into an orphan (which, with runPolicy=Always,
-// would boot a second copy from the same disk — split-brain).
+// reported complete, is an abort: the destination pod must go so it cannot
+// complete the receive into an orphan (split-brain) -- but only once the
+// transfer is known to have stopped (#893). Deleting it while the source
+// still sends lets the transfer finish after the destination was told to
+// stop, and the source exits: no guest. This source cannot cancel (no
+// migration-cancel feature), so the destination cancel stops the receive
+// first.
 func TestCommitPoint_DeletePreCommitDeletesDestination(t *testing.T) {
 	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
 	mig.Finalizers = []string{FinalizerName}
@@ -158,12 +162,38 @@ func TestCommitPoint_DeletePreCommitDeletesDestination(t *testing.T) {
 	if err := r.Delete(ctx, mig); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(mig)}); err != nil {
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(mig)}
+	if _, err := r.Reconcile(ctx, req); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	var p corev1.Pod
+	if err := r.Get(ctx, client.ObjectKeyFromObject(dst), &p); err != nil {
+		t.Fatalf("destination deleted while the source may still be sending (err=%v)", err)
+	}
+	if !destinationCancelIssued(mig, &p) {
+		t.Fatalf("the receive was not asked to stop: %v", p.Annotations)
+	}
+	var m migrationv1alpha1.SwiftMigration
+	if err := r.Get(ctx, req.NamespacedName, &m); err != nil {
+		t.Fatalf("the SwiftMigration must be held while the transfer is resolved: %v", err)
+	}
+
+	// swiftletd stops the receive and acknowledges.
+	patch := client.MergeFrom(p.DeepCopy())
+	p.Annotations[AnnotationMigrationStatus] = MigrationStatusFailed
+	p.Annotations[AnnotationMigrationStatusID] = cancelID(mig)
+	p.Annotations[AnnotationMigrationStatusDtl] = MigrationStatusFailedCancelDt
+	if err := r.Patch(ctx, &p, patch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
 	if err := r.Get(ctx, client.ObjectKeyFromObject(dst), &p); !apierrors.IsNotFound(err) {
 		t.Errorf("pre-commit deletion left the destination pod alive; it will complete into an orphan (err=%v)", err)
+	}
+	if err := r.Get(ctx, req.NamespacedName, &m); !apierrors.IsNotFound(err) {
+		t.Errorf("deletion did not complete after the transfer was resolved (err=%v)", err)
 	}
 }
 
