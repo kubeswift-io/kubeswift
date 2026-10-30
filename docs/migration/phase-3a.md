@@ -189,6 +189,28 @@ dispatch change the refusal did not exist, and a cancel written
 mid-transfer was processed only after the receive returned, so a
 migration that completed anyway had its destination killed.
 
+### Cancelling on the source (Cloud Hypervisor v54+)
+
+A guest whose launcher advertises `migration-cancel` in
+`kubeswift.io/launcher-features` (launchers started on a release with
+Cloud Hypervisor v54 migration events) is cancelled on the source
+instead. The controller writes a `cancel-send` action on the source
+pod; swiftletd calls Cloud Hypervisor's `vm.cancel-migration` and the
+source's send then reports how the migration ended:
+
+- `failed` (`cancelled: ...`): Cloud Hypervisor stopped the transfer and
+  the source guest is running. The destination is deleted and the
+  migration is Cancelled, typically within a second.
+- `complete`: the transfer had already passed its last check. The
+  migration committed, and completes with `CancelIgnored`.
+
+Nothing is deleted until one of those is reported, so the source stays
+the guest while the outcome is unknown. If the source cannot deliver the
+cancel, or reports nothing within 60s, the controller falls back to the
+destination cancel above (Event `CancelFallback`). Older launchers,
+including every Cloud Hypervisor v53 guest, keep the destination cancel;
+a destination always runs its source's launcher image.
+
 To cancel:
 
 ```sh

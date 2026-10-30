@@ -35,6 +35,7 @@ Migration metrics:
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `kubeswift_migration_total` | counter | `mode` (live/offline), `result` (completed/failed/cancelled) | SwiftMigrations that reached a terminal phase. Recorded once per migration. |
+| `kubeswift_migration_cancel_total` | counter | `path` (source/destination), `outcome` (cancelled/ignored/fallback) | Live-migration cancels: stopped on the source by Cloud Hypervisor (v54+ launchers) or by killing the destination; `ignored` when the migration had committed and completed; `fallback` when a source cancel was handed to the destination path. |
 | `kubeswift_migration_downtime_seconds` | histogram | `mode` | `status.observedDowntime` for **completed** migrations (sub-second live; tens of seconds offline). |
 
 (These join the existing `kubeswift_guest_running_total`,
