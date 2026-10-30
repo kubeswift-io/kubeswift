@@ -158,7 +158,7 @@ where
         "spawning cloud-hypervisor (receive) api_socket={}",
         api_socket.display()
     );
-    let events = crate::migevents::pipe_for_spawn();
+    let events = crate::migevents::pipe_for_spawn(runtime_dir.root());
     let mut child = spawn_ch_receive(&api_socket, events.as_ref().map(|w| w.as_raw_fd()))
         .map_err(|e| format!("failed to spawn cloud-hypervisor (receive): {}", e))?;
     // Only the child may hold the write end, or the stream never ends.
@@ -259,7 +259,7 @@ where
         api_socket.display(),
         source_url
     );
-    let events = crate::migevents::pipe_for_spawn();
+    let events = crate::migevents::pipe_for_spawn(runtime_dir.root());
     let mut child = spawn_ch_restore(
         &api_socket,
         &source_url,
@@ -576,7 +576,7 @@ where
 
     // Cloud Hypervisor's events (migevents.rs); the write end is the
     // child's alone once it is spawned.
-    let events = crate::migevents::pipe_for_spawn();
+    let events = crate::migevents::pipe_for_spawn(runtime_dir.root());
     let mut child = spawn_ch(&config, events.as_ref().map(|w| w.as_raw_fd()))
         .map_err(|e| format!("failed to spawn cloud-hypervisor: {}", e))?;
     drop(events);

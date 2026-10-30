@@ -34,11 +34,25 @@ use swift_ch_client::{ApiError, EventStream, SendEnd, SendMigrationOutcome, Send
 /// This launcher's event stream: its Cloud Hypervisor's.
 static STREAM: OnceLock<EventStream> = OnceLock::new();
 
+/// Fault injection for validating the no-event fallbacks on a live
+/// launcher: while this file exists in the launcher's runtime directory, a
+/// send's wait ignores every Cloud Hypervisor event, as if all were lost.
+/// Only someone with root on the node can create it there, and they can do
+/// far more to a launcher already.
+pub const FAULT_DROP_EVENTS: &str = ".fault-drop-ch-events";
+static FAULT_MARKER: OnceLock<std::path::PathBuf> = OnceLock::new();
+
+/// Whether events are being dropped (FAULT_DROP_EVENTS).
+fn events_dropped() -> bool {
+    FAULT_MARKER.get().is_some_and(|p| p.exists())
+}
+
 /// Create the event pipe for the Cloud Hypervisor about to be spawned and
 /// return the end to give it. None when the pipe could not be made, or one
 /// already exists (a launcher runs one Cloud Hypervisor): the launch goes on
 /// without events.
-pub fn pipe_for_spawn() -> Option<OwnedFd> {
+pub fn pipe_for_spawn(runtime_dir: &std::path::Path) -> Option<OwnedFd> {
+    let _ = FAULT_MARKER.set(runtime_dir.join(FAULT_DROP_EVENTS));
     if STREAM.get().is_some() {
         return None;
     }
@@ -304,8 +318,15 @@ pub fn wait_send(
         info_calls,
     };
     loop {
-        let batch = stream.wait_since(cur, timing.event_wait);
+        let mut batch = stream.wait_since(cur, timing.event_wait);
         cur = batch.cursor;
+        if events_dropped() {
+            log::debug!(
+                "migration_send_events_dropped count={} (fault injection)",
+                batch.events.len()
+            );
+            batch.events.clear();
+        }
         for e in &batch.events {
             tracker.observe(e);
         }
@@ -325,12 +346,18 @@ pub fn wait_send(
         }
         if end.is_none()
             && !degraded
-            && (batch.gap || (!tracker.started() && now >= accepted + timing.starting_grace))
+            // A stream that ended before the send did lost its last events
+            // or broke: the source exiting still means completion (checked
+            // below), but a failure now shows only through the watch.
+            && (batch.gap
+                || batch.closed
+                || (!tracker.started() && now >= accepted + timing.starting_grace))
         {
             degraded = true;
             log::warn!(
-                "migration_send_events_unavailable gap={} started={} (using the connection watch)",
+                "migration_send_events_unavailable gap={} closed={} started={} (using the connection watch)",
                 batch.gap,
+                batch.closed,
                 tracker.started()
             );
         }
@@ -597,6 +624,27 @@ mod tests {
         let w = wait_send(&s, c, far(), &fast(), gone, no_watch, || false);
         assert_eq!(w.outcome, SendMigrationOutcome::Completed);
         assert_eq!(w.evidence, Evidence::SourceExit);
+    }
+
+    // The stream ended before the send did while the source still runs (a
+    // broken pipe): the connection watch takes over, so a failed transfer
+    // ends at the watch, not at the deadline.
+    #[test]
+    fn stream_closed_mid_send_falls_back_to_the_watch() {
+        let s = EventStream::detached();
+        let c = s.cursor();
+        s.record([ev("migration-starting"), ev("migration-started")], 0);
+        s.close();
+        let w = wait_send(
+            &s,
+            c,
+            far(),
+            &fast(),
+            running,
+            |_, run| run.then(|| "the migration connection closed".to_string()),
+            || false,
+        );
+        assert_eq!(w.evidence, Evidence::ConnectionWatch);
     }
 
     // A failure event then exit is a crash, never a completion.
