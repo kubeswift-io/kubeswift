@@ -1421,7 +1421,8 @@ async fn dispatch_migration_send(
     // historic (blocking) assumption — no worse than the pre-v53 behaviour,
     // and the non-blocking path must not be taken on a v52 CH, whose exit
     // ordering it would break.
-    let non_blocking = match probe_ch_major(&client) {
+    let ch_major = probe_ch_major(&client);
+    let non_blocking = match ch_major {
         Some(major) => major >= 53,
         None => {
             log::warn!(
@@ -1506,6 +1507,15 @@ async fn dispatch_migration_send(
                     &crate::migevents::Timing::default(),
                     || info.vm_info(),
                     &mut watch_sample,
+                    // Cloud Hypervisor >= v54 can stop the migration, so a
+                    // deadline ends it rather than abandoning it running.
+                    || {
+                        ch_major.is_some_and(|m| m >= 54)
+                            && matches!(
+                                crate::migevents::cancel_send(|| info.cancel_migration()),
+                                Ok(crate::migevents::CancelResult::Requested)
+                            )
+                    },
                 );
                 log::info!(
                     "migration_send_wait id={} evidence={} iterations={} vm_info_calls={}",
