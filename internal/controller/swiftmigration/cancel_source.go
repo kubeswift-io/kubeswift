@@ -152,12 +152,17 @@ func (r *SwiftMigrationReconciler) cancelOnSource(
 		return false, ctrl.Result{}, nil
 	}
 	cid := cancelSendID(mig)
-	if !sourceCancelIssued(mig, &src) {
-		// A cancel-send already answered and taken off the source (the
-		// fallback clears the source's actions): do not issue it again.
-		if src.Annotations[AnnotationMigrationCancelResultID] == cid {
-			return false, ctrl.Result{}, nil
-		}
+	answeredBefore := src.Annotations[AnnotationMigrationCancelResultID] == cid
+	if answeredBefore && !sourceCancelIssued(mig, &src) &&
+		src.Annotations[AnnotationMigrationCancelResult] == cancelResultFailed {
+		// The source could not cancel and the destination path took over.
+		return false, ctrl.Result{}, nil
+	}
+	// A cancel-send that was answered stays this path's even once its
+	// action is cleared: a pass from a stale copy of the migration (the
+	// cache not yet showing Cancelled) finishes it again, idempotently,
+	// instead of starting the destination cancel.
+	if !sourceCancelIssued(mig, &src) && !answeredBefore {
 		if !launcherHasFeature(&src, LauncherFeatureMigrationCancel) || src.DeletionTimestamp != nil {
 			return false, ctrl.Result{}, nil
 		}
@@ -203,7 +208,8 @@ func (r *SwiftMigrationReconciler) cancelOnSource(
 		return true, ctrl.Result{Requeue: true}, nil
 	case sendEnded:
 		return r.finishSourceCancel(ctx, mig, &src, &dst, dstExists,
-			fmt.Sprintf("cancelled on the source: %s", normalizeStatusDetail(src.Annotations[AnnotationMigrationStatusDtl])))
+			fmt.Sprintf("cancelled on the source (%s)",
+				strings.TrimPrefix(normalizeStatusDetail(src.Annotations[AnnotationMigrationStatusDtl]), "cancelled: ")))
 	case answered && cancelResult == cancelResultFailed:
 		return r.fallBackToDestinationCancel(ctx, mig, &src,
 			fmt.Sprintf("the source could not cancel: %s", src.Annotations[AnnotationMigrationCancelResultDetail]))
@@ -246,13 +252,19 @@ func (r *SwiftMigrationReconciler) finishSourceCancel(
 	dstExists bool,
 	detail string,
 ) (bool, ctrl.Result, error) {
+	// Finished by an earlier pass (it clears the action last): this pass
+	// works from a stale copy. Only the optimistic finalize below runs, and
+	// it conflicts with what that pass wrote.
+	again := !sourceCancelIssued(mig, src)
 	if dstExists && dstReportedRunning(mig, dst) {
 		log.FromContext(ctx).Info("migration cancel too late", "path", cancelPathSource,
 			"evidence", "destination-status-running", "migration", mig.Name)
 		return true, ctrl.Result{Requeue: true}, nil
 	}
-	_ = r.persistPhaseDetail(ctx, mig, phaseDetailCancelDeleting)
-	if dstExists {
+	if !again {
+		_ = r.persistPhaseDetail(ctx, mig, phaseDetailCancelDeleting)
+	}
+	if dstExists && !again {
 		if err := r.Delete(ctx, dst); err != nil && !apierrors.IsNotFound(err) {
 			return true, ctrl.Result{}, fmt.Errorf("delete destination pod %q: %w", dst.Name, err)
 		}
@@ -263,7 +275,7 @@ func (r *SwiftMigrationReconciler) finishSourceCancel(
 	log.FromContext(ctx).Info("migration cancelled", "path", cancelPathSource,
 		"evidence", "source-status", "migration", mig.Name)
 	res, err := r.finalizeCancelled(ctx, mig, detail+"; destination pod deleted")
-	if err == nil && !res.Requeue {
+	if err == nil && !res.Requeue && !again {
 		metrics.MigrationCancelTotal.WithLabelValues(cancelPathSource, cancelOutcomeCancelled).Inc()
 	}
 	return true, res, err

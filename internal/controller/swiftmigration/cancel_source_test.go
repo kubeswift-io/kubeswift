@@ -141,7 +141,7 @@ func TestSourceCancel_SourceReportsFailed_Cancels(t *testing.T) {
 		m.Status.FailureReason != migrationv1alpha1.FailureReasonCancelled {
 		t.Fatalf("phase=%q reason=%q", m.Status.Phase, m.Status.FailureReason)
 	}
-	if !strings.Contains(m.Status.FailureMessage, "cancelled on the source") {
+	if !strings.Contains(m.Status.FailureMessage, "cancelled on the source (Cloud Hypervisor stopped") {
 		t.Errorf("message: %q", m.Status.FailureMessage)
 	}
 	if _, ok := getPod(t, c, "guest-mig-abcdef"); ok {
@@ -156,6 +156,41 @@ func TestSourceCancel_SourceReportsFailed_Cancels(t *testing.T) {
 	}
 	if got := cancelCount(cancelPathSource, cancelOutcomeCancelled) - before; got != 1 {
 		t.Errorf("cancel metric +%v, want +1", got)
+	}
+}
+
+// A pass working from a stale copy of the migration (cache not yet showing
+// Cancelled) after the source cancel finished: it must not start the
+// destination cancel on the terminating destination (seen on the lab).
+func TestSourceCancel_StalePassAfterFinishDoesNotStartTheDestinationCancel(t *testing.T) {
+	ann := sendingAnn(nil0(), 3*time.Second)
+	ann[AnnotationMigrationStatus] = MigrationStatusFailed
+	ann[AnnotationMigrationStatusDtl] = "cancelled: stopped"
+	ann[AnnotationMigrationCancelResult] = "requested"
+	ann[AnnotationMigrationCancelResultID] = "m1:cancel-send:0"
+	r, c, mig, _ := sourceCancelFixture(t, capableFeatures, ann)
+	stale := mig.DeepCopy()
+	if handled, _, err := r.honorCancel(context.Background(), mig); !handled || err != nil {
+		t.Fatalf("handled=%v err=%v", handled, err)
+	}
+	// The destination is still terminating in the cache.
+	dst := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "guest-mig-abcdef", Namespace: "default"}}
+	if err := c.Create(context.Background(), dst); err != nil {
+		t.Fatal(err)
+	}
+	before := cancelCount(cancelPathSource, cancelOutcomeCancelled)
+	if _, _, err := r.honorCancel(context.Background(), stale); err != nil {
+		t.Fatalf("stale pass: %v", err)
+	}
+	got, _ := getPod(t, c, "guest-mig-abcdef")
+	if got != nil && got.Annotations[AnnotationMigrationAction] == MigrationActionCancel {
+		t.Error("stale pass started the destination cancel")
+	}
+	if p := getMig(t, c, mig).Status.Phase; p != migrationv1alpha1.SwiftMigrationPhaseCancelled {
+		t.Errorf("phase %q", p)
+	}
+	if d := cancelCount(cancelPathSource, cancelOutcomeCancelled) - before; d != 0 {
+		t.Errorf("counted twice: +%v", d)
 	}
 }
 
