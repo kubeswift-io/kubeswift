@@ -106,6 +106,10 @@ type SwiftGuestReconciler struct {
 	// such as stopping it for runPolicy Stopped. Optional.
 	Recorder record.EventRecorder
 
+	// APIReader reads the guest uncached before a launcher is created (see
+	// launcherRefStale). Optional: without it that check is skipped.
+	APIReader client.Reader
+
 	// stopDeferred holds, per guest (namespace/name), the wait a runPolicy
 	// Stopped was last reported to be in (see reconcileStop), so it is
 	// reported once. An entry goes when the wait ends or the guest does.
@@ -768,6 +772,18 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 		// pass takes the stop path and records the guest Stopped.
 		if rg.GetLifecycle() == "stop" {
 			return ctrl.Result{Requeue: true}, nil
+		}
+		// The cached guest may predate a live migration's cutover: cutover
+		// moves status.podRef to the destination, then deletes the source.
+		// A reconcile woken by that deletion but reading the guest from
+		// before the move finds no launcher under the old name and would
+		// boot a second one -- two VMs on one disk. Never create from a
+		// guest whose launcher reference is no longer current.
+		if stale, err := r.launcherRefStale(ctx, &guest); err != nil {
+			return ctrl.Result{}, err
+		} else if stale {
+			logger.Info("guest cache is behind its launcher reference; not creating a launcher", "cachedPodRef", canonicalPodName(&guest))
+			return ctrl.Result{RequeueAfter: time.Second}, nil
 		}
 		// Self-heal a stale migration PodRef before creating the pod.
 		// If status.PodRef points at a <guest>-mig-<uid> pod from a prior

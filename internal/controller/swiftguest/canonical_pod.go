@@ -86,7 +86,26 @@ func canonicalPodName(guest *swiftv1alpha1.SwiftGuest) string {
 // pod exists while status.PodRef points at it, so the canonical lookup
 // finds it and takes the update branch, never the create branch.
 func staleMigrationPodRef(guest *swiftv1alpha1.SwiftGuest) bool {
+	// Only once launcherRefStale has confirmed, uncached, that status.PodRef
+	// is the guest's current reference: on a guest read from a cache that
+	// predates a cutover, a missing PodRef pod is the cutover's deleted
+	// source, not a lost launcher.
 	return guest.Status.PodRef != nil &&
 		guest.Status.PodRef.Name != "" &&
 		guest.Status.PodRef.Name != guest.Name
+}
+
+// launcherRefStale reports whether the guest's launcher reference
+// (canonicalPodName) has moved on the API server since the copy being
+// reconciled was cached. Reads uncached; false when there is no APIReader or
+// the guest is gone.
+func (r *SwiftGuestReconciler) launcherRefStale(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) (bool, error) {
+	if r.APIReader == nil {
+		return false, nil
+	}
+	var live swiftv1alpha1.SwiftGuest
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(guest), &live); err != nil {
+		return false, client.IgnoreNotFound(err)
+	}
+	return canonicalPodName(&live) != canonicalPodName(guest), nil
 }
