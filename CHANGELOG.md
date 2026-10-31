@@ -6,6 +6,31 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.22.0-rc.1] — 2026-10-31
+
+Release candidate for v0.22.0: live migration uses Cloud Hypervisor v54's migration events and its migration cancel (#895), and every way a live migration can be given up before it commits now stops the transfer on the source before the destination is removed (#893, #896). Before, a migration that hit `spec.timeout`, was deleted, or failed while Cloud Hypervisor was still sending could have its destination deleted while the transfer went on and then finished: the guest ended up running nowhere.
+
+### Upgrade
+
+- **No CRD, chart value or template change.** Applying `crds/` is not needed.
+- **Running guests keep their launcher**, and with it the behaviour they had: a guest started on v0.21.x (Cloud Hypervisor v54, no `migration-cancel` launcher feature) or on a v53 launcher is still cancelled through its destination, as before. The new source-side cancel applies to guests started (or migrated) after the upgrade.
+- **A SwiftMigration that is deleted, times out or fails during a transfer can now take up to about 90 s to finish**, while the source answers the cancel (60 s) or, failing that, the destination does (30 s). Its `status.phaseDetail` says what it is waiting for. The finalizer is always released afterwards; do not remove it by hand.
+- `kubeswift_migration_cancel_total` gains a `trigger` label (`explicit`, `deadline`, `deletion`, `failure`) next to `path` and `outcome`. Queries that sum over the metric are unaffected.
+
+### Fixed
+
+- **A live migration given up before its commit point could leave no running guest** (#893). `spec.timeout`, deleting the SwiftMigration, and any other failure before cutover deleted the destination at once, while the source could still be sending; when that send then completed, the source stopped and the guest ran on no node. Every such path now goes through one step that cancels the send on the source (or, on older launchers, the receive on the destination) and waits for the answer: if the send ended without completing, the source keeps the guest and the destination is removed; if it already committed, the migration completes (Event `AbortIgnored`, or `CancelIgnored` for an explicit cancel) instead of being turned into a failure. If neither side answers, the previous behaviour applies and the Event `TransferOutcomeUnknown` says so. `spec.timeout` keeps its meaning (from the migration's start); after the send has started, reaching it requests the cancel rather than failing at once.
+- **A send that reached its 600 s launcher deadline was reported failed while Cloud Hypervisor kept migrating.** On a launcher with Cloud Hypervisor v54 it is now cancelled in Cloud Hypervisor and reported as it actually ended.
+
+### Changed
+
+- **Migration events.** Each Cloud Hypervisor process reports its migration events over a pipe only it holds (`--event-monitor fd=`); a send ends on its own finished, cancelled or failed event. `vm.info` polling during a send drops from every 200 ms to every 2 s and `/proc/net/tcp` is no longer read. The previous checks stay as fallbacks: the source exiting without a failure event still counts as success, and the connection watch takes over when no events arrive or the stream ends early.
+- **Explicit cancel on the source.** `spec.cancelRequested` on a launcher that advertises `migration-cancel` calls Cloud Hypervisor's `vm.cancel-migration` through a new `cancel-send` launcher action; the controller acts only on what the source then reports. Cancel request to Cancelled went from about 3.5 s to about 1 s on the lab. Launchers advertise `migration-events` and `migration-cancel` in `kubeswift.io/launcher-features`.
+
+### Docs
+
+- `docs/migration/phase-3a.md`: "Timeouts, deletion and failures stop the transfer first"; `docs/migration/observability.md`: the cancel metric.
+
 ## [v0.21.3] — 2026-10-31
 
 A patch release for one live-migration defect (#892, #894). After a cutover, the guest controller could create a second launcher for the migrated guest, booting a second VM from the same disk while the migrated guest ran on the destination. Upgrade promptly if you live-migrate guests: two VMs writing one disk can corrupt it. Only the controller changed.
