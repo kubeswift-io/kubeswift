@@ -6,14 +6,15 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
-## [v0.22.0-rc.1] — 2026-10-31
+## [v0.22.0] — 2026-10-31
 
-Release candidate for v0.22.0: live migration uses Cloud Hypervisor v54's migration events and its migration cancel (#895), and every way a live migration can be given up before it commits now stops the transfer on the source before the destination is removed (#893, #896). Before, a migration that hit `spec.timeout`, was deleted, or failed while Cloud Hypervisor was still sending could have its destination deleted while the transfer went on and then finished: the guest ended up running nowhere.
+Live migration uses Cloud Hypervisor v54's migration events and its migration cancel (#895), and every way a live migration can be given up before it commits now stops the transfer on the source before the destination is removed (#893, #896). Before, a migration that hit `spec.timeout`, was deleted, or failed while Cloud Hypervisor was still sending could have its destination deleted while the transfer went on and then finished: the guest ended up running nowhere.
 
 ### Upgrade
 
 - **No CRD, chart value or template change.** Applying `crds/` is not needed.
-- **Running guests keep their launcher**, and with it the behaviour they had: a guest started on v0.21.x (Cloud Hypervisor v54, no `migration-cancel` launcher feature) or on a v53 launcher is still cancelled through its destination, as before. The new source-side cancel applies to guests started (or migrated) after the upgrade.
+- A minor release: a GitOps source pinned to `"0.21.x"` does not take it. Move the range to `"0.22.x"`.
+- **Running guests keep their launcher**, and with it the behaviour they had: a guest started on v0.21.x (Cloud Hypervisor v54, no `migration-cancel` launcher feature) or on a v53 launcher is still cancelled through its destination, as before. The new source-side cancel applies to guests started after the upgrade; a live migration keeps the source's launcher image, so migrating an older guest does not move it to the new launcher (stop and start it to do so).
 - **A SwiftMigration that is deleted, times out or fails during a transfer can now take up to about 90 s to finish**, while the source answers the cancel (60 s) or, failing that, the destination does (30 s). Its `status.phaseDetail` says what it is waiting for. The finalizer is always released afterwards; do not remove it by hand.
 - `kubeswift_migration_cancel_total` gains a `trigger` label (`explicit`, `deadline`, `deletion`, `failure`) next to `path` and `outcome`. Queries that sum over the metric are unaffected.
 
