@@ -211,6 +211,33 @@ destination cancel above (Event `CancelFallback`). Older launchers,
 including every Cloud Hypervisor v53 guest, keep the destination cancel;
 a destination always runs its source's launcher image.
 
+### Timeouts, deletion and failures stop the transfer first
+
+The same applies to every other way a live migration is given up on
+before its commit point: `spec.timeout` expiring, the SwiftMigration
+being deleted, or a failure. Once the source has started sending, the
+controller first stops the transfer (on the source, or through the
+destination cancel for older launchers) and only then deletes the
+destination. Meanwhile:
+
+- an expired `spec.timeout` shows as `phaseDetail` "spec.timeout expired;
+  waiting for the transfer to stop before cleaning up", and the
+  migration then fails with `failureReason: Timeout`;
+- a deleted SwiftMigration keeps its finalizer until the transfer is
+  stopped (at most about 90s: 60s for the source, 30s for the
+  destination), then goes.
+
+The transfer can still win: if it completes before the cancel takes
+effect, the migration completes on the destination (Event
+`AbortIgnored`; `CancelIgnored` for an explicit cancel) instead of
+failing. `spec.timeout` itself is unchanged: it still counts from the
+migration's start and is still only a runaway backstop.
+
+On Cloud Hypervisor v53 guests the destination cancel cannot see the
+moment between the source finishing its send and the destination
+resuming the guest; an abort landing exactly then can still lose the
+guest. Guests started on a v54 launcher do not have this window.
+
 To cancel:
 
 ```sh

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -84,14 +83,14 @@ const (
 // launcher that stopped answering.
 const sourceCancelTimeout = 60 * time.Second
 
-// Cancel paths and outcomes for kubeswift_migration_cancel_total.
+// Cancel paths for kubeswift_migration_cancel_total (plus cancelPathNone).
 const (
 	cancelPathSource      = "source"
 	cancelPathDestination = "destination"
 
-	cancelOutcomeCancelled = "cancelled"
-	cancelOutcomeIgnored   = "ignored"
-	cancelOutcomeFallback  = "fallback"
+	// cancelOutcomeFallback counts a source cancel handed to the destination
+	// cancel; the other outcomes are abortOutcome's.
+	cancelOutcomeFallback = "fallback"
 )
 
 // cancelSendID is the source cancel's action id, one per migration.
@@ -117,105 +116,70 @@ func sourceCancelIssued(mig *migrationv1alpha1.SwiftMigration, src *corev1.Pod) 
 		src.Annotations[AnnotationMigrationActionID] == cancelSendID(mig)
 }
 
-// cancelOnSource drives a pre-commit cancel through the source when its
-// launcher can (see the file comment). handled=false hands the cancel to the
-// destination-kill path: the source cannot cancel, or its cancel failed or
-// went unanswered.
-func (r *SwiftMigrationReconciler) cancelOnSource(
+// resolveOnSource is resolveSourceOwnership's source step (see the file
+// comment). fallback=true hands the abort to the destination cancel: the
+// source could not cancel, or did not report within sourceCancelTimeout.
+func (r *SwiftMigrationReconciler) resolveOnSource(
 	ctx context.Context,
 	mig *migrationv1alpha1.SwiftMigration,
-	guest *swiftv1alpha1.SwiftGuest,
-) (handled bool, result ctrl.Result, err error) {
-	logger := log.FromContext(ctx).WithValues("migration", mig.Name)
-	var src corev1.Pod
-	if err := r.Get(ctx, client.ObjectKey{Name: srcPodLookupName(mig, guest), Namespace: mig.Namespace}, &src); err != nil {
-		if apierrors.IsNotFound(err) {
-			return false, ctrl.Result{}, nil
-		}
-		return true, ctrl.Result{}, fmt.Errorf("get source pod: %w", err)
-	}
-	dstName, err := dstPodName(mig, guest.Name)
-	if err != nil {
-		return false, ctrl.Result{}, nil
-	}
-	var dst corev1.Pod
-	dstErr := r.Get(ctx, client.ObjectKey{Name: dstName, Namespace: mig.Namespace}, &dst)
-	if dstErr != nil && !apierrors.IsNotFound(dstErr) {
-		return true, ctrl.Result{}, fmt.Errorf("get destination pod: %w", dstErr)
-	}
-	dstExists := dstErr == nil
-
-	// Once the destination-kill cancel has started, it finishes the cancel
-	// (it was the fallback, or this migration predates the source cancel).
-	if dstExists && dst.Annotations[AnnotationMigrationAction] == MigrationActionCancel &&
-		dst.Annotations[AnnotationMigrationActionID] == cancelID(mig) {
-		return false, ctrl.Result{}, nil
-	}
+	src, dst *corev1.Pod,
+	trigger abortTrigger,
+) (res abortResolution, fallback bool, err error) {
+	logger := log.FromContext(ctx).WithValues("migration", mig.Name, "trigger", trigger)
 	cid := cancelSendID(mig)
-	answeredBefore := src.Annotations[AnnotationMigrationCancelResultID] == cid
-	if answeredBefore && !sourceCancelIssued(mig, &src) &&
-		src.Annotations[AnnotationMigrationCancelResult] == cancelResultFailed {
-		// The source could not cancel and the destination path took over.
-		return false, ctrl.Result{}, nil
-	}
-	// A cancel-send that was answered stays this path's even once its
-	// action is cleared: a pass from a stale copy of the migration (the
-	// cache not yet showing Cancelled) finishes it again, idempotently,
-	// instead of starting the destination cancel.
-	if !sourceCancelIssued(mig, &src) && !answeredBefore {
-		if !launcherHasFeature(&src, LauncherFeatureMigrationCancel) || src.DeletionTimestamp != nil {
-			return false, ctrl.Result{}, nil
-		}
+	pending := abortResolution{outcome: abortPending, path: cancelPathSource, detail: phaseDetailCancelSourceWaiting,
+		requeue: ctrl.Result{RequeueAfter: cancelPollInterval}}
+
+	// An answered cancel-send stays this path's even once its action is
+	// cleared: a pass from a stale copy of the migration finishes it again,
+	// idempotently, instead of starting the destination cancel.
+	if !sourceCancelIssued(mig, src) && src.Annotations[AnnotationMigrationCancelResultID] != cid {
 		patch := client.MergeFrom(src.DeepCopy())
 		if src.Annotations == nil {
 			src.Annotations = map[string]string{}
 		}
 		// Replaces this migration's send action, if swiftletd has not taken
 		// it up yet: it then never starts (the job clearSourceSend does on
-		// the destination-kill path).
+		// the destination path).
 		src.Annotations[AnnotationMigrationAction] = MigrationActionCancelSend
 		src.Annotations[AnnotationMigrationActionID] = cid
 		delete(src.Annotations, AnnotationMigrationActionArgs)
 		src.Annotations[AnnotationMigrationCancelIssuedAt] = time.Now().UTC().Format(time.RFC3339)
-		if perr := r.Patch(ctx, &src, patch); perr != nil {
-			return true, ctrl.Result{}, fmt.Errorf("write cancel-send on source pod %q: %w", src.Name, perr)
+		if perr := r.Patch(ctx, src, patch); perr != nil {
+			return abortResolution{}, false, fmt.Errorf("write cancel-send on source pod %q: %w", src.Name, perr)
 		}
-		logger.Info("migration cancel issued", "path", cancelPathSource, "pod", src.Name, "via", "source-cancel")
-		_ = r.persistPhaseDetail(ctx, mig, phaseDetailCancelSourceIssuing)
+		logger.Info("migration cancel issued", "path", cancelPathSource, "pod", src.Name)
 		if r.Recorder != nil {
 			r.Recorder.Eventf(mig, corev1.EventTypeNormal, "CancelIssued",
-				"asked the source launcher %q to cancel the transfer (id=%s); the source guest keeps running",
-				src.Name, cid)
+				"%s: asked the source launcher %q to cancel the transfer (id=%s); the source guest keeps running",
+				triggerText(trigger), src.Name, cid)
 		}
-		return true, ctrl.Result{RequeueAfter: cancelPollInterval}, nil
+		return pending, false, nil
 	}
 
 	sid := sendActionID(mig)
 	status := src.Annotations[AnnotationMigrationStatus]
 	statusID := src.Annotations[AnnotationMigrationStatusID]
-	resultID := src.Annotations[AnnotationMigrationCancelResultID]
+	answered := src.Annotations[AnnotationMigrationCancelResultID] == cid
 	cancelResult := src.Annotations[AnnotationMigrationCancelResult]
-
 	sending := status == migrationStatusSending && statusID == sid
 	sendEnded := statusID == sid && (status == MigrationStatusFailed || status == MigrationStatusRejected)
-	answered := resultID == cid
 
 	switch {
-	case srcReportedComplete(mig, &src):
-		// The send finished before the cancel took: committed. honorCancel
-		// sees it on the next pass and lets the migration complete.
-		logger.Info("migration cancel too late", "path", cancelPathSource, "evidence", "source-status-complete")
-		return true, ctrl.Result{Requeue: true}, nil
+	case srcReportedComplete(mig, src) || dstReportedRunning(mig, dst):
+		// The transfer finished before the cancel took.
+		logger.Info("migration cancel too late", "path", cancelPathSource)
+		return abortResolution{outcome: abortCommitted, path: cancelPathSource,
+			detail: "the transfer completed before the cancel took effect"}, false, nil
 	case sendEnded:
-		return r.finishSourceCancel(ctx, mig, &src, &dst, dstExists,
-			fmt.Sprintf("cancelled on the source (%s)",
-				strings.TrimPrefix(normalizeStatusDetail(src.Annotations[AnnotationMigrationStatusDtl]), "cancelled: ")))
+		return abortResolution{outcome: abortSourceRetained, path: cancelPathSource,
+			detail: strings.TrimPrefix(normalizeStatusDetail(src.Annotations[AnnotationMigrationStatusDtl]), "cancelled: ")}, false, nil
 	case answered && cancelResult == cancelResultFailed:
-		return r.fallBackToDestinationCancel(ctx, mig, &src,
+		return r.fallBackToDestinationCancel(ctx, mig, src, trigger,
 			fmt.Sprintf("the source could not cancel: %s", src.Annotations[AnnotationMigrationCancelResultDetail]))
 	case answered && cancelResult == cancelResultNotActive && !sending:
-		return r.finishSourceCancel(ctx, mig, &src, &dst, dstExists,
-			"cancelled before the source sent anything")
+		return abortResolution{outcome: abortSourceRetained, path: cancelPathSource,
+			detail: "cancelled before the source sent anything"}, false, nil
 	}
 
 	issuedAt, perr := time.Parse(time.RFC3339, src.Annotations[AnnotationMigrationCancelIssuedAt])
@@ -224,90 +188,55 @@ func (r *SwiftMigrationReconciler) cancelOnSource(
 		// budget rather than fall back at once.
 		patch := client.MergeFrom(src.DeepCopy())
 		src.Annotations[AnnotationMigrationCancelIssuedAt] = time.Now().UTC().Format(time.RFC3339)
-		if err := r.Patch(ctx, &src, patch); err != nil {
-			return true, ctrl.Result{}, fmt.Errorf("stamp cancel time on source pod %q: %w", src.Name, err)
+		if err := r.Patch(ctx, src, patch); err != nil {
+			return abortResolution{}, false, fmt.Errorf("stamp cancel time on source pod %q: %w", src.Name, err)
 		}
-		return true, ctrl.Result{RequeueAfter: cancelPollInterval}, nil
+		return pending, false, nil
 	}
 	if time.Since(issuedAt) > sourceCancelTimeout {
-		return r.fallBackToDestinationCancel(ctx, mig, &src,
+		return r.fallBackToDestinationCancel(ctx, mig, src, trigger,
 			fmt.Sprintf("the source did not report within %s", sourceCancelTimeout))
 	}
-	_ = r.persistPhaseDetail(ctx, mig, phaseDetailCancelSourceWaiting)
-	return true, ctrl.Result{RequeueAfter: cancelPollInterval}, nil
+	return pending, false, nil
 }
 
 const (
-	phaseDetailCancelSourceIssuing = "issuing cancel on source"
 	phaseDetailCancelSourceWaiting = "waiting for the source to report the cancelled transfer"
 )
 
-// finishSourceCancel ends a cancel the source has settled: its guest runs on
-// it. The destination is deleted -- unless it reports the guest running, in
-// which case the migration committed and honorCancel completes it.
-func (r *SwiftMigrationReconciler) finishSourceCancel(
-	ctx context.Context,
-	mig *migrationv1alpha1.SwiftMigration,
-	src, dst *corev1.Pod,
-	dstExists bool,
-	detail string,
-) (bool, ctrl.Result, error) {
-	// Finished by an earlier pass (it clears the action last): this pass
-	// works from a stale copy. Only the optimistic finalize below runs, and
-	// it conflicts with what that pass wrote.
-	again := !sourceCancelIssued(mig, src)
-	if dstExists && dstReportedRunning(mig, dst) {
-		log.FromContext(ctx).Info("migration cancel too late", "path", cancelPathSource,
-			"evidence", "destination-status-running", "migration", mig.Name)
-		return true, ctrl.Result{Requeue: true}, nil
-	}
-	if !again {
-		_ = r.persistPhaseDetail(ctx, mig, phaseDetailCancelDeleting)
-	}
-	if dstExists && !again {
-		if err := r.Delete(ctx, dst); err != nil && !apierrors.IsNotFound(err) {
-			return true, ctrl.Result{}, fmt.Errorf("delete destination pod %q: %w", dst.Name, err)
-		}
-	}
-	if err := r.clearSourceCancel(ctx, mig, src); err != nil {
-		return true, ctrl.Result{}, err
-	}
-	log.FromContext(ctx).Info("migration cancelled", "path", cancelPathSource,
-		"evidence", "source-status", "migration", mig.Name)
-	res, err := r.finalizeCancelled(ctx, mig, detail+"; destination pod deleted")
-	if err == nil && !res.Requeue && !again {
-		metrics.MigrationCancelTotal.WithLabelValues(cancelPathSource, cancelOutcomeCancelled).Inc()
-	}
-	return true, res, err
-}
-
-// fallBackToDestinationCancel hands the cancel to the destination-kill path.
-// The cancel-send stays answered on the source, so it is not issued again.
+// fallBackToDestinationCancel hands the abort to the destination cancel. The
+// cancel-send is recorded as failed and taken off the source in one patch,
+// so it is neither issued again nor counted twice.
 func (r *SwiftMigrationReconciler) fallBackToDestinationCancel(
 	ctx context.Context,
 	mig *migrationv1alpha1.SwiftMigration,
 	src *corev1.Pod,
+	trigger abortTrigger,
 	reason string,
-) (bool, ctrl.Result, error) {
+) (abortResolution, bool, error) {
 	log.FromContext(ctx).Info("migration cancel falling back", "path", cancelPathDestination,
-		"reason", reason, "migration", mig.Name)
+		"reason", reason, "migration", mig.Name, "trigger", trigger)
+	patch := client.MergeFrom(src.DeepCopy())
+	cid := cancelSendID(mig)
+	if src.Annotations[AnnotationMigrationCancelResultID] != cid {
+		src.Annotations[AnnotationMigrationCancelResultID] = cid
+		src.Annotations[AnnotationMigrationCancelResult] = cancelResultFailed
+		src.Annotations[AnnotationMigrationCancelResultDetail] = reason
+	}
+	if sourceCancelIssued(mig, src) {
+		delete(src.Annotations, AnnotationMigrationAction)
+		delete(src.Annotations, AnnotationMigrationActionID)
+		delete(src.Annotations, AnnotationMigrationActionArgs)
+	}
+	if err := r.Patch(ctx, src, patch); client.IgnoreNotFound(err) != nil {
+		return abortResolution{}, false, fmt.Errorf("record cancel fallback on source pod %q: %w", src.Name, err)
+	}
 	if r.Recorder != nil {
 		r.Recorder.Eventf(mig, corev1.EventTypeWarning, "CancelFallback",
 			"%s; stopping the transfer at the destination instead", reason)
 	}
-	// Answer it for the record if swiftletd never did, so a later pass does
-	// not re-issue it after the action is cleared.
-	if src.Annotations[AnnotationMigrationCancelResultID] != cancelSendID(mig) {
-		patch := client.MergeFrom(src.DeepCopy())
-		src.Annotations[AnnotationMigrationCancelResultID] = cancelSendID(mig)
-		src.Annotations[AnnotationMigrationCancelResult] = cancelResultFailed
-		src.Annotations[AnnotationMigrationCancelResultDetail] = reason
-		if err := r.Patch(ctx, src, patch); client.IgnoreNotFound(err) != nil {
-			return true, ctrl.Result{}, fmt.Errorf("record cancel fallback on source pod %q: %w", src.Name, err)
-		}
-	}
-	metrics.MigrationCancelTotal.WithLabelValues(cancelPathSource, cancelOutcomeFallback).Inc()
-	return false, ctrl.Result{}, nil
+	metrics.MigrationCancelTotal.WithLabelValues(string(trigger), cancelPathSource, cancelOutcomeFallback).Inc()
+	return abortResolution{}, true, nil
 }
 
 // clearSourceCancel takes this migration's cancel-send off a launcher, so the

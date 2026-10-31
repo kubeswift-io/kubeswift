@@ -3,19 +3,15 @@ package swiftmigration
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
-	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
-	"github.com/kubeswift-io/kubeswift/internal/metrics"
 )
 
 // Migration action / status annotation keys read+written by swiftletd
@@ -216,7 +212,7 @@ func (r *SwiftMigrationReconciler) markCancelIgnored(
 	if perr := r.Status().Patch(ctx, mig, patch); perr != nil {
 		return false, ctrl.Result{}, fmt.Errorf("patch CancelIgnored condition: %w", perr)
 	}
-	metrics.MigrationCancelTotal.WithLabelValues(r.cancelPath(ctx, mig), cancelOutcomeIgnored).Inc()
+	recordAbort(abortExplicit, abortResolution{outcome: abortCommitted, path: r.cancelPath(ctx, mig)})
 	if r.Recorder != nil {
 		r.Recorder.Event(mig, corev1.EventTypeNormal, "CancelIgnored",
 			"spec.cancelRequested=true received post-cutover; migration cannot be reversed")
@@ -224,189 +220,58 @@ func (r *SwiftMigrationReconciler) markCancelIgnored(
 	return false, ctrl.Result{}, nil
 }
 
-// transitionCancelLive drives the pre-cutover live-mode cancel
-// sequence per design §2.3 cancel discipline:
-//
-//  1. Look up dst pod via canonicalPodName resolution.
-//     - NotFound: nothing to cancel; transition directly to
-//     Cancelled.
-//  2. Write `kubeswift.io/migration-action=cancel` +
-//     `migration-action-id=$CANCEL_ID` on dst pod (single
-//     client.MergeFrom patch). Skip if already present.
-//  3. Poll dst pod for `migration-status=failed` with matching
-//     `migration-status-id=$CANCEL_ID` and detail containing
-//     "cancelled":
-//     - Observed → proceed to dst pod delete.
-//     - Not observed AND under 30s budget → phaseRequeue.
-//     - 30s budget exceeded → fallback: force-delete dst pod
-//     (grace=0).
-//  4. Delete dst pod (graceful unless fallback fired).
-//  5. Set phase=Cancelled, FailureReason=Cancelled, ready
-//     condition + recorder event.
-//
-// The 30s budget runs from AnnotationMigrationCancelIssuedAt, which step 2
-// writes on the dst pod in the same patch as the cancel action; it survives
-// leader handover with the pod.
+// transitionCancelLive drives a pre-commit spec.cancelRequested to
+// Cancelled through resolveSourceOwnership (abort_live.go), the ownership
+// check every abandonment shares: nothing is deleted until the source's send
+// is known to have ended without completing, or the destination cancel has
+// stopped the receive (or, failing both, the long-standing fallback). A
+// transfer that completes first is left to complete: honorCancel marks it
+// CancelIgnored.
 func (r *SwiftMigrationReconciler) transitionCancelLive(
 	ctx context.Context,
 	mig *migrationv1alpha1.SwiftMigration,
 ) (ctrl.Result, error) {
-	// Look up the SwiftGuest to resolve canonical pod name.
-	var guest swiftv1alpha1.SwiftGuest
-	if err := r.Get(ctx, client.ObjectKey{Name: mig.Spec.GuestRef.Name, Namespace: mig.Namespace}, &guest); err != nil {
-		if apierrors.IsNotFound(err) {
-			// Source guest gone — nothing to cancel. Drive directly
-			// to Cancelled.
-			return r.finalizeCancelled(ctx, mig, "source SwiftGuest missing at cancel-time; nothing to clean up")
-		}
-		return ctrl.Result{}, fmt.Errorf("get source guest: %w", err)
-	}
-
-	// A source launcher that can cancel its own send does (cancel_source.go);
-	// the rest of this function is the destination-kill cancel, for older
-	// launchers and as that path's fallback.
-	if handled, res, err := r.cancelOnSource(ctx, mig, &guest); handled || err != nil {
-		return res, err
-	}
-
-	// Take this migration's send off the source first, so a launcher still
-	// busy with an earlier send cannot take it up later, after the
-	// destination is gone (clearSourceSend).
-	if err := r.clearSourceSend(ctx, mig); err != nil {
-		return ctrl.Result{}, fmt.Errorf("clear send action on source pod: %w", err)
-	}
-
-	// Pre-cutover dst pod name comes from B2.2's deterministic
-	// derivation (NOT from canonicalPodName, because pre-cutover
-	// guest.status.podRef.name still points at the src pod).
-	expectedDst, err := dstPodName(mig, guest.Name)
+	res, err := r.resolveSourceOwnership(ctx, mig, abortExplicit)
 	if err != nil {
-		// Couldn't even derive the name (oversize guest, missing
-		// UID). Drive to Cancelled with diagnostic.
-		return r.finalizeCancelled(ctx, mig, fmt.Sprintf("cannot derive destination pod name: %v", err))
+		return ctrl.Result{}, fmt.Errorf("cancel: %w", err)
 	}
+	switch res.outcome {
+	case abortPending:
+		_ = r.persistPhaseDetail(ctx, mig, res.detail)
+		return res.requeue, nil
+	case abortCommitted:
+		// honorCancel sees the commit on the next pass.
+		return ctrl.Result{Requeue: true}, nil
+	}
+	if err := r.deleteAbandonedDestination(ctx, mig, res); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.clearLauncherCancel(ctx, mig); err != nil {
+		return ctrl.Result{}, fmt.Errorf("clear cancel action on the source launcher: %w", err)
+	}
+	result, ferr := r.finalizeCancelled(ctx, mig, cancelledDetail(res))
+	if ferr == nil && !result.Requeue {
+		recordAbort(abortExplicit, res)
+	}
+	return result, ferr
+}
 
-	var dst corev1.Pod
-	getErr := r.Get(ctx, client.ObjectKey{Name: expectedDst, Namespace: mig.Namespace}, &dst)
+// cancelledDetail is the Cancelled message for a settled abort.
+func cancelledDetail(res abortResolution) string {
 	switch {
-	case apierrors.IsNotFound(getErr):
-		// Dst pod was never created (cancel during Validating, or
-		// Preparing failed before Create), or is already gone. Nothing
-		// to cancel via swiftletd; drive directly to Cancelled.
-		return r.finalizeCancelled(ctx, mig, "destination pod does not exist; cancel completes without swiftletd ack")
-	case getErr != nil:
-		return ctrl.Result{}, fmt.Errorf("get destination pod: %w", getErr)
+	case res.outcome == abortSourceRetained:
+		return fmt.Sprintf("cancelled on the source (%s); destination pod deleted", res.detail)
+	case res.outcome == abortDestinationDead:
+		return "destination pod deleted after swiftletd cancel ack"
+	case res.outcome == abortUnresolved:
+		return fmt.Sprintf("destination pod force-deleted; swiftletd cancel ack timed out (%s budget)", cancelAckTimeout)
+	case res.detail == "the source SwiftGuest is gone":
+		return "source SwiftGuest missing at cancel-time; nothing to clean up"
+	case res.detail == "the destination pod does not exist":
+		return "destination pod does not exist; cancel completes without swiftletd ack"
+	default:
+		return fmt.Sprintf("%s; destination pod deleted", res.detail)
 	}
-
-	// Write cancel annotation on dst pod if absent. Single
-	// client.MergeFrom patch covers both action + action-id. D1
-	// (rust/swiftletd/src/action.rs::dispatch_migration_cancel)
-	// reads action-id alongside action.
-	cid := cancelID(mig)
-	currentAction := dst.Annotations[AnnotationMigrationAction]
-	currentActionID := dst.Annotations[AnnotationMigrationActionID]
-	cancelAlreadyIssued := currentAction == MigrationActionCancel && currentActionID == cid
-
-	if !cancelAlreadyIssued {
-		// Issue cancel.
-		patch := client.MergeFrom(dst.DeepCopy())
-		if dst.Annotations == nil {
-			dst.Annotations = map[string]string{}
-		}
-		dst.Annotations[AnnotationMigrationAction] = MigrationActionCancel
-		dst.Annotations[AnnotationMigrationActionID] = cid
-		dst.Annotations[AnnotationMigrationCancelIssuedAt] = time.Now().UTC().Format(time.RFC3339)
-		if perr := r.Patch(ctx, &dst, patch); perr != nil {
-			return ctrl.Result{}, fmt.Errorf("write cancel annotation on dst pod %q: %w", dst.Name, perr)
-		}
-		// Stamp phaseDetail; persist via status patch.
-		if perr := r.persistPhaseDetail(ctx, mig, phaseDetailCancelIssuing); perr != nil {
-			// Non-fatal: phaseDetail is informational. Log and
-			// proceed; the controller will retry the persist on
-			// next reconcile.
-			if r.Recorder != nil {
-				r.Recorder.Eventf(mig, corev1.EventTypeWarning, "CancelPhaseDetailWriteFailed",
-					"phaseDetail write failed but cancel proceeded: %v", perr)
-			}
-		}
-		if r.Recorder != nil {
-			r.Recorder.Eventf(mig, corev1.EventTypeNormal, "CancelIssued",
-				"wrote cancel annotation on destination pod %q (id=%s); awaiting swiftletd ack",
-				dst.Name, cid)
-		}
-		// Requeue so the next reconcile observes the dst pod's
-		// updated annotation map and starts polling for ack.
-		return ctrl.Result{RequeueAfter: cancelPollInterval}, nil
-	}
-
-	// Cancel annotation already written. Check for D1's ack:
-	// migration-status=failed + migration-status-id=cid + detail
-	// containing "cancelled".
-	dstStatus := dst.Annotations[AnnotationMigrationStatus]
-	dstStatusID := dst.Annotations[AnnotationMigrationStatusID]
-	dstStatusDetail := dst.Annotations[AnnotationMigrationStatusDtl]
-	ackObserved := dstStatus == MigrationStatusFailed &&
-		dstStatusID == cid &&
-		strings.Contains(strings.ToLower(dstStatusDetail), MigrationStatusFailedCancelDt)
-
-	// The ack budget runs from when the cancel was issued, recorded with
-	// it. It used to run from the destination pod's creation, and a
-	// migration is always well past 30s into its transfer before anyone
-	// can cancel it, so every mid-transfer cancel force-deleted the
-	// destination at once: swiftletd never got to stop the receive, and
-	// the vanished destination left the source's send hung until TCP gave
-	// up, ~16 minutes in the lab (validation of v0.15.0, D8). A cancel
-	// written without the timestamp (an older controller) gets one now and
-	// a fresh budget.
-	issuedAt, perr := time.Parse(time.RFC3339, dst.Annotations[AnnotationMigrationCancelIssuedAt])
-	if perr != nil && !ackObserved {
-		patch := client.MergeFrom(dst.DeepCopy())
-		dst.Annotations[AnnotationMigrationCancelIssuedAt] = time.Now().UTC().Format(time.RFC3339)
-		if err := r.Patch(ctx, &dst, patch); err != nil {
-			return ctrl.Result{}, fmt.Errorf("stamp cancel time on dst pod %q: %w", dst.Name, err)
-		}
-		return ctrl.Result{RequeueAfter: cancelPollInterval}, nil
-	}
-	budgetExceeded := perr == nil && time.Since(issuedAt) > cancelAckTimeout
-
-	if !ackObserved && !budgetExceeded {
-		// Still waiting for ack within budget.
-		_ = r.persistPhaseDetail(ctx, mig, phaseDetailCancelWaiting)
-		return ctrl.Result{RequeueAfter: cancelPollInterval}, nil
-	}
-
-	// Either ack observed (graceful) or budget exceeded (force
-	// fallback). Delete dst pod with appropriate grace policy.
-	_ = r.persistPhaseDetail(ctx, mig, phaseDetailCancelDeleting)
-	delOpts := []client.DeleteOption{}
-	cancelDetail := "destination pod deleted after swiftletd cancel ack"
-	if !ackObserved && budgetExceeded {
-		// Force delete: grace=0. **W12 slow-failure note**: see
-		// cancelAckTimeout's godoc — the source CH may take up to
-		// ~127s additional time to unwind via kernel TCP retransmit
-		// timeout under network partition. Phase 3b's
-		// swift-ch-client async refactor resolves this together
-		// with W12.
-		delOpts = append(delOpts, &client.DeleteOptions{
-			GracePeriodSeconds: ptr.To[int64](0),
-			PropagationPolicy:  ptr.To(metav1.DeletePropagationBackground),
-		})
-		cancelDetail = "destination pod force-deleted; swiftletd cancel ack timed out (30s budget)"
-		if r.Recorder != nil {
-			r.Recorder.Eventf(mig, corev1.EventTypeWarning, "CancelAckTimeout",
-				"swiftletd cancel ack not observed within %s; force-deleting destination pod %q",
-				cancelAckTimeout, dst.Name)
-		}
-	}
-	if delErr := r.Delete(ctx, &dst, delOpts...); delErr != nil && !apierrors.IsNotFound(delErr) {
-		return ctrl.Result{}, fmt.Errorf("delete destination pod %q: %w", dst.Name, delErr)
-	}
-
-	res, ferr := r.finalizeCancelled(ctx, mig, cancelDetail)
-	if ferr == nil && !res.Requeue {
-		metrics.MigrationCancelTotal.WithLabelValues(cancelPathDestination, cancelOutcomeCancelled).Inc()
-	}
-	return res, ferr
 }
 
 // finalizeCancelled stamps the SwiftMigration to terminal Cancelled

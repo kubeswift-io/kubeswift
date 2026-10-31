@@ -81,7 +81,11 @@ func getMig(t *testing.T, c client.Client, mig *migrationv1alpha1.SwiftMigration
 }
 
 func cancelCount(path, outcome string) float64 {
-	return testutil.ToFloat64(metrics.MigrationCancelTotal.WithLabelValues(path, outcome))
+	return countAbort(abortExplicit, path, outcome)
+}
+
+func countAbort(trigger abortTrigger, path, outcome string) float64 {
+	return testutil.ToFloat64(metrics.MigrationCancelTotal.WithLabelValues(string(trigger), path, outcome))
 }
 
 // A source that can cancel is asked to; the destination is left alone and
@@ -130,7 +134,7 @@ func TestSourceCancel_SourceReportsFailed_Cancels(t *testing.T) {
 	ann[AnnotationMigrationCancelResult] = "requested"
 	ann[AnnotationMigrationCancelResultID] = "m1:cancel-send:0"
 	r, c, mig, _ := sourceCancelFixture(t, capableFeatures, ann)
-	before := cancelCount(cancelPathSource, cancelOutcomeCancelled)
+	before := cancelCount(cancelPathSource, "cancelled")
 
 	handled, _, err := r.honorCancel(context.Background(), mig)
 	if !handled || err != nil {
@@ -154,7 +158,7 @@ func TestSourceCancel_SourceReportsFailed_Cancels(t *testing.T) {
 	if src.Annotations[AnnotationMigrationAction] != "" {
 		t.Errorf("cancel action left on the source: %q", src.Annotations[AnnotationMigrationAction])
 	}
-	if got := cancelCount(cancelPathSource, cancelOutcomeCancelled) - before; got != 1 {
+	if got := cancelCount(cancelPathSource, "cancelled") - before; got != 1 {
 		t.Errorf("cancel metric +%v, want +1", got)
 	}
 }
@@ -178,7 +182,7 @@ func TestSourceCancel_StalePassAfterFinishDoesNotStartTheDestinationCancel(t *te
 	if err := c.Create(context.Background(), dst); err != nil {
 		t.Fatal(err)
 	}
-	before := cancelCount(cancelPathSource, cancelOutcomeCancelled)
+	before := cancelCount(cancelPathSource, "cancelled")
 	if _, _, err := r.honorCancel(context.Background(), stale); err != nil {
 		t.Fatalf("stale pass: %v", err)
 	}
@@ -189,7 +193,7 @@ func TestSourceCancel_StalePassAfterFinishDoesNotStartTheDestinationCancel(t *te
 	if p := getMig(t, c, mig).Status.Phase; p != migrationv1alpha1.SwiftMigrationPhaseCancelled {
 		t.Errorf("phase %q", p)
 	}
-	if d := cancelCount(cancelPathSource, cancelOutcomeCancelled) - before; d != 0 {
+	if d := cancelCount(cancelPathSource, "cancelled") - before; d != 0 {
 		t.Errorf("counted twice: +%v", d)
 	}
 }
@@ -208,7 +212,7 @@ func TestSourceCancel_SourceReportsComplete_IsIgnored(t *testing.T) {
 	ann[AnnotationMigrationCancelResult] = "requested"
 	ann[AnnotationMigrationCancelResultID] = "m1:cancel-send:0"
 	r, c, mig, _ := sourceCancelFixture(t, capableFeatures, ann)
-	before := cancelCount(cancelPathSource, cancelOutcomeIgnored)
+	before := cancelCount(cancelPathSource, "committed")
 
 	handled, _, err := r.honorCancel(context.Background(), mig)
 	if handled || err != nil {
@@ -230,7 +234,7 @@ func TestSourceCancel_SourceReportsComplete_IsIgnored(t *testing.T) {
 	if !ignored {
 		t.Error("CancelIgnored not set")
 	}
-	if got := cancelCount(cancelPathSource, cancelOutcomeIgnored) - before; got != 1 {
+	if got := cancelCount(cancelPathSource, "committed") - before; got != 1 {
 		t.Errorf("ignored metric +%v, want +1", got)
 	}
 }
@@ -437,7 +441,10 @@ func TestSourceCancel_ControllerRestartWhilePending(t *testing.T) {
 
 // A source pod being deleted is not asked to cancel.
 func TestSourceCancel_TerminatingSource_UsesTheDestinationCancel(t *testing.T) {
-	r, c, mig, _ := sourceCancelFixture(t, capableFeatures, nil)
+	r, c, mig, _ := sourceCancelFixture(t, capableFeatures, map[string]string{
+		AnnotationMigrationStatus:   migrationStatusSending,
+		AnnotationMigrationStatusID: "m1:send:1",
+	})
 	src, _ := getPod(t, c, "guest")
 	src.Finalizers = []string{"test/hold"}
 	if err := c.Update(context.Background(), src); err != nil {

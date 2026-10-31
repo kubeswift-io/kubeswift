@@ -1516,6 +1516,15 @@ async fn dispatch_migration_send(
                                 Ok(crate::migevents::CancelResult::Requested)
                             )
                     },
+                    // A cancel this launcher delivered, confirmed without
+                    // events: no migration is in progress any more.
+                    || {
+                        crate::migevents::cancel_delivered()
+                            && matches!(
+                                info.cancel_migration(),
+                                Ok(swift_ch_client::CancelMigration::NotActive)
+                            )
+                    },
                 );
                 log::info!(
                     "migration_send_wait id={} evidence={} iterations={} vm_info_calls={}",

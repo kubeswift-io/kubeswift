@@ -373,6 +373,22 @@ func (r *SwiftMigrationReconciler) dispatchResult(
 		return ctrl.Result{}, result.Err
 	}
 	if result.FailureMsg != "" {
+		// A live migration failing before cutover deletes its destination
+		// (onTerminalPhase): settle the source's send first (#893).
+		held, res, resolution, err := r.resolveBeforeFailing(ctx, mig, status, result)
+		if err != nil || held {
+			return res, err
+		}
+		if resolution.outcome == abortUnresolved {
+			// The fallback cleanup: the receiving Cloud Hypervisor did not
+			// acknowledge, so it goes without a grace period.
+			if err := r.deleteAbandonedDestination(ctx, mig, resolution); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		if err := r.clearLauncherCancel(ctx, mig); err != nil {
+			return ctrl.Result{}, fmt.Errorf("clear cancel action on the source launcher: %w", err)
+		}
 		setPhase(status, migrationv1alpha1.SwiftMigrationPhaseFailed)
 		setReadyCondition(status, metav1.ConditionFalse, ReasonMigrationFailed, result.FailureMsg)
 		status.FailureMessage = result.FailureMsg
@@ -393,6 +409,9 @@ func (r *SwiftMigrationReconciler) dispatchResult(
 			return ctrl.Result{}, err
 		}
 		r.recordFailed(mig, result)
+		if resolution.outcome != abortNoSend || resolution.path != cancelPathNone {
+			recordAbort(abortTriggerFor(result), resolution)
+		}
 		return ctrl.Result{}, nil
 	}
 	if result.Advanced {

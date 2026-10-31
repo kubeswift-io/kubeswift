@@ -25,7 +25,7 @@
 //! guest", and Cloud Hypervisor resumes it after the event.
 
 use std::os::fd::OwnedFd;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -34,11 +34,25 @@ use swift_ch_client::{ApiError, EventStream, SendEnd, SendMigrationOutcome, Send
 /// This launcher's event stream: its Cloud Hypervisor's.
 static STREAM: OnceLock<EventStream> = OnceLock::new();
 
+/// Fault injection for validating the no-event fallbacks on a live
+/// launcher: while this file exists in the launcher's runtime directory, a
+/// send's wait ignores every Cloud Hypervisor event, as if all were lost.
+/// Only someone with root on the node can create it there, and they can do
+/// far more to a launcher already.
+pub const FAULT_DROP_EVENTS: &str = ".fault-drop-ch-events";
+static FAULT_MARKER: OnceLock<std::path::PathBuf> = OnceLock::new();
+
+/// Whether events are being dropped (FAULT_DROP_EVENTS).
+fn events_dropped() -> bool {
+    FAULT_MARKER.get().is_some_and(|p| p.exists())
+}
+
 /// Create the event pipe for the Cloud Hypervisor about to be spawned and
 /// return the end to give it. None when the pipe could not be made, or one
 /// already exists (a launcher runs one Cloud Hypervisor): the launch goes on
 /// without events.
-pub fn pipe_for_spawn() -> Option<OwnedFd> {
+pub fn pipe_for_spawn(runtime_dir: &std::path::Path) -> Option<OwnedFd> {
+    let _ = FAULT_MARKER.set(runtime_dir.join(FAULT_DROP_EVENTS));
     if STREAM.get().is_some() {
         return None;
     }
@@ -85,6 +99,14 @@ const SEND_IDLE: u8 = 0;
 const SEND_REQUESTING: u8 = 1;
 const SEND_ACCEPTED: u8 = 2;
 static SEND_STATE: AtomicU8 = AtomicU8::new(SEND_IDLE);
+/// A cancel-send delivered a cancel to this launcher's current send.
+static CANCEL_DELIVERED: AtomicBool = AtomicBool::new(false);
+
+/// Whether a cancel was delivered to the current send (see wait_send's
+/// `cancel_ended`).
+pub fn cancel_delivered() -> bool {
+    CANCEL_DELIVERED.load(Ordering::SeqCst)
+}
 
 /// Marks the send in progress for as long as it is held.
 pub struct SendInProgress(());
@@ -108,6 +130,7 @@ pub fn send_settled_by_loop() {
 impl SendInProgress {
     /// The send request is about to go to Cloud Hypervisor.
     pub fn requesting() -> Self {
+        CANCEL_DELIVERED.store(false, Ordering::SeqCst);
         SEND_STATE.store(SEND_REQUESTING, Ordering::SeqCst);
         SendInProgress(())
     }
@@ -156,7 +179,11 @@ const CANCEL_RETRY: Duration = Duration::from_secs(1);
 pub fn cancel_send(
     cancel: impl FnMut() -> Result<swift_ch_client::CancelMigration, ApiError>,
 ) -> Result<CancelResult, String> {
-    cancel_send_on(&SEND_STATE, cancel)
+    let r = cancel_send_on(&SEND_STATE, cancel);
+    if r == Ok(CancelResult::Requested) {
+        CANCEL_DELIVERED.store(true, Ordering::SeqCst);
+    }
+    r
 }
 
 fn cancel_send_on(
@@ -196,6 +223,9 @@ pub enum Evidence {
     SourceExit,
     /// The connection watch, after the event stream showed nothing.
     ConnectionWatch,
+    /// With no events, a cancel this launcher delivered: Cloud Hypervisor
+    /// says no migration is in progress any more while the source runs.
+    CancelProbe,
     /// The deadline.
     Deadline,
 }
@@ -206,6 +236,7 @@ impl Evidence {
             Evidence::Event => "event",
             Evidence::SourceExit => "source-exit",
             Evidence::ConnectionWatch => "connection-watch",
+            Evidence::CancelProbe => "cancel-probe",
             Evidence::Deadline => "deadline",
         }
     }
@@ -272,12 +303,16 @@ pub const DEADLINE_CANCELLED: &str = "the migration did not finish before its de
 /// connection watch, consulted only once the stream is unavailable for this
 /// send.
 ///
+/// `cancel_ended` (no-event mode only) reports whether a cancel this
+/// launcher delivered has ended the migration.
+///
 /// At the deadline the send is cancelled in Cloud Hypervisor when
 /// `cancel_at_deadline` can (it returns whether the cancel was delivered),
 /// and the wait goes on, for up to `deadline_cancel_grace`, to learn how it
 /// ended. Giving up while Cloud Hypervisor still migrates is how a send was
 /// reported failed and then finished anyway -- its destination already
 /// deleted as a failed migration's, and the guest gone with it.
+#[allow(clippy::too_many_arguments)]
 pub fn wait_send(
     stream: &EventStream,
     cursor: u64,
@@ -286,6 +321,7 @@ pub fn wait_send(
     mut info: impl FnMut() -> Result<VmInfo, ApiError>,
     mut watch: impl FnMut(Instant, bool) -> Option<String>,
     mut cancel_at_deadline: impl FnMut() -> bool,
+    mut cancel_ended: impl FnMut() -> bool,
 ) -> SendWait {
     let accepted = Instant::now();
     let mut cancelled_at_deadline: Option<Instant> = None;
@@ -304,8 +340,15 @@ pub fn wait_send(
         info_calls,
     };
     loop {
-        let batch = stream.wait_since(cur, timing.event_wait);
+        let mut batch = stream.wait_since(cur, timing.event_wait);
         cur = batch.cursor;
+        if events_dropped() {
+            log::debug!(
+                "migration_send_events_dropped count={} (fault injection)",
+                batch.events.len()
+            );
+            batch.events.clear();
+        }
         for e in &batch.events {
             tracker.observe(e);
         }
@@ -325,12 +368,18 @@ pub fn wait_send(
         }
         if end.is_none()
             && !degraded
-            && (batch.gap || (!tracker.started() && now >= accepted + timing.starting_grace))
+            // A stream that ended before the send did lost its last events
+            // or broke: the source exiting still means completion (checked
+            // below), but a failure now shows only through the watch.
+            && (batch.gap
+                || batch.closed
+                || (!tracker.started() && now >= accepted + timing.starting_grace))
         {
             degraded = true;
             log::warn!(
-                "migration_send_events_unavailable gap={} started={} (using the connection watch)",
+                "migration_send_events_unavailable gap={} closed={} started={} (using the connection watch)",
                 batch.gap,
+                batch.closed,
                 tracker.started()
             );
         }
@@ -389,6 +438,22 @@ pub fn wait_send(
             }
             if end.is_none() && degraded {
                 let running = matches!(&sample, Ok(i) if i.state == "Running");
+                // Without events, a delivered cancel is confirmed by asking
+                // again: once no migration is in progress and the source
+                // still runs, the send ended without completing (a completed
+                // source exits). The watch alone can take a minute when the
+                // cancel came before it first saw the connection.
+                if running && cancel_ended() {
+                    log::warn!("migration_send_end source=cancel-probe");
+                    return done(
+                        SendMigrationOutcome::Failed(
+                            failure_detail(SendEnd::Cancelled).to_string(),
+                        ),
+                        Evidence::CancelProbe,
+                        iterations,
+                        info_calls,
+                    );
+                }
                 if let Some(reason) = watch(now, running) {
                     log::warn!("migration_send_end source=connection-watch");
                     return done(
@@ -516,7 +581,7 @@ mod tests {
                 "migration-finished",
             ],
         );
-        let w = wait_send(&s, c, far(), &fast(), running, no_watch, || false);
+        let w = wait_send(&s, c, far(), &fast(), running, no_watch, || false, || false);
         t.join().unwrap();
         assert_eq!(w.outcome, SendMigrationOutcome::Completed);
         assert_eq!(w.evidence, Evidence::Event);
@@ -544,6 +609,7 @@ mod tests {
                 Some("the migration connection closed".to_string())
             },
             || false,
+            || false,
         );
         assert_eq!(
             w.outcome,
@@ -554,7 +620,7 @@ mod tests {
 
         let s = EventStream::detached();
         let c = s.cursor();
-        let w = wait_send(&s, c, far(), &fast(), gone, no_watch, || false);
+        let w = wait_send(&s, c, far(), &fast(), gone, no_watch, || false, || false);
         assert_eq!(w.outcome, SendMigrationOutcome::Completed);
         assert_eq!(w.evidence, Evidence::SourceExit);
     }
@@ -573,6 +639,7 @@ mod tests {
             &fast(),
             running,
             |_, _| panic!("watch consulted while events flow"),
+            || false,
             || false,
         );
         t.join().unwrap();
@@ -594,9 +661,63 @@ mod tests {
             0,
         );
         s.close();
-        let w = wait_send(&s, c, far(), &fast(), gone, no_watch, || false);
+        let w = wait_send(&s, c, far(), &fast(), gone, no_watch, || false, || false);
         assert_eq!(w.outcome, SendMigrationOutcome::Completed);
         assert_eq!(w.evidence, Evidence::SourceExit);
+    }
+
+    // The stream ended before the send did while the source still runs (a
+    // broken pipe): the connection watch takes over, so a failed transfer
+    // ends at the watch, not at the deadline.
+    #[test]
+    fn stream_closed_mid_send_falls_back_to_the_watch() {
+        let s = EventStream::detached();
+        let c = s.cursor();
+        s.record([ev("migration-starting"), ev("migration-started")], 0);
+        s.close();
+        let w = wait_send(
+            &s,
+            c,
+            far(),
+            &fast(),
+            running,
+            |_, run| run.then(|| "the migration connection closed".to_string()),
+            || false,
+            || false,
+        );
+        assert_eq!(w.evidence, Evidence::ConnectionWatch);
+    }
+
+    // With no events, a delivered cancel is confirmed by asking again: no
+    // migration in progress while the source runs -> cancelled, without
+    // waiting out the connection watch's grace.
+    #[test]
+    fn without_events_a_delivered_cancel_is_confirmed_by_probing() {
+        let s = EventStream::detached();
+        let c = s.cursor();
+        let w = wait_send(&s, c, far(), &fast(), running, no_watch, || false, || true);
+        assert_eq!(w.evidence, Evidence::CancelProbe);
+        assert_eq!(
+            w.outcome,
+            SendMigrationOutcome::Failed(failure_detail(SendEnd::Cancelled).to_string())
+        );
+        // Not consulted while events flow.
+        let s = EventStream::detached();
+        let c = s.cursor();
+        s.record([ev("migration-starting"), ev("migration-started")], 0);
+        let t = feed(&s, Duration::from_millis(100), &["migration-finished"]);
+        let w = wait_send(
+            &s,
+            c,
+            far(),
+            &fast(),
+            running,
+            no_watch,
+            || false,
+            || panic!("probe used while events flow"),
+        );
+        t.join().unwrap();
+        assert_eq!(w.outcome, SendMigrationOutcome::Completed);
     }
 
     // A failure event then exit is a crash, never a completion.
@@ -612,7 +733,7 @@ mod tests {
             ],
             0,
         );
-        let w = wait_send(&s, c, far(), &fast(), gone, no_watch, || false);
+        let w = wait_send(&s, c, far(), &fast(), gone, no_watch, || false, || false);
         assert!(
             matches!(w.outcome, SendMigrationOutcome::Failed(ref d) if d.contains("exited after the migration failed"))
         );
@@ -636,7 +757,7 @@ mod tests {
             .map(ev),
             0,
         );
-        let w = wait_send(&s, c, far(), &fast(), running, no_watch, || false);
+        let w = wait_send(&s, c, far(), &fast(), running, no_watch, || false, || false);
         assert_eq!(
             w.outcome,
             SendMigrationOutcome::Failed(failure_detail(SendEnd::Cancelled).to_string())
@@ -664,7 +785,7 @@ mod tests {
                 "migration-finished",
             ],
         );
-        let w = wait_send(&s, c, far(), &fast(), running, no_watch, || false);
+        let w = wait_send(&s, c, far(), &fast(), running, no_watch, || false, || false);
         t.join().unwrap();
         assert_eq!(w.outcome, SendMigrationOutcome::Completed);
 
@@ -681,7 +802,7 @@ mod tests {
                 "migration-finished",
             ],
         );
-        let w = wait_send(&s, c, far(), &fast(), running, no_watch, || false);
+        let w = wait_send(&s, c, far(), &fast(), running, no_watch, || false, || false);
         t.join().unwrap();
         assert_eq!(w.outcome, SendMigrationOutcome::Completed);
     }
@@ -719,6 +840,7 @@ mod tests {
             },
             no_watch,
             || false,
+            || false,
         );
         assert_eq!(
             w.outcome,
@@ -734,7 +856,7 @@ mod tests {
         let s = EventStream::detached();
         let c = s.cursor();
         s.record(["migration-starting", "migration-failed"].map(ev), 0);
-        let w = wait_send(&s, c, far(), &fast(), running, no_watch, || false);
+        let w = wait_send(&s, c, far(), &fast(), running, no_watch, || false, || false);
         assert!(matches!(w.outcome, SendMigrationOutcome::Failed(ref d)
             if d.contains("before its connection to the destination was established")));
     }
@@ -751,6 +873,7 @@ mod tests {
             &fast(),
             running,
             no_watch,
+            || false,
             || false,
         );
         assert_eq!(w.evidence, Evidence::Deadline);
@@ -783,6 +906,7 @@ mod tests {
                     s2.record([ev(after)], 0);
                     true
                 },
+                || false,
             );
             assert_eq!(*asked.lock().unwrap(), 1, "{after}: cancel once");
             if want_completed {
@@ -815,6 +939,7 @@ mod tests {
                 running,
                 no_watch,
                 || delivered,
+                || false,
             );
             assert_eq!(w.evidence, Evidence::Deadline);
             let waited = started.elapsed();
@@ -840,7 +965,7 @@ mod tests {
         let c = s.cursor();
         s.record([ev("migration-starting"), ev("migration-started")], 0);
         let t = feed(&s, Duration::from_millis(200), &["migration-finished"]);
-        let w = wait_send(&s, c, far(), &fast(), running, no_watch, || false);
+        let w = wait_send(&s, c, far(), &fast(), running, no_watch, || false, || false);
         t.join().unwrap();
         // ~200 ms at a 20 ms cadence: about 10, never one per 5 ms wait.
         assert!(w.info_calls <= 12, "info_calls={}", w.info_calls);
