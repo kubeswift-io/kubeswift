@@ -6,6 +6,19 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.21.3] — 2026-10-31
+
+A patch release for one live-migration defect (#892, #894). After a cutover, the guest controller could create a second launcher for the migrated guest, booting a second VM from the same disk while the migrated guest ran on the destination. Upgrade promptly if you live-migrate guests: two VMs writing one disk can corrupt it. Only the controller changed.
+
+### Upgrade
+
+- **No CRD, chart value or template change.** Applying `crds/` is not needed. The other images are rebuilt at the new version but unchanged. No running guest, sandbox or warm slot is restarted.
+- A guest that already has a second launcher from this defect is not repaired by the upgrade. Look for a guest with two launcher pods (the canonical `<guest>` pod and a migration destination); delete the one `status.podRef` does not name, then check the guest's filesystem.
+
+### Fixed
+
+- **A second VM after a live-migration cutover.** Cutover first moves the guest's `status.podRef` to the destination, then deletes the source launcher. A guest reconcile woken by that deletion but reading the guest from a cache older than the move found no launcher under the old name and created one. It was seen after a controller restart during a transfer, and a chained migration's renamed source could take the same path. The controller now re-reads the guest from the API server before creating a launcher and waits when its launcher reference has moved on.
+
 ## [v0.21.2] — 2026-10-28
 
 A patch release for `SwiftArtifactPlacement` on warm pools (#889, #890). A placement reported `Preparing` far more often than its nodes' caches justified, so a consumer that attaches an optional artifact only while the placement is `Prepared` (a local application, a compiled cache, model files) gave some workloads none. Workloads stayed correct throughout: the artifact is optional and they fell back. Only the controller changed.
