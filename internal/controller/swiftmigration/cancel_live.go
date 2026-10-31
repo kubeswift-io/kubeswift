@@ -237,6 +237,7 @@ func (r *SwiftMigrationReconciler) transitionCancelLive(
 	}
 	switch res.outcome {
 	case abortPending:
+		_ = r.persistPhaseDetail(ctx, mig, res.detail)
 		return res.requeue, nil
 	case abortCommitted:
 		// honorCancel sees the commit on the next pass.

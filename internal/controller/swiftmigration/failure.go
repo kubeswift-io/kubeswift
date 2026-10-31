@@ -204,6 +204,7 @@ func (r *SwiftMigrationReconciler) handleCancellation(
 		}
 		switch resolution.outcome {
 		case abortPending:
+			_ = r.persistPhaseDetail(ctx, mig, "SwiftMigration deleted; "+resolution.detail)
 			return resolution.requeue, nil
 		case abortCommitted:
 			return ctrl.Result{Requeue: true}, nil
@@ -224,7 +225,7 @@ func (r *SwiftMigrationReconciler) handleCancellation(
 	// in Preparing-live so it cannot complete the receive into an orphan.
 	// Mirrors onTerminalPhase's W17 handling. Committed deletions leave the
 	// destination in place — it is the canonical guest now.
-	if !committed && mig.Status.Mode == migrationv1alpha1.SwiftMigrationModeLive {
+	if !committed && mig.Status.Mode == migrationv1alpha1.SwiftMigrationModeLive && resolution.path == "" {
 		if err := r.cleanupDstPod(ctx, mig, &mig.Status); err != nil {
 			return ctrl.Result{}, fmt.Errorf("cleanup destination pod on cancellation: %w", err)
 		}

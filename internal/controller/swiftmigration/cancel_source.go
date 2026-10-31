@@ -127,7 +127,7 @@ func (r *SwiftMigrationReconciler) resolveOnSource(
 ) (res abortResolution, fallback bool, err error) {
 	logger := log.FromContext(ctx).WithValues("migration", mig.Name, "trigger", trigger)
 	cid := cancelSendID(mig)
-	pending := abortResolution{outcome: abortPending, path: cancelPathSource,
+	pending := abortResolution{outcome: abortPending, path: cancelPathSource, detail: phaseDetailCancelSourceWaiting,
 		requeue: ctrl.Result{RequeueAfter: cancelPollInterval}}
 
 	// An answered cancel-send stays this path's even once its action is
@@ -149,7 +149,6 @@ func (r *SwiftMigrationReconciler) resolveOnSource(
 			return abortResolution{}, false, fmt.Errorf("write cancel-send on source pod %q: %w", src.Name, perr)
 		}
 		logger.Info("migration cancel issued", "path", cancelPathSource, "pod", src.Name)
-		_ = r.persistPhaseDetail(ctx, mig, phaseDetailCancelSourceIssuing)
 		if r.Recorder != nil {
 			r.Recorder.Eventf(mig, corev1.EventTypeNormal, "CancelIssued",
 				"%s: asked the source launcher %q to cancel the transfer (id=%s); the source guest keeps running",
@@ -198,12 +197,10 @@ func (r *SwiftMigrationReconciler) resolveOnSource(
 		return r.fallBackToDestinationCancel(ctx, mig, src, trigger,
 			fmt.Sprintf("the source did not report within %s", sourceCancelTimeout))
 	}
-	_ = r.persistPhaseDetail(ctx, mig, phaseDetailCancelSourceWaiting)
 	return pending, false, nil
 }
 
 const (
-	phaseDetailCancelSourceIssuing = "issuing cancel on source"
 	phaseDetailCancelSourceWaiting = "waiting for the source to report the cancelled transfer"
 )
 

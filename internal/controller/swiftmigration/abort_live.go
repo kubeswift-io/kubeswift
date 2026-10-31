@@ -264,13 +264,12 @@ func (r *SwiftMigrationReconciler) resolveOnDestination(
 		if err := r.Patch(ctx, dst, patch); err != nil {
 			return abortResolution{}, fmt.Errorf("write cancel annotation on dst pod %q: %w", dst.Name, err)
 		}
-		_ = r.persistPhaseDetail(ctx, mig, phaseDetailCancelIssuing)
 		if r.Recorder != nil {
 			r.Recorder.Eventf(mig, corev1.EventTypeNormal, "CancelIssued",
 				"%s: wrote cancel annotation on destination pod %q (id=%s); awaiting swiftletd ack",
 				triggerText(trigger), dst.Name, cid)
 		}
-		return abortResolution{outcome: abortPending, path: cancelPathDestination,
+		return abortResolution{outcome: abortPending, path: cancelPathDestination, detail: phaseDetailCancelIssuing,
 			requeue: ctrl.Result{RequeueAfter: cancelPollInterval}}, nil
 	}
 
@@ -290,7 +289,7 @@ func (r *SwiftMigrationReconciler) resolveOnDestination(
 		if err := r.Patch(ctx, dst, patch); err != nil {
 			return abortResolution{}, fmt.Errorf("stamp cancel time on dst pod %q: %w", dst.Name, err)
 		}
-		return abortResolution{outcome: abortPending, path: cancelPathDestination,
+		return abortResolution{outcome: abortPending, path: cancelPathDestination, detail: phaseDetailCancelWaiting,
 			requeue: ctrl.Result{RequeueAfter: cancelPollInterval}}, nil
 	}
 	if time.Since(issuedAt) > cancelAckTimeout {
@@ -301,8 +300,7 @@ func (r *SwiftMigrationReconciler) resolveOnDestination(
 		return abortResolution{outcome: abortUnresolved, path: cancelPathDestination,
 			detail: fmt.Sprintf("swiftletd cancel ack timed out (%s budget)", cancelAckTimeout)}, nil
 	}
-	_ = r.persistPhaseDetail(ctx, mig, phaseDetailCancelWaiting)
-	return abortResolution{outcome: abortPending, path: cancelPathDestination,
+	return abortResolution{outcome: abortPending, path: cancelPathDestination, detail: phaseDetailCancelWaiting,
 		requeue: ctrl.Result{RequeueAfter: cancelPollInterval}}, nil
 }
 
@@ -384,8 +382,7 @@ func (r *SwiftMigrationReconciler) resolveBeforeFailing(
 	}
 	switch resolution.outcome {
 	case abortPending:
-		detail := fmt.Sprintf("%s; waiting for the transfer to stop before cleaning up", triggerText(trigger))
-		setPhaseDetail(status, detail)
+		setPhaseDetail(status, fmt.Sprintf("%s; %s", triggerText(trigger), resolution.detail))
 		if perr := r.persist(ctx, mig, status); perr != nil {
 			return true, ctrl.Result{}, resolution, perr
 		}
@@ -405,7 +402,7 @@ func (r *SwiftMigrationReconciler) resolveBeforeFailing(
 		switch resolution.outcome {
 		case abortSourceRetained, abortDestinationDead:
 			r.Recorder.Eventf(mig, corev1.EventTypeNormal, "TransferStopped",
-				"%s: %s; the source keeps the guest", triggerText(trigger), resolution.detail)
+				"%s: %s", triggerText(trigger), resolution.detail)
 		case abortUnresolved:
 			r.Recorder.Eventf(mig, corev1.EventTypeWarning, "TransferOutcomeUnknown",
 				"%s: %s; destination deleted without a grace period", triggerText(trigger), resolution.detail)
