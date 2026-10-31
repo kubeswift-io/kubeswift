@@ -109,6 +109,15 @@ pub enum SendMigrationOutcome {
     Failed(String),
 }
 
+/// What [`ApiClient::cancel_migration`] got back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelMigration {
+    /// The cancel was delivered to the migration worker. Not an outcome.
+    Requested,
+    /// No migration is in progress on this Cloud Hypervisor.
+    NotActive,
+}
+
 /// One `vm.info` sample's verdict while waiting for send-migration to
 /// reach a terminal state. Internal to
 /// [`ApiClient::wait_for_send_migration_terminal`].
@@ -336,6 +345,22 @@ impl ApiClient {
                 );
             }
             std::thread::sleep(poll);
+        }
+    }
+
+    /// Ask Cloud Hypervisor (>= v54) to cancel the migration it is sending.
+    ///
+    /// Asynchronous: 204 only sets the worker's cancel flag. The migration
+    /// then ends `migration-cancelled` (the source guest runs on, resumed if
+    /// it was paused) -- or `migration-finished`, when the flag came after
+    /// the worker's last check -- and the caller must observe which. 409
+    /// means no migration is in progress here.
+    pub fn cancel_migration(&self) -> Result<CancelMigration, ApiError> {
+        let resp = self.request("PUT", "/api/v1/vm.cancel-migration", None)?;
+        match resp.status {
+            200..=299 => Ok(CancelMigration::Requested),
+            409 => Ok(CancelMigration::NotActive),
+            _ => Err(ApiError::Status(resp)),
         }
     }
 
@@ -946,5 +971,36 @@ mod tests {
             pid: None,
         };
         assert_eq!(v.major_minor(), None);
+    }
+
+    // vm.cancel-migration: 204 delivered, 409 nothing to cancel, anything
+    // else an error (an older Cloud Hypervisor has no such endpoint).
+    #[test]
+    fn cancel_migration_maps_each_answer() {
+        let server = MockServer::spawn(b"HTTP/1.1 204 No Content\r\n\r\n".to_vec());
+        let client = ApiClient::new(server.path.clone());
+        assert_eq!(
+            client.cancel_migration().unwrap(),
+            CancelMigration::Requested
+        );
+
+        let body = br#"["Error from API","There is no ongoing migration"]"#;
+        let mut resp = format!(
+            "HTTP/1.1 409 Conflict\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        resp.extend_from_slice(body);
+        let server = MockServer::spawn(resp);
+        let client = ApiClient::new(server.path.clone());
+        assert_eq!(
+            client.cancel_migration().unwrap(),
+            CancelMigration::NotActive
+        );
+
+        let server =
+            MockServer::spawn(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec());
+        let client = ApiClient::new(server.path.clone());
+        assert!(matches!(client.cancel_migration(), Err(ApiError::Status(r)) if r.status == 404));
     }
 }

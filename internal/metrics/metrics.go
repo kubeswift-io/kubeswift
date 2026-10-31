@@ -97,6 +97,20 @@ var (
 		[]string{"mode", "reason"},
 	)
 
+	// MigrationCancelTotal counts live-migration cancels by the path that
+	// carried them (source: Cloud Hypervisor's vm.cancel-migration on the
+	// source; destination: killing the receiving Cloud Hypervisor) and their
+	// outcome (cancelled; ignored, when the migration had committed and
+	// completed instead; fallback, when a source cancel was handed to the
+	// destination path).
+	MigrationCancelTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_migration_cancel_total",
+			Help: "Live-migration cancels by path (source | destination) and outcome (cancelled | ignored | fallback)",
+		},
+		[]string{"path", "outcome"},
+	)
+
 	// MigrationDowntimeSeconds observes status.observedDowntime for completed
 	// migrations (the operator-visible guest-unavailable window), by mode.
 	// Live migrations sit near the low buckets (~1-3s); offline span the
@@ -472,6 +486,7 @@ func init() {
 		ImageImportSeconds,
 		MigrationTotal,
 		MigrationFailuresTotal,
+		MigrationCancelTotal,
 		MigrationDowntimeSeconds,
 		MigrationTransferSeconds,
 		SnapshotTotal,

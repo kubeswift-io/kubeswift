@@ -15,6 +15,7 @@ import (
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/metrics"
 )
 
 // Migration action / status annotation keys read+written by swiftletd
@@ -215,6 +216,7 @@ func (r *SwiftMigrationReconciler) markCancelIgnored(
 	if perr := r.Status().Patch(ctx, mig, patch); perr != nil {
 		return false, ctrl.Result{}, fmt.Errorf("patch CancelIgnored condition: %w", perr)
 	}
+	metrics.MigrationCancelTotal.WithLabelValues(r.cancelPath(ctx, mig), cancelOutcomeIgnored).Inc()
 	if r.Recorder != nil {
 		r.Recorder.Event(mig, corev1.EventTypeNormal, "CancelIgnored",
 			"spec.cancelRequested=true received post-cutover; migration cannot be reversed")
@@ -258,6 +260,13 @@ func (r *SwiftMigrationReconciler) transitionCancelLive(
 			return r.finalizeCancelled(ctx, mig, "source SwiftGuest missing at cancel-time; nothing to clean up")
 		}
 		return ctrl.Result{}, fmt.Errorf("get source guest: %w", err)
+	}
+
+	// A source launcher that can cancel its own send does (cancel_source.go);
+	// the rest of this function is the destination-kill cancel, for older
+	// launchers and as that path's fallback.
+	if handled, res, err := r.cancelOnSource(ctx, mig, &guest); handled || err != nil {
+		return res, err
 	}
 
 	// Take this migration's send off the source first, so a launcher still
@@ -393,7 +402,11 @@ func (r *SwiftMigrationReconciler) transitionCancelLive(
 		return ctrl.Result{}, fmt.Errorf("delete destination pod %q: %w", dst.Name, delErr)
 	}
 
-	return r.finalizeCancelled(ctx, mig, cancelDetail)
+	res, ferr := r.finalizeCancelled(ctx, mig, cancelDetail)
+	if ferr == nil && !res.Requeue {
+		metrics.MigrationCancelTotal.WithLabelValues(cancelPathDestination, cancelOutcomeCancelled).Inc()
+	}
+	return res, ferr
 }
 
 // finalizeCancelled stamps the SwiftMigration to terminal Cancelled

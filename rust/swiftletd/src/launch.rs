@@ -1,5 +1,6 @@
 //! Hypervisor launch dispatch — Cloud Hypervisor or QEMU based on RuntimeIntent.hypervisor.
 
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -157,8 +158,11 @@ where
         "spawning cloud-hypervisor (receive) api_socket={}",
         api_socket.display()
     );
-    let mut child = spawn_ch_receive(&api_socket)
+    let events = crate::migevents::pipe_for_spawn();
+    let mut child = spawn_ch_receive(&api_socket, events.as_ref().map(|w| w.as_raw_fd()))
         .map_err(|e| format!("failed to spawn cloud-hypervisor (receive): {}", e))?;
+    // Only the child may hold the write end, or the stream never ends.
+    drop(events);
     let pid = child.id();
 
     // Phase 3a D1: persist the receiver CH PID alongside the api socket so
@@ -255,13 +259,16 @@ where
         api_socket.display(),
         source_url
     );
+    let events = crate::migevents::pipe_for_spawn();
     let mut child = spawn_ch_restore(
         &api_socket,
         &source_url,
         intent.restore_auto_resume(),
         intent.restore_memory_mode(),
+        events.as_ref().map(|w| w.as_raw_fd()),
     )
     .map_err(|e| format!("failed to spawn cloud-hypervisor (restore): {}", e))?;
+    drop(events);
     let pid = child.id();
 
     wait_for_socket(&api_socket, Duration::from_secs(30))?;
@@ -567,8 +574,12 @@ where
     let args = config.to_args();
     log::info!("spawning cloud-hypervisor args={:?}", args);
 
-    let mut child =
-        spawn_ch(&config).map_err(|e| format!("failed to spawn cloud-hypervisor: {}", e))?;
+    // Cloud Hypervisor's events (migevents.rs); the write end is the
+    // child's alone once it is spawned.
+    let events = crate::migevents::pipe_for_spawn();
+    let mut child = spawn_ch(&config, events.as_ref().map(|w| w.as_raw_fd()))
+        .map_err(|e| format!("failed to spawn cloud-hypervisor: {}", e))?;
+    drop(events);
     let pid = child.id();
     crate::shutdown::set_vmm_pid(pid);
 

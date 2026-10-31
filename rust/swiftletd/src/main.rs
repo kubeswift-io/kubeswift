@@ -8,6 +8,7 @@ mod kube_client;
 mod launch;
 mod lease;
 mod migconn;
+mod migevents;
 mod optional_shares;
 mod outputs;
 mod podwatch;
@@ -536,6 +537,7 @@ fn main() {
                     } else {
                         String::new()
                     };
+                    let api_socket = runtime_dir.api_socket();
                     move |pid: u32, serial_socket_path: String, hypervisor: String| {
                         log::info!(
                             "socket_ready pid={} serial={} hypervisor={}",
@@ -543,6 +545,15 @@ fn main() {
                             serial_socket_path,
                             hypervisor
                         );
+                        // What this launcher's Cloud Hypervisor supports; asked
+                        // only when it has an event stream (never for QEMU).
+                        let launcher_features =
+                            report::launcher_features(crate::migevents::stream().and_then(|_| {
+                                action::probe_ch_major(
+                                    &swift_ch_client::ApiClient::new(&api_socket)
+                                        .with_timeout(std::time::Duration::from_secs(5)),
+                                )
+                            }));
                         rt_clone.block_on(async {
                             let client = match kube_client::create_client().await {
                                 Ok(c) => c,
@@ -569,6 +580,7 @@ fn main() {
                                 serial_socket_path.as_str(),
                                 hypervisor.as_str(),
                                 features.as_str(),
+                                launcher_features.as_str(),
                             )
                             .await
                             {
