@@ -779,11 +779,26 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 		// before the move finds no launcher under the old name and would
 		// boot a second one -- two VMs on one disk. Never create from a
 		// guest whose launcher reference is no longer current.
-		if stale, err := r.launcherRefStale(ctx, &guest); err != nil {
+		live, err := r.liveGuest(ctx, &guest)
+		if err != nil {
 			return ctrl.Result{}, err
-		} else if stale {
+		}
+		if live == nil {
+			return ctrl.Result{}, nil // deleted since it was cached
+		}
+		if launcherRefStale(&guest, live) {
 			logger.Info("guest cache is behind its launcher reference; not creating a launcher", "cachedPodRef", canonicalPodName(&guest))
 			return ctrl.Result{RequeueAfter: time.Second}, nil
+		}
+		// An offline migration holding the guest starts it on the target
+		// itself; nobody else's runPolicy Running starts it here first (#899).
+		if mig, err := r.offlineMigrationHold(ctx, live); err != nil {
+			return ctrl.Result{}, err
+		} else if mig != "" {
+			logger.Info("an offline migration holds the guest; not creating a launcher", "swiftMigration", mig)
+			r.event(&guest, corev1.EventTypeNormal, "LauncherHeldByMigration",
+				"not starting a launcher: SwiftMigration %s holds the guest and starts it on its target node", mig)
+			return ctrl.Result{RequeueAfter: offlineMigrationHoldRetry}, nil
 		}
 		// Self-heal a stale migration PodRef before creating the pod.
 		// If status.PodRef points at a <guest>-mig-<uid> pod from a prior
