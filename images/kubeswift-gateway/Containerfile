@@ -1,5 +1,5 @@
 # Multi-stage build for kubeswift-gateway (the UI backend Connect hub).
-FROM golang:1.27-bookworm@sha256:21ade014faf952365b9ecbd8dbdb87176fbacb82fac9fb132d9f2a7b8cc3f132 AS builder
+FROM golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS builder
 WORKDIR /build
 
 ARG VERSION=dev
@@ -18,7 +18,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # access). ca-certificates are bundled so it can dial member API servers /
 # Prometheus over TLS via the system trust store (per-member CAs still come
 # from the credential Secret's ca.crt).
-FROM gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+FROM gcr.io/distroless/static:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329
 ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 LABEL org.opencontainers.image.version="${VERSION}"

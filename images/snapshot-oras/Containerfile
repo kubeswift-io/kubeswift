@@ -1,6 +1,6 @@
 # Multi-stage build for snapshot-oras (the OCI-registry / ORAS snapshot
 # uploader/downloader for the SwiftSnapshot "oci" backend).
-FROM golang:1.27-bookworm@sha256:21ade014faf952365b9ecbd8dbdb87176fbacb82fac9fb132d9f2a7b8cc3f132 AS builder
+FROM golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS builder
 WORKDIR /build
 
 ARG VERSION=dev
@@ -51,7 +51,7 @@ RUN cd /tmp \
     && install -m 0755 cosign-linux-amd64 /usr/local/bin/cosign
 
 # Runtime stage — needs CA certificates for TLS to the registry; nothing else.
-FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 LABEL org.opencontainers.image.version="${VERSION}"
