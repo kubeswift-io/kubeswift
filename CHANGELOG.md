@@ -6,6 +6,10 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A sandbox's guest console had no bound** (#855). Cloud Hypervisor wrote it straight to a file on an emptyDir without a size limit, so a guest that writes to its console without end filled the node's disk. Cloud Hypervisor now writes the console to a FIFO, and swiftletd copies it into the same file. It keeps the first 16 MiB (`KUBESWIFT_CONSOLE_MAX_BYTES`, the bound the warm workload log already uses), then a notice, and once the guest stops the last 64 KiB, which hold the exit-code marker. The copy never holds the guest up. This covers cold sandboxes and warm slots' boot consoles. Applies to sandboxes started after the upgrade.
+
 ## [v0.22.0] — 2026-10-31
 
 Live migration uses Cloud Hypervisor v54's migration events and its migration cancel (#895), and every way a live migration can be given up before it commits now stops the transfer on the source before the destination is removed (#893, #896). Before, a migration that hit `spec.timeout`, was deleted, or failed while Cloud Hypervisor was still sending could have its destination deleted while the transfer went on and then finished: the guest ended up running nowhere.
