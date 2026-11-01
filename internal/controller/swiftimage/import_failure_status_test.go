@@ -22,7 +22,7 @@ import (
 // any reason, so the conditions are checked with the apiserver's own rules.
 func TestReconcile_ImportStartFailureWritesAValidCondition(t *testing.T) {
 	for name, src := range map[string]imagev1alpha1.ImageSource{
-		"pvcClone":  {PVCClone: &imagev1alpha1.PVCCloneSource{Name: "src"}},
+		"pvcClone":  {PVCClone: &imagev1alpha1.PVCCloneSource{Name: "src", Namespace: "other"}},
 		"no source": {},
 	} {
 		scheme := testScheme()
@@ -55,7 +55,7 @@ func TestReconcile_ImportStartFailureWritesAValidCondition(t *testing.T) {
 		if reason != ReasonImportFailed || msg == "" {
 			t.Errorf("%s: reason %q message %q, want %s with the error as message", name, reason, msg, ReasonImportFailed)
 		}
-		if name == "pvcClone" && !strings.Contains(msg, "pvcClone is not implemented yet") {
+		if name == "pvcClone" && !strings.Contains(msg, "only import a PVC in its own namespace") {
 			t.Errorf("pvcClone: message %q", msg)
 		}
 	}
