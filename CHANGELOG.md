@@ -6,6 +6,10 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **SwiftImage `source.pvcClone`** (#902): make an image from a disk already in the cluster, such as a stopped guest's root disk, with no web server or registry round trip. A Block PVC is the disk; a Filesystem PVC holds it as `image.raw` at its root. The disk is copied, read-only from the source, so the image is independent of it once `Ready`. Only a PVC in the image's own namespace is accepted (webhook and controller). While a pod that has not finished uses the PVC, the image waits `Pending` with `SourceReady=False` (`SourceInUse`, naming the pod; also `SourceNotFound` and `SourceNotBound`). Before, the field was refused at creation (#715). CRD: swiftimages field descriptions only.
+
 ## [v0.22.0] — 2026-10-31
 
 Live migration uses Cloud Hypervisor v54's migration events and its migration cancel (#895), and every way a live migration can be given up before it commits now stops the transfer on the source before the destination is removed (#893, #896). Before, a migration that hit `spec.timeout`, was deleted, or failed while Cloud Hypervisor was still sending could have its destination deleted while the transfer went on and then finished: the guest ended up running nowhere.
