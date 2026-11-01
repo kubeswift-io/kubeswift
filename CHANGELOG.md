@@ -6,6 +6,20 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **An offline migration failed when something wrote `runPolicy: Running` back while it moved the guest** (#899). A GitOps controller correcting drift, or a `kubectl apply` of the original manifest, does this. The guest controller recreated the launcher on the source node, and the two controllers fought over the pod for about two minutes. The migration then failed with `atomicity invariant violated`, leaving the guest running on the source while `spec.nodeName` named the target. Now, while an offline migration holds the guest and has not cut over, the guest controller does not start a launcher, whatever `runPolicy` says (Event `LauncherHeldByMigration`). The guest starts on the target at cutover, or on its node again if the migration fails. Live migration was not affected.
+- A primary-on-NAD guest whose NAD's IPAM installs no default route (for example whereabouts without `routes`) got the bridge helper as its router. The launcher now falls back to the gateway in the NAD's IPAM config. The gateway is used only if it is an IPv4 address inside the interface's subnet (#845, #846).
+- The SwiftMigration controller no longer logs a `remove finalizer: ... not found` reconciler error after a SwiftMigration is deleted.
+
+### Changed
+
+- Dependencies: oras-go 2.7.0, golang.org/x/net 0.62.0, sha2 0.11, tokio 1.54, refreshed base image digests (#858, #859, #860, #900).
+
+### Docs
+
+- `docs/gitops/`: `runPolicy` is safe to keep in Git across an offline migration.
+
 ## [v0.22.0] — 2026-10-31
 
 Live migration uses Cloud Hypervisor v54's migration events and its migration cancel (#895), and every way a live migration can be given up before it commits now stops the transfer on the source before the destination is removed (#893, #896). Before, a migration that hit `spec.timeout`, was deleted, or failed while Cloud Hypervisor was still sending could have its destination deleted while the transfer went on and then finished: the guest ended up running nowhere.

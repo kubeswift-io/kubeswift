@@ -127,7 +127,9 @@ func (r *SwiftMigrationReconciler) ensureFinalizer(
 
 // removeFinalizer removes FinalizerName from the SwiftMigration. Called
 // after cleanup completes (cancellation path) or on terminal-phase
-// transition (Completed/Failed). Idempotent.
+// transition (Completed/Failed). Idempotent. A deleted SwiftMigration that is
+// already gone (another reconcile, reading it from the cache, removed the
+// finalizer first) has nothing left to remove.
 func (r *SwiftMigrationReconciler) removeFinalizer(
 	ctx context.Context,
 	mig *migrationv1alpha1.SwiftMigration,
@@ -144,7 +146,7 @@ func (r *SwiftMigrationReconciler) removeFinalizer(
 	}
 	patch := client.MergeFrom(mig.DeepCopy())
 	mig.Finalizers = append(mig.Finalizers[:idx], mig.Finalizers[idx+1:]...)
-	return r.Patch(ctx, mig, patch)
+	return client.IgnoreNotFound(r.Patch(ctx, mig, patch))
 }
 
 // handleCancellation processes deletion of an in-flight SwiftMigration.
