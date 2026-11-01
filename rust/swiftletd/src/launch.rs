@@ -327,6 +327,21 @@ where
             log::warn!("sandbox_console_link error={}", e);
         }
     }
+    // Every sandbox console (a cold sandbox's, a warm slot's boot) is copied
+    // into its file bounded, from a FIFO Cloud Hypervisor writes (#855). If the
+    // FIFO cannot be made, Cloud Hypervisor writes the file itself, unbounded,
+    // as before.
+    let serial_pipe = runtime_dir.root().join(crate::console::SERIAL_PIPE);
+    let serial_pump = if intent.is_sandbox() {
+        crate::console::SerialPump::start(
+            &serial_pipe,
+            Path::new(&format!("{}.log", serial_socket_path)),
+        )
+        .map_err(|e| log::warn!("sandbox_console_pump error={}; console unbounded", e))
+        .ok()
+    } else {
+        None
+    };
 
     let data_disk_paths = intent.data_disk_paths();
 
@@ -527,6 +542,9 @@ where
             initramfs_path: Some(kb.initramfs_path.clone()),
             kernel_cmdline: Some(kb.cmdline.clone()),
             is_sandbox: intent.is_sandbox(),
+            sandbox_serial_file: serial_pump
+                .as_ref()
+                .map(|_| serial_pipe.to_string_lossy().to_string()),
             sandbox_rootfs: intent.sandbox_rootfs_path().map(|s| s.to_string()),
             sandbox_config: sandbox_config_path.clone(),
             data_disk_paths: data_disk_paths.clone(),
@@ -559,6 +577,7 @@ where
             initramfs_path: None,
             kernel_cmdline: None,
             is_sandbox: false,
+            sandbox_serial_file: None,
             sandbox_rootfs: None,
             sandbox_config: None,
             data_disk_paths: data_disk_paths.clone(),
@@ -595,6 +614,11 @@ where
     }
 
     let status = child.wait().map_err(|e| format!("wait failed: {}", e))?;
+    // Cloud Hypervisor is gone: the console file is complete once the pump has
+    // copied the rest, before the caller reads the exit code from it.
+    if let Some(p) = serial_pump {
+        p.finish();
+    }
     Ok((status, pid, serial_socket_path))
 }
 
