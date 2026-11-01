@@ -564,6 +564,15 @@ func (r *SwiftImageReconciler) CheckImportStatus(ctx context.Context, img *image
 	}
 
 	if job.Status.Succeeded > 0 {
+		// A pvcClone import's finished pod still names the source PVC, and
+		// PVC protection keeps a PVC while a pod that uses it exists: the
+		// source could never be deleted. The Job keeps its Succeeded count
+		// without its pods, so this is safe to repeat.
+		if img.Spec.Source.PVCClone != nil {
+			if err := r.deleteJobPods(ctx, img.Namespace, jobName); err != nil {
+				return imagev1alpha1.SwiftImagePhaseImporting, nil, "", err
+			}
+		}
 		pvcRef := &imagev1alpha1.PVCObjectReference{
 			Name:      importPVCNamePrefix + img.Name,
 			Namespace: img.Namespace,
@@ -578,6 +587,21 @@ func (r *SwiftImageReconciler) CheckImportStatus(ctx context.Context, img *image
 		return imagev1alpha1.SwiftImagePhaseFailed, nil, msg, nil
 	}
 	return imagev1alpha1.SwiftImagePhaseImporting, nil, "", nil
+}
+
+// deleteJobPods deletes the pods of Job jobName (one by one: the controller
+// may delete pods, not delete collections of them).
+func (r *SwiftImageReconciler) deleteJobPods(ctx context.Context, namespace, jobName string) error {
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(namespace), client.MatchingLabels{"job-name": jobName}); err != nil {
+		return err
+	}
+	for i := range pods.Items {
+		if err := r.Delete(ctx, &pods.Items[i]); err != nil && !errors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 // jobFailed reports whether the Job has stopped retrying, and why. A failed pod

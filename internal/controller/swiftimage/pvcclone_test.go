@@ -205,3 +205,39 @@ func TestImportScriptPVC(t *testing.T) {
 		t.Error("windows: no GRUB patch")
 	}
 }
+
+// A pvcClone import's finished pod names the source PVC, and PVC protection
+// keeps a PVC while such a pod exists: the source could not be deleted (seen
+// on a lab cluster). Once the Job has succeeded its pods go; an http import's
+// are kept, as before.
+func TestPVCClone_FinishedImportReleasesTheSource(t *testing.T) {
+	for name, src := range map[string]imagev1alpha1.ImageSource{
+		"pvcClone": {PVCClone: &imagev1alpha1.PVCCloneSource{Name: "src"}},
+		"http":     {HTTP: &imagev1alpha1.HTTPSource{URL: "https://example.invalid/disk.img"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			img := pvcCloneImage("")
+			img.Spec.Source = src
+			img.Status.Phase = imagev1alpha1.SwiftImagePhaseImporting
+			jobName := names.JobName(importJobNamePrefix+"img", "")
+			job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: "default"},
+				Status: batchv1.JobStatus{Succeeded: 1}}
+			pod := podUsing("import-pod", corev1.PodSucceeded)
+			pod.Labels = map[string]string{"job-name": jobName}
+			scheme := testScheme()
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(img, job, pod).Build()
+			r := &SwiftImageReconciler{Client: c, Scheme: scheme}
+			for i := 0; i < 2; i++ { // repeatable
+				phase, _, msg, err := r.CheckImportStatus(context.Background(), img)
+				if err != nil || msg != "" || phase != imagev1alpha1.SwiftImagePhaseValidating {
+					t.Fatalf("pass %d: phase %q msg %q err %v", i, phase, msg, err)
+				}
+			}
+			var pods corev1.PodList
+			_ = c.List(context.Background(), &pods)
+			if kept := len(pods.Items) == 1; kept != (name == "http") {
+				t.Errorf("%s: import pods left = %d", name, len(pods.Items))
+			}
+		})
+	}
+}
