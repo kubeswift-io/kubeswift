@@ -226,6 +226,10 @@ type NICIntent struct {
 	// MultusInterface is the name of the Multus-created interface (net1, net2, etc.)
 	// Empty for the primary NIC.
 	MultusInterface string `json:"multusInterface,omitempty"`
+	// Gateway is the primary-on-NAD NIC's gateway from the NAD's IPAM config.
+	// network-init.sh hands it to the guest when the Multus interface has no
+	// default route to read it from. Empty for every other NIC.
+	Gateway string `json:"gateway,omitempty"`
 	// Bridge is the bridge device name (br0, br1, etc.)
 	// Empty for SR-IOV interfaces.
 	Bridge string `json:"bridge,omitempty"`
