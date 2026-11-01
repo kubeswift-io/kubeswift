@@ -258,26 +258,23 @@ func TestValidateUpdate_MetadataEditOnReadyImage_Allowed(t *testing.T) {
 	}
 }
 
-// source.pvcClone is in the API and was documented and offered in the UI, but
-// its import is a stub that always fails (#715). It is refused at creation;
-// an existing one (Failed since it was created) stays updatable, so its
-// finalizers can still be removed.
-func TestValidateSource_PVCClone_RefusedAtCreateOnly(t *testing.T) {
+// source.pvcClone reads a disk: only one in the image's own namespace (#902).
+func TestValidateSource_PVCClone_OwnNamespaceOnly(t *testing.T) {
 	v := &Validator{}
-	img := &imagev1alpha1.SwiftImage{
-		ObjectMeta: metav1.ObjectMeta{Name: "from-pvc", Namespace: "default"},
-		Spec: imagev1alpha1.SwiftImageSpec{
-			Format: imagev1alpha1.DiskFormatRaw,
-			Source: imagev1alpha1.ImageSource{PVCClone: &imagev1alpha1.PVCCloneSource{Name: "src"}},
-		},
-	}
-	_, err := v.ValidateCreate(context.Background(), img)
-	if err == nil || !strings.Contains(err.Error(), "pvcClone is not implemented yet") {
-		t.Errorf("create: want the not-implemented refusal, got %v", err)
-	}
-	updated := img.DeepCopy()
-	updated.Labels = map[string]string{"team": "a"}
-	if _, err := v.ValidateUpdate(context.Background(), img, updated); err != nil {
-		t.Errorf("update of an existing pvcClone image must be allowed: %v", err)
+	for ns, ok := range map[string]bool{"": true, "default": true, "other": false} {
+		img := &imagev1alpha1.SwiftImage{
+			ObjectMeta: metav1.ObjectMeta{Name: "from-pvc", Namespace: "default"},
+			Spec: imagev1alpha1.SwiftImageSpec{
+				Format: imagev1alpha1.DiskFormatRaw,
+				Source: imagev1alpha1.ImageSource{PVCClone: &imagev1alpha1.PVCCloneSource{Name: "src", Namespace: ns}},
+			},
+		}
+		_, err := v.ValidateCreate(context.Background(), img)
+		if ok && err != nil {
+			t.Errorf("namespace %q: refused: %v", ns, err)
+		}
+		if !ok && (err == nil || !strings.Contains(err.Error(), "own namespace")) {
+			t.Errorf("namespace %q: want the own-namespace refusal, got %v", ns, err)
+		}
 	}
 }

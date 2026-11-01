@@ -9,7 +9,7 @@ Fifteen CRDs across nine API groups. All `v1alpha1` (no stability guarantee).
 | SwiftGuest | `sg` | Namespaced | One VM; references class + image or kernel, optional seed and GPU profile |
 | SwiftGuestPool | `sgpool` | Namespaced | Fleet of identical VMs; replicas, rolling updates, spread, PVCs |
 | SwiftGuestClass | `sgc` | Cluster | CPU/memory/disk template; reusable |
-| SwiftImage | `si` | Namespaced | Disk source (HTTP or PVC clone); must be Ready before SwiftGuest |
+| SwiftImage | `si` | Namespaced | Disk source (HTTP, OCI or PVC clone); must be Ready before SwiftGuest |
 | SwiftSeedProfile | `ssp` | Namespaced | NoCloud cloud-init; optional (disk boot only) |
 | SwiftKernel | `sk` | Namespaced | Kernel + initramfs OCI artifact; must be Ready before SwiftGuest |
 | SwiftGPUProfile | `sgp` | Namespaced | GPU passthrough request (count, model, tier, topology) |
