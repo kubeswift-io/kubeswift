@@ -106,6 +106,10 @@ pub struct VmConfig {
     /// sandbox has no block rootfs but still needs the sandbox serial-to-file
     /// behaviour). Set false for regular kernel-boot / disk-boot guests.
     pub is_sandbox: bool,
+    /// Sandbox only: where `--serial file=` writes the guest console. None is
+    /// `<serial_socket_path>.log`; swiftletd sets a FIFO it copies, bounded,
+    /// into that file.
+    pub sandbox_serial_file: Option<String>,
     /// Mode-3 sandbox: the OCI image as a READ-ONLY root block device. Set only
     /// with kernel_path. Emitted as the FIRST --disk in the kernel-boot branch
     /// (path=<p>,readonly=on,image_type=raw — buffered, NOT direct=on, so
@@ -438,7 +442,10 @@ impl VmConfig {
                 // read-after-exit regardless of CH version. (v53 #8322 does now buffer
                 // pre-connect socket output — that removes the *other* old reason for
                 // `file=`, but not this one. Interactive exec/attach is over vsock.)
-                args.push(format!("file={}.log", path));
+                match self.sandbox_serial_file {
+                    Some(ref file) => args.push(format!("file={}", file)),
+                    None => args.push(format!("file={}.log", path)),
+                }
             } else {
                 // Serial socket: bidirectional; connect with socat for interactive console.
                 // Kernel cmdline comes from disk GRUB (patched during SwiftImage import for
@@ -588,6 +595,7 @@ mod tests {
             initramfs_path: None,
             kernel_cmdline: None,
             is_sandbox: false,
+            sandbox_serial_file: None,
             sandbox_rootfs: None,
             sandbox_config: None,
             data_disk_paths: vec![],
@@ -1090,6 +1098,15 @@ mod tests {
             !joined.contains("--serial socket="),
             "sandbox must not use an interactive serial socket: {}",
             joined
+        );
+        // swiftletd's bounded copy: CH writes the FIFO it names instead.
+        let mut piped = cfg.clone();
+        piped.sandbox_serial_file = Some("/tmp/serial.pipe".to_string());
+        let piped = piped.to_args().join(" ");
+        assert!(
+            piped.contains("--serial file=/tmp/serial.pipe") && !piped.contains("serial.sock.log"),
+            "sandbox serial file override not honoured: {}",
+            piped
         );
 
         // A normal faas kernel boot (no sandbox_rootfs, no seed/data) emits NO --disk.
