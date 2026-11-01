@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
@@ -25,6 +26,10 @@ const (
 	importVolumeMountPath = "/data"
 	importOutputFile      = "image.raw"
 	importSourceFile      = "source.img"
+	// pvcClone: where the source PVC appears in the import Job, read-only.
+	importPVCSourceMount  = "/source"
+	importPVCSourceDevice = "/dev/swiftimage-source"
+	importSourcePathEnv   = "SOURCE_PATH"
 )
 
 // importScript returns a shell script that downloads and converts the image.
@@ -156,6 +161,10 @@ type ImportResult struct {
 	PVCRef  *imagev1alpha1.PVCObjectReference
 	PVCPath string
 	Error   string
+	// WaitReason and WaitMessage: the import cannot start yet (a pvcClone
+	// source that is missing or in use). The image stays Pending, retried.
+	WaitReason  string
+	WaitMessage string
 }
 
 // StartImport begins import for the given SwiftImage. Returns the next phase and any PVC reference.
@@ -181,10 +190,13 @@ func (r *SwiftImageReconciler) StartImport(ctx context.Context, img *imagev1alph
 // on. The OCI import used to build its own PVC without the class (#714), which
 // put an OCI image, and the guests cloned from it, on the default class
 // whatever the field said.
-func (r *SwiftImageReconciler) ensureImportPVC(ctx context.Context, img *imagev1alpha1.SwiftImage, pvcName string) error {
+func (r *SwiftImageReconciler) ensureImportPVC(ctx context.Context, img *imagev1alpha1.SwiftImage, pvcName string, atLeast *resource.Quantity) error {
 	storageReq := resource.MustParse("10Gi")
 	if img.Spec.RootDisk != nil && img.Spec.RootDisk.Size != nil && !img.Spec.RootDisk.Size.IsZero() {
 		storageReq = *img.Spec.RootDisk.Size
+	}
+	if atLeast != nil && atLeast.Cmp(storageReq) > 0 {
+		storageReq = atLeast.DeepCopy()
 	}
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: pvcName, Namespace: img.Namespace},
@@ -210,22 +222,40 @@ func (r *SwiftImageReconciler) ensureImportPVC(ctx context.Context, img *imagev1
 func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha1.SwiftImage) (*ImportResult, error) {
 	pvcName := importPVCNamePrefix + img.Name
 	jobName := names.JobName(importJobNamePrefix+img.Name, "")
-	if err := r.ensureImportPVC(ctx, img, pvcName); err != nil {
+	if err := r.ensureImportPVC(ctx, img, pvcName, nil); err != nil {
 		return nil, err
 	}
 
 	// Import job: download and convert qcow2→raw (compact template).
 	// CH does not support qcow2 compressed blocks; runtime format is always raw.
 	// Per-guest disk sizing happens during the root disk clone step.
-	sourceURL := img.Spec.Source.HTTP.URL
-	sourceFormat := string(img.Spec.Format)
-	script := importScript(sourceFormat, string(img.Spec.OSType))
+	script := importScript(string(img.Spec.Format), string(img.Spec.OSType))
+	// The user-supplied URL rides as an env var, never spliced into the script
+	// text.
+	job := newImportJob(img, jobName, pvcName, script,
+		corev1.EnvVar{Name: importSourceURLEnv, Value: img.Spec.Source.HTTP.URL})
+	if err := controllerutil.SetControllerReference(img, job, r.Scheme); err != nil {
+		return nil, err
+	}
+	if err := r.Create(ctx, job); err != nil && !errors.IsAlreadyExists(err) {
+		return nil, err
+	}
+
+	return &ImportResult{
+		Phase:  imagev1alpha1.SwiftImagePhaseImporting,
+		PVCRef: &imagev1alpha1.PVCObjectReference{Name: pvcName, Namespace: img.Namespace},
+	}, nil
+}
+
+// newImportJob is the Job that writes the prepared disk into the import PVC
+// (mounted at /data) with script: the http and pvcClone imports.
+func newImportJob(img *imagev1alpha1.SwiftImage, jobName, pvcName, script string, env ...corev1.EnvVar) *batchv1.Job {
 	// The import Job needs privileged ONLY for the loop-mount the Linux GRUB
 	// serial-console patch performs. Windows skips that patch (no GRUB), so its
 	// import runs unprivileged (Design Principle: no privileged unless required).
 	// RunAsUser 0 is still needed either way to write the root-owned PVC.
 	privileged := img.Spec.OSType != imagev1alpha1.OSTypeWindows
-	job := &batchv1.Job{
+	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: img.Namespace},
 		Spec: batchv1.JobSpec{
 			Template: corev1.PodTemplateSpec{
@@ -246,9 +276,7 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 						// mirror served that day.
 						Image:   swiftguest.CloneJobImage(),
 						Command: []string{"sh", "-c", script},
-						// The user-supplied URL rides as an env var, never spliced
-						// into the script text.
-						Env: []corev1.EnvVar{{Name: importSourceURLEnv, Value: sourceURL}},
+						Env:     env,
 						SecurityContext: &corev1.SecurityContext{
 							// Privileged only for the Linux GRUB-patch loop-mount;
 							// false for Windows imports (no patch, no mount).
@@ -269,17 +297,6 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 			},
 		},
 	}
-	if err := controllerutil.SetControllerReference(img, job, r.Scheme); err != nil {
-		return nil, err
-	}
-	if err := r.Create(ctx, job); err != nil && !errors.IsAlreadyExists(err) {
-		return nil, err
-	}
-
-	return &ImportResult{
-		Phase:  imagev1alpha1.SwiftImagePhaseImporting,
-		PVCRef: &imagev1alpha1.PVCObjectReference{Name: pvcName, Namespace: img.Namespace},
-	}, nil
 }
 
 // importOCI creates the import PVC and a Job whose puller init container
@@ -292,7 +309,7 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 	}
 	pvcName := importPVCNamePrefix + img.Name
 	jobName := names.JobName(importJobNamePrefix+img.Name, "")
-	if err := r.ensureImportPVC(ctx, img, pvcName); err != nil {
+	if err := r.ensureImportPVC(ctx, img, pvcName, nil); err != nil {
 		return nil, err
 	}
 
@@ -423,10 +440,116 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 	}, nil
 }
 
-// importPVCClone fails the image: the pvcClone source is not implemented. The
-// webhook refuses it at creation; this is the answer when the webhook is off.
+// importPVCClone copies a disk from a PVC in the image's namespace into the
+// import PVC, then runs the same tail as the other sources. It waits, with the
+// SourceReady condition saying why, while the source PVC is missing, unbound
+// or used by a pod that has not finished.
 func (r *SwiftImageReconciler) importPVCClone(ctx context.Context, img *imagev1alpha1.SwiftImage) (*ImportResult, error) {
-	return &ImportResult{Phase: imagev1alpha1.SwiftImagePhaseFailed, Error: imagev1alpha1.PVCCloneNotImplemented}, nil
+	src := img.Spec.Source.PVCClone
+	// The webhook refuses this too; the controller is the enforcement when it
+	// is off (the chart default).
+	if src.Namespace != "" && src.Namespace != img.Namespace {
+		return &ImportResult{Phase: imagev1alpha1.SwiftImagePhaseFailed, Error: fmt.Sprintf(
+			"spec.source.pvcClone.namespace %q: a SwiftImage can only import a PVC in its own namespace (%q)", src.Namespace, img.Namespace)}, nil
+	}
+	var pvc corev1.PersistentVolumeClaim
+	if err := r.Get(ctx, types.NamespacedName{Namespace: img.Namespace, Name: src.Name}, &pvc); err != nil {
+		if errors.IsNotFound(err) {
+			return waitForSource(ReasonSourceNotFound, fmt.Sprintf("source PVC %q not found", src.Name)), nil
+		}
+		return nil, err
+	}
+	if pvc.Status.Phase != corev1.ClaimBound {
+		return waitForSource(ReasonSourceNotBound, fmt.Sprintf("source PVC %q is %s, not Bound", src.Name, pvc.Status.Phase)), nil
+	}
+	jobName := names.JobName(importJobNamePrefix+img.Name, "")
+	if user, err := r.pvcUser(ctx, img.Namespace, src.Name, jobName); err != nil {
+		return nil, err
+	} else if user != "" {
+		return waitForSource(ReasonSourceInUse, fmt.Sprintf(
+			"source PVC %q is in use by pod %q; stop what uses it (a guest: runPolicy Stopped) to import a consistent disk", src.Name, user)), nil
+	}
+
+	pvcName := importPVCNamePrefix + img.Name
+	// The import PVC holds the whole source disk: never smaller than the
+	// source, whatever spec.rootDisk.size says.
+	if err := r.ensureImportPVC(ctx, img, pvcName, pvc.Status.Capacity.Storage()); err != nil {
+		return nil, err
+	}
+	block := pvc.Spec.VolumeMode != nil && *pvc.Spec.VolumeMode == corev1.PersistentVolumeBlock
+	sourcePath := importPVCSourceMount + "/" + importOutputFile
+	if block {
+		sourcePath = importPVCSourceDevice
+	}
+	job := newImportJob(img, jobName, pvcName, importScriptPVC(string(img.Spec.Format), string(img.Spec.OSType)),
+		corev1.EnvVar{Name: importSourcePathEnv, Value: sourcePath})
+	pod := &job.Spec.Template.Spec
+	pod.Volumes = append(pod.Volumes, corev1.Volume{
+		Name: "source",
+		VolumeSource: corev1.VolumeSource{
+			// Read-only: the import never writes the source; the GRUB patch
+			// mounts the copy.
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: src.Name, ReadOnly: true},
+		},
+	})
+	if block {
+		pod.Containers[0].VolumeDevices = []corev1.VolumeDevice{{Name: "source", DevicePath: importPVCSourceDevice}}
+	} else {
+		pod.Containers[0].VolumeMounts = append(pod.Containers[0].VolumeMounts,
+			corev1.VolumeMount{Name: "source", MountPath: importPVCSourceMount, ReadOnly: true})
+	}
+	if err := controllerutil.SetControllerReference(img, job, r.Scheme); err != nil {
+		return nil, err
+	}
+	if err := r.Create(ctx, job); err != nil && !errors.IsAlreadyExists(err) {
+		return nil, err
+	}
+	return &ImportResult{
+		Phase:  imagev1alpha1.SwiftImagePhaseImporting,
+		PVCRef: &imagev1alpha1.PVCObjectReference{Name: pvcName, Namespace: img.Namespace},
+	}, nil
+}
+
+// waitForSource keeps a pvcClone image Pending, retried, with why.
+func waitForSource(reason, message string) *ImportResult {
+	return &ImportResult{Phase: imagev1alpha1.SwiftImagePhasePending, WaitReason: reason, WaitMessage: message}
+}
+
+// pvcUser returns a pod, other than the import Job's own, that has not
+// finished and uses PVC claim; "" when there is none.
+func (r *SwiftImageReconciler) pvcUser(ctx context.Context, namespace, claim, jobName string) (string, error) {
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(namespace)); err != nil {
+		return "", err
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed || p.Labels["job-name"] == jobName {
+			continue
+		}
+		for _, v := range p.Spec.Volumes {
+			if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == claim {
+				return p.Name, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// importScriptPVC is the main-container script for a source.pvcClone import:
+// copy the source disk ($SOURCE_PATH, a block device or a file, mounted
+// read-only) into $OUTPUT as raw, then the shared tail. qemu-img writes the
+// copy sparse, so the import PVC holds what the disk uses, not its size.
+func importScriptPVC(sourceFormat, osType string) string {
+	output := importVolumeMountPath + "/" + importOutputFile
+	check := ""
+	if sourceFormat == "qcow2" {
+		check = qcow2SafetyCheck(`"$SRC"`)
+	} else {
+		sourceFormat = "raw"
+	}
+	return fmt.Sprintf("set -e\nOUTPUT=%q\nSRC=\"$%s\"\n[ -e \"$SRC\" ] || { echo \"source disk $SRC not found in the source PVC (a Filesystem PVC holds it as %s at its root)\" >&2; exit 1; }\n%sqemu-img convert -f %s -O raw \"$SRC\" \"$OUTPUT\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"",
+		output, importSourcePathEnv, importOutputFile, check, sourceFormat, grubPatchBlock(osType))
 }
 
 // CheckImportStatus checks if an in-progress import (Job) has completed.

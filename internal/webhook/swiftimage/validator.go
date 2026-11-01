@@ -19,11 +19,6 @@ func (v *Validator) ValidateCreate(ctx context.Context, obj runtime.Object) (adm
 	if !ok {
 		return nil, fmt.Errorf("expected SwiftImage, got %T", obj)
 	}
-	// Create only: an existing pvcClone image (Failed since its creation) must
-	// stay updatable, or its finalizers could never be removed.
-	if img.Spec.Source.PVCClone != nil {
-		return nil, fmt.Errorf("%s", imagev1alpha1.PVCCloneNotImplemented)
-	}
 	return nil, validateSwiftImage(img)
 }
 
@@ -74,6 +69,11 @@ func validateSwiftImage(img *imagev1alpha1.SwiftImage) error {
 		n++
 		if src.PVCClone.Name == "" {
 			return fmt.Errorf("spec.source.pvcClone.name is required when pvcClone source is specified")
+		}
+		// A SwiftImage reads the disk it imports: another namespace's disk
+		// is not its to read.
+		if ns := src.PVCClone.Namespace; ns != "" && ns != img.Namespace {
+			return fmt.Errorf("spec.source.pvcClone.namespace %q: a SwiftImage can only import a PVC in its own namespace (%q)", ns, img.Namespace)
 		}
 	}
 	if src.OCI != nil {

@@ -92,6 +92,8 @@ func (r *SwiftImageReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	status := img.Status.DeepCopy()
+	// requeue is set by a step that waits on something nothing here watches.
+	var requeue time.Duration
 
 	switch phase {
 	case imagev1alpha1.SwiftImagePhasePending:
@@ -109,7 +111,14 @@ func (r *SwiftImageReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				SetPhase(status, imagev1alpha1.SwiftImagePhaseFailed)
 			}
 			SetFailedCondition(status, ReasonImportFailed, result.Error)
+		} else if result.WaitReason != "" {
+			SetPhase(status, imagev1alpha1.SwiftImagePhasePending)
+			SetSourceReadyCondition(status, false, result.WaitReason, result.WaitMessage)
+			requeue = sourceWaitRetry
 		} else {
+			if img.Spec.Source.PVCClone != nil {
+				SetSourceReadyCondition(status, true, ReasonSourceReady, "importing from the source PVC")
+			}
 			SetPhase(status, result.Phase)
 		}
 
@@ -212,8 +221,12 @@ func (r *SwiftImageReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		metrics.ImageImportTotal.WithLabelValues(img.Namespace, "failed").Inc()
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: requeue}, nil
 }
+
+// sourceWaitRetry is how often an image waiting for its pvcClone source looks
+// again: nothing here watches PVCs or the pods that use them.
+const sourceWaitRetry = 10 * time.Second
 
 // swiftGuestToSwiftImage enqueues the SwiftImage referenced by a
 // SwiftGuest. Used so SwiftImage deletion blocked on dependent guests
