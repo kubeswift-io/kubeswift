@@ -23,7 +23,7 @@ kube = { version = "4.2", features = ["client"] }
 # shape has been stable for many releases, so this is not load-bearing — but a
 # feature that trails the cluster by six minors invites a surprise that is not
 # worth carrying.
-k8s-openapi = { version = "0.28", features = ["v1_34"] }
+k8s-openapi = { version = "0.29", features = ["v1_34"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 swift-seed = { path = "../swift-seed" }
