@@ -10,11 +10,19 @@ import (
 const (
 	ConditionReady  = "Ready"
 	ConditionFailed = "Failed"
+	// ConditionSourceReady: a pvcClone source can be imported (exists, is
+	// Bound, and no pod that has not finished uses it).
+	ConditionSourceReady = "SourceReady"
 
 	ReasonReady          = "Ready"
 	ReasonImportFailed   = "ImportFailed"
 	ReasonValidateFailed = "ValidateFailed"
 	ReasonPrepareFailed  = "PrepareFailed"
+
+	ReasonSourceNotFound = "SourceNotFound"
+	ReasonSourceNotBound = "SourceNotBound"
+	ReasonSourceInUse    = "SourceInUse"
+	ReasonSourceReady    = "SourceReady"
 )
 
 // SetPhase updates status.phase.
@@ -45,10 +53,14 @@ func setCondition(status *imagev1alpha1.SwiftImageStatus, condType string, statu
 	now := metav1.Now()
 	for i := range status.Conditions {
 		if status.Conditions[i].Type == condType {
+			// The transition time moves only on a transition: a wait retried
+			// every few seconds keeps the time it started.
+			if status.Conditions[i].Status != statusVal {
+				status.Conditions[i].LastTransitionTime = now
+			}
 			status.Conditions[i].Status = statusVal
 			status.Conditions[i].Reason = reason
 			status.Conditions[i].Message = message
-			status.Conditions[i].LastTransitionTime = now
 			return
 		}
 	}
@@ -59,4 +71,13 @@ func setCondition(status *imagev1alpha1.SwiftImageStatus, condType string, statu
 		Message:            message,
 		LastTransitionTime: now,
 	})
+}
+
+// SetSourceReadyCondition records whether a pvcClone source can be imported.
+func SetSourceReadyCondition(status *imagev1alpha1.SwiftImageStatus, ready bool, reason, message string) {
+	v := metav1.ConditionFalse
+	if ready {
+		v = metav1.ConditionTrue
+	}
+	setCondition(status, ConditionSourceReady, v, reason, message)
 }

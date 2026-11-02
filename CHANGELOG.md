@@ -13,6 +13,10 @@ All notable changes to KubeSwift are documented here.
 - The SwiftMigration controller no longer logs a `remove finalizer: ... not found` reconciler error after a SwiftMigration is deleted.
 - **A sandbox's guest console had no bound** (#855). Cloud Hypervisor wrote it straight to a file on an emptyDir without a size limit, so a guest that writes to its console without end filled the node's disk. Cloud Hypervisor now writes the console to a FIFO, and swiftletd copies it into the same file. It keeps the first 16 MiB (`KUBESWIFT_CONSOLE_MAX_BYTES`, the bound the warm workload log already uses), then a notice, and once the guest stops the last 64 KiB, which hold the exit-code marker. The copy never holds the guest up. This covers cold sandboxes and warm slots' boot consoles. Applies to sandboxes started after the upgrade.
 
+### Added
+
+- **SwiftImage `source.pvcClone`** (#902): make an image from a disk already in the cluster, such as a stopped guest's root disk, with no web server or registry round trip. A Block PVC is the disk; a Filesystem PVC holds it as `image.raw` at its root. The disk is copied, read-only from the source, so the image is independent of it once `Ready`. Only a PVC in the image's own namespace is accepted (webhook and controller). While a pod that has not finished uses the PVC, the image waits `Pending` with `SourceReady=False` (`SourceInUse`, naming the pod; also `SourceNotFound` and `SourceNotBound`). Before, the field was refused at creation (#715). CRD: swiftimages field descriptions only.
+
 ### Changed
 
 - Dependencies: oras-go 2.7.0, golang.org/x/net 0.62.0, sha2 0.11, tokio 1.54, refreshed base image digests (#858, #859, #860, #900).

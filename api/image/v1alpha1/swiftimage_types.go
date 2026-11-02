@@ -68,13 +68,21 @@ type HTTPSource struct {
 	URL string `json:"url"`
 }
 
-// PVCCloneNotImplemented is why a SwiftImage with source.pvcClone is refused
-// at creation (webhook) or goes Failed (webhook off).
-const PVCCloneNotImplemented = "spec.source.pvcClone is not implemented yet: an image with this source can never be imported; use spec.source.http or spec.source.oci"
-
-// PVCCloneSource specifies a source PVC to clone from.
+// PVCCloneSource imports a disk that is already in a PVC of the image's own
+// namespace: a disk prepared by hand, or a stopped guest's root disk. The
+// disk is copied into the image's import PVC, so the image does not depend on
+// the source once it is Ready. A Block PVC is the disk itself; a Filesystem
+// PVC holds it as image.raw at its root, the layout of every KubeSwift disk
+// PVC. spec.format is the disk's format (raw or qcow2). The import waits while
+// a pod that is not finished uses the PVC: an image of a disk that is still
+// being written is not consistent.
 type PVCCloneSource struct {
-	Name      string `json:"name"`
+	// Name of the source PVC.
+	Name string `json:"name"`
+	// Namespace of the source PVC. Only the image's own namespace is
+	// accepted: a SwiftImage cannot read another namespace's disk. Empty
+	// means the image's namespace.
+	// +optional
 	Namespace string `json:"namespace,omitempty"`
 }
 
@@ -128,8 +136,8 @@ type OCIImageSource struct {
 // ImageSource defines the source of an image.
 type ImageSource struct {
 	HTTP *HTTPSource `json:"http,omitempty"`
-	// PVCClone is not implemented yet: an image with this source is refused
-	// at creation, or, with the admission webhook disabled, goes Failed.
+	// PVCClone copies a disk from a PVC in the image's namespace.
+	// +optional
 	PVCClone *PVCCloneSource `json:"pvcClone,omitempty"`
 	// OCI pulls a golden raw disk artifact from an OCI registry (P3).
 	// +optional

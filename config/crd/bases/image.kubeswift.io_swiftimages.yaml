@@ -192,13 +192,17 @@ spec:
                     - repository
                     type: object
                   pvcClone:
-                    description: |-
-                      PVCClone is not implemented yet: an image with this source is refused
-                      at creation, or, with the admission webhook disabled, goes Failed.
+                    description: PVCClone copies a disk from a PVC in the image's
+                      namespace.
                     properties:
                       name:
+                        description: Name of the source PVC.
                         type: string
                       namespace:
+                        description: |-
+                          Namespace of the source PVC. Only the image's own namespace is
+                          accepted: a SwiftImage cannot read another namespace's disk. Empty
+                          means the image's namespace.
                         type: string
                     required:
                     - name

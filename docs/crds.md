@@ -172,7 +172,7 @@ Represents a VM disk image. The controller imports, converts, and patches the im
 |-------|------|----------|-------------|
 | `source.http.url` | string | No* | HTTP(S) URL to download the image from. |
 | `source.oci` | OCIImageSource | No* | Golden image in an OCI registry: `repository` plus `tag` or `digest`. See [golden images](registry/golden-images.md). |
-| `source.pvcClone` | PVCCloneSource | — | **Not implemented yet**; refused at creation. |
+| `source.pvcClone` | PVCCloneSource | No* | Copy a disk from a PVC in the image's namespace (`name`; `namespace` empty or the image's own). Block PVC = the disk; Filesystem PVC = `image.raw` at its root. Waits while a pod uses the PVC. See [SwiftImage](api/swiftimage.md#source-pvc-clone). |
 | `format` | enum | Yes | Source format: `raw` or `qcow2`. Ubuntu cloud images are `qcow2`. |
 | `rootDisk.size` | Quantity | No | PVC size for the imported image (defaults to 10Gi). Should match SwiftGuestClass `rootDisk.size`. |
 
