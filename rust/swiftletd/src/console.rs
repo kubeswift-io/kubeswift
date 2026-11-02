@@ -6,8 +6,12 @@
 //! `-c console`) instead of an exec into this privileged container. That
 //! volume holds only console files: no socket, no runtime state.
 //!
-//! - A cold sandbox's guest console (`serial.log`): Cloud Hypervisor writes
-//!   `<run>/serial.sock.log`, which is a link to it here.
+//! - A cold sandbox's guest console (`serial.log`): `<run>/serial.sock.log`,
+//!   which is a link to it here. Cloud Hypervisor writes the console to a FIFO
+//!   ([`SERIAL_PIPE`]) and swiftletd copies it there, bounded ([`SerialPump`]):
+//!   a guest that writes to its console without end cannot fill the node's
+//!   disk. A warm slot's boot console goes through the same pump, into the run
+//!   directory.
 //! - A warm slot's checked-out workload (`workload.log`): written here, as it
 //!   runs, from the guest agent's stream, and bounded ([`WorkloadLog`]). The
 //!   slot's own boot console stays in the run directory, so the console
@@ -16,16 +20,34 @@
 //! Without the volume (`KUBESWIFT_CONSOLE_DIR` unset: an older controller)
 //! both files stay in the run directory, as before.
 
+use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Environment variable naming the console volume's mount point.
 pub const DIR_ENV: &str = "KUBESWIFT_CONSOLE_DIR";
-/// Environment variable bounding the workload log, in bytes.
+/// Environment variable bounding the workload log and a sandbox's guest
+/// console, in bytes (each).
 pub const MAX_BYTES_ENV: &str = "KUBESWIFT_CONSOLE_MAX_BYTES";
 /// Default bound on a workload's console output kept on the node.
 pub const DEFAULT_MAX_BYTES: u64 = 16 << 20;
+/// File name, in the run directory, of the FIFO Cloud Hypervisor writes a
+/// sandbox's guest console to.
+pub const SERIAL_PIPE: &str = "serial.pipe";
+/// How much of the end of a guest console past the bound is kept: the
+/// bridge-init's exit-code marker is in its last lines, and swiftletd reads
+/// it from there (`report::SANDBOX_CONSOLE_TAIL_BYTES`).
+pub const SERIAL_TAIL_BYTES: usize = 64 << 10;
+
+fn max_bytes() -> u64 {
+    std::env::var(MAX_BYTES_ENV)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_MAX_BYTES)
+}
 
 /// File name of a cold sandbox's guest console in the console directory.
 pub const SERIAL_LOG: &str = "serial.log";
@@ -128,10 +150,7 @@ impl WorkloadLog {
     /// directory (with the run-directory path linked to it), else in the run
     /// directory.
     pub fn open(run_dir: &Path) -> Self {
-        let max = std::env::var(MAX_BYTES_ENV)
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_MAX_BYTES);
+        let max = max_bytes();
         let path = match dir() {
             Some(d) => {
                 if let Err(e) = link_into(&d, &run_dir.join(WORKLOAD_LOG), WORKLOAD_LOG) {
@@ -186,6 +205,196 @@ impl WorkloadLog {
     /// Bytes kept and bytes dropped.
     pub fn totals(&self) -> (u64, u64) {
         (self.written, self.dropped)
+    }
+}
+
+/// A guest console, bounded: the first `max` bytes, then one notice, and when
+/// the console ends, the last [`SERIAL_TAIL_BYTES`] of what was not kept. The
+/// end is what matters after the bound: the exit-code marker is in it.
+struct BoundedConsole {
+    file: Option<File>,
+    max: u64,
+    written: u64,
+    dropped: u64,
+    tail: VecDeque<u8>,
+}
+
+impl BoundedConsole {
+    fn new(file: Option<File>, max: u64) -> Self {
+        BoundedConsole {
+            file,
+            max,
+            written: 0,
+            dropped: 0,
+            tail: VecDeque::new(),
+        }
+    }
+
+    fn put(&mut self, data: &[u8]) {
+        // A write that fails (a full disk) is dropped: the guest's console is
+        // never held up by its copy.
+        if let Some(f) = self.file.as_mut() {
+            let _ = f.write_all(data);
+        }
+    }
+
+    fn write(&mut self, data: &[u8]) {
+        let room = self.max.saturating_sub(self.written) as usize;
+        let (keep, rest) = data.split_at(data.len().min(room));
+        if !keep.is_empty() {
+            self.put(keep);
+            self.written += keep.len() as u64;
+        }
+        if rest.is_empty() {
+            return;
+        }
+        if self.dropped == 0 {
+            let notice = format!(
+                "\n[kubeswift: console output past {} bytes is not kept; its last {} bytes follow when the guest stops]\n",
+                self.max, SERIAL_TAIL_BYTES
+            );
+            self.put(notice.as_bytes());
+        }
+        self.dropped += rest.len() as u64;
+        let rest = &rest[rest.len().saturating_sub(SERIAL_TAIL_BYTES)..];
+        self.tail.extend(rest);
+        let excess = self.tail.len().saturating_sub(SERIAL_TAIL_BYTES);
+        self.tail.drain(..excess);
+    }
+
+    /// Writes the kept end, once the console has ended.
+    fn finish(&mut self) {
+        if self.dropped == 0 {
+            return;
+        }
+        let skipped = self.dropped - self.tail.len() as u64;
+        let notice = format!(
+            "\n[kubeswift: {} bytes not kept; the last {} follow]\n",
+            skipped,
+            self.tail.len()
+        );
+        self.put(notice.as_bytes());
+        let (a, b) = self.tail.as_slices();
+        let (a, b) = (a.to_vec(), b.to_vec());
+        self.put(&a);
+        self.put(&b);
+    }
+}
+
+/// Copies a sandbox's guest console from the FIFO Cloud Hypervisor writes to
+/// into its console file, bounded. Started before Cloud Hypervisor, finished
+/// once it has exited: everything it wrote is then in the FIFO, and the file
+/// is complete before the exit-code marker is read from it. Dropping it
+/// finishes it too.
+pub struct SerialPump {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl SerialPump {
+    /// Creates the FIFO at `pipe` and starts copying it into `out` (opened
+    /// for append, following a link into the console directory).
+    pub fn start(pipe: &Path, out: &Path) -> std::io::Result<Self> {
+        Self::start_with(pipe, out, max_bytes())
+    }
+
+    fn start_with(pipe: &Path, out: &Path, max: u64) -> std::io::Result<Self> {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::OpenOptionsExt;
+        match std::fs::remove_file(pipe) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+        let c = std::ffi::CString::new(pipe.as_os_str().as_bytes())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        // SAFETY: c is a valid NUL-terminated path.
+        if unsafe { libc::mkfifo(c.as_ptr(), 0o600) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // Read-write: neither this open nor Cloud Hypervisor's waits for the
+        // other, and holding a writer means no end of file before it starts.
+        // The end is the stop flag, set once Cloud Hypervisor has exited.
+        let fifo = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_CLOEXEC)
+            .open(pipe)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o644)
+            .open(out)
+            .map_err(|e| log::warn!("sandbox_console_open path={} error={}", out.display(), e))
+            .ok();
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let thread = std::thread::Builder::new()
+            .name("serial-pump".into())
+            .spawn(move || pump(fifo, BoundedConsole::new(file, max), &flag))?;
+        Ok(SerialPump {
+            stop,
+            thread: Some(thread),
+        })
+    }
+
+    /// Copies what is left in the FIFO and writes the console's end.
+    pub fn finish(self) {}
+}
+
+impl Drop for SerialPump {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+fn pump(mut fifo: File, mut out: BoundedConsole, stop: &AtomicBool) {
+    use std::os::unix::io::AsRawFd;
+    let mut buf = vec![0u8; 64 << 10];
+    loop {
+        // Once stopped, only what is already in the FIFO is left: poll
+        // without waiting until it is empty.
+        let stopping = stop.load(Ordering::SeqCst);
+        let mut pfd = libc::pollfd {
+            fd: fifo.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid pollfd.
+        let n = unsafe { libc::poll(&mut pfd, 1, if stopping { 0 } else { 200 }) };
+        if n < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            log::warn!("sandbox_console_poll error={}", e);
+            break;
+        }
+        if n == 0 {
+            if stopping {
+                break;
+            }
+            continue;
+        }
+        match fifo.read(&mut buf) {
+            Ok(0) => break,
+            Ok(k) => out.write(&buf[..k]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => {
+                log::warn!("sandbox_console_read error={}", e);
+                break;
+            }
+        }
+    }
+    out.finish();
+    if out.dropped > 0 {
+        log::info!(
+            "sandbox_console_bounded kept={} dropped={}",
+            out.written,
+            out.dropped
+        );
     }
 }
 
@@ -257,6 +466,86 @@ mod tests {
             .unwrap();
         let err = r.read(&mut [0u8; 8]).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock);
+    }
+
+    /// Writes `chunks` into the pump's FIFO as Cloud Hypervisor does
+    /// (`File::create`: create + truncate, write-only), then finishes the pump
+    /// as the launcher does once Cloud Hypervisor has exited.
+    fn run_pump(tag: &str, max: u64, chunks: &[&[u8]]) -> Vec<u8> {
+        let d = tmp(tag);
+        let pipe = d.join(SERIAL_PIPE);
+        let out = d.join("serial.sock.log");
+        let pump = SerialPump::start_with(&pipe, &out, max).unwrap();
+        {
+            let mut w = File::create(&pipe).unwrap();
+            for c in chunks {
+                w.write_all(c).unwrap();
+            }
+        }
+        pump.finish();
+        std::fs::read(&out).unwrap()
+    }
+
+    #[test]
+    fn a_console_under_the_bound_is_copied_whole() {
+        let got = run_pump(
+            "pump-small",
+            1 << 20,
+            &[b"boot\n", b"KUBESWIFT-EXIT-CODE=3\n"],
+        );
+        assert_eq!(got, b"boot\nKUBESWIFT-EXIT-CODE=3\n");
+    }
+
+    // #855: a guest that writes to its console without end keeps only the
+    // head and the end, and the exit-code marker in the end is still read.
+    #[test]
+    fn an_endless_console_keeps_its_head_and_its_end() {
+        let noise = vec![b'x'; 1 << 20];
+        let mut chunks: Vec<&[u8]> = vec![b"boot\n"];
+        for _ in 0..8 {
+            chunks.push(&noise);
+        }
+        chunks.push(b"\nKUBESWIFT-EXIT-CODE=7\n");
+        let got = run_pump("pump-big", 4096, &chunks);
+        assert!(
+            got.len() < 4096 + SERIAL_TAIL_BYTES + 512,
+            "len {}",
+            got.len()
+        );
+        assert!(got.starts_with(b"boot\n"));
+        let text = String::from_utf8_lossy(&got);
+        assert_eq!(text.matches("[kubeswift: ").count(), 2, "two notices");
+        assert!(text.ends_with("KUBESWIFT-EXIT-CODE=7\n"));
+        let d = tmp("pump-big-read");
+        let f = d.join("console");
+        std::fs::write(&f, &got).unwrap();
+        let tail = crate::report::read_console_tail(
+            f.to_str().unwrap(),
+            crate::report::SANDBOX_CONSOLE_TAIL_BYTES,
+        )
+        .unwrap();
+        assert_eq!(crate::report::parse_sandbox_exit_code(&tail), Some(7));
+    }
+
+    // The copy never holds the guest up: with its output file unwritable,
+    // the FIFO is still drained, so the writer never blocks.
+    #[test]
+    fn the_writer_never_waits_for_the_copy() {
+        let d = tmp("pump-nofile");
+        let pipe = d.join(SERIAL_PIPE);
+        let out = d.join("missing-dir").join("serial.sock.log");
+        let pump = SerialPump::start_with(&pipe, &out, 1024).unwrap();
+        let p = pipe.clone();
+        let writer = std::thread::spawn(move || {
+            let mut w = File::create(&p).unwrap();
+            let chunk = vec![b'y'; 1 << 16];
+            for _ in 0..64 {
+                w.write_all(&chunk).unwrap(); // 4 MiB through a 64 KiB FIFO
+            }
+        });
+        writer.join().unwrap();
+        pump.finish();
+        assert!(!out.exists());
     }
 
     #[test]
