@@ -37,6 +37,7 @@
 |---|---|---|
 | A guest you edited with `kubectl` keeps reverting | That's GitOps drift correction | make the change in Git (or remove the resource from Git management) |
 | Migration "fights" Flux — guest bounces between nodes | `spec.nodeName` pinned in the Git manifest while the migration controller rewrites it | remove `nodeName` from the Git-managed spec |
+| Guest shows the event `LauncherHeldByMigration` | An offline SwiftMigration holds the guest; Flux set `runPolicy: Running` back during the move | nothing; the guest starts on the target node when the migration cuts over, or back on its node if the migration fails |
 | A sandbox runs over and over on the reconcile interval | A `SwiftSandbox` with `spec.ttl` is committed to Git: it reaches a terminal phase, the TTL deletes it, Flux recreates it | do not Git-manage SwiftSandbox. Commit a `SwiftSandboxPool` and create sandboxes imperatively or from a job |
 | A committed sandbox shows `Completed` and never runs again | Expected: a SwiftSandbox runs once. Re-running means deleting it, which Git cannot express | same as above — sandboxes are not desired state |
 | A snapshot or migration re-fires after it succeeded | Same loop, with `SwiftSnapshot` / `SwiftMigration` / `SwiftRestore` | commit a `SwiftSnapshotSchedule` instead; keep one-shot verbs out of Git |

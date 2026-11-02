@@ -227,6 +227,21 @@ func TestEnsureFinalizer_Idempotent(t *testing.T) {
 	}
 }
 
+// A reconcile reading a deleted SwiftMigration from the cache, after another
+// one already removed the finalizer and the object went, has nothing to do: it
+// used to fail with a "not found" reconciler error.
+func TestRemoveFinalizer_AlreadyGone(t *testing.T) {
+	scheme := preparingScheme(t)
+	mig := newMigration("m", "default")
+	mig.Finalizers = []string{FinalizerName}
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	if err := r.removeFinalizer(context.Background(), mig); err != nil {
+		t.Fatalf("removeFinalizer on a migration that is gone: %v", err)
+	}
+}
+
 // TestOnTerminalPhase_FailedPreCutover_RestoresRunPolicy verifies the
 // dispatchResult-driven cleanup: when a phase handler returns
 // errMsg!=nil and we transition to Failed, the source guest's

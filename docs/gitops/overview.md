@@ -76,6 +76,11 @@ the audit trail of every VM-fleet change). For a single dev cluster,
   migration controller is a *spec* change on a Git-managed object — keep
   `nodeName` out of Git-managed guest specs (let the scheduler/migration own
   placement), or Flux will fight the migration controller.
+  `runPolicy` is safe to keep in Git. An offline migration sets it to `Stopped`
+  while it moves the guest, and Flux writes `Running` back. The guest still
+  waits for the migration and starts on the target node. A guest that Git
+  declares `Stopped` is started on the target by the migration, then stopped
+  again by Flux.
 - **Scale subresources and Git are two writers.** `SwiftGuestPool.spec.replicas`
   and `SwiftSandboxPool.spec.minWarm` both back a `scale` subresource, so
   `kubectl scale` and any HPA-style autoscaler write the same field Git owns.

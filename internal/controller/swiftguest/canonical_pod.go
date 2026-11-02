@@ -2,12 +2,14 @@ package swiftguest
 
 import (
 	"context"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
@@ -95,17 +97,64 @@ func staleMigrationPodRef(guest *swiftv1alpha1.SwiftGuest) bool {
 		guest.Status.PodRef.Name != guest.Name
 }
 
-// launcherRefStale reports whether the guest's launcher reference
-// (canonicalPodName) has moved on the API server since the copy being
-// reconciled was cached. Reads uncached; false when there is no APIReader or
-// the guest is gone.
-func (r *SwiftGuestReconciler) launcherRefStale(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) (bool, error) {
+// liveGuest reads the guest uncached, for the checks made just before a
+// launcher is created. Without an APIReader it returns the guest as given; nil
+// when the guest is gone.
+func (r *SwiftGuestReconciler) liveGuest(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) (*swiftv1alpha1.SwiftGuest, error) {
 	if r.APIReader == nil {
-		return false, nil
+		return guest, nil
 	}
 	var live swiftv1alpha1.SwiftGuest
 	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(guest), &live); err != nil {
-		return false, client.IgnoreNotFound(err)
+		return nil, client.IgnoreNotFound(err)
 	}
-	return canonicalPodName(&live) != canonicalPodName(guest), nil
+	return &live, nil
+}
+
+// launcherRefStale reports whether the guest's launcher reference
+// (canonicalPodName) has moved on the API server (live) since the copy being
+// reconciled was cached.
+func launcherRefStale(guest, live *swiftv1alpha1.SwiftGuest) bool {
+	return canonicalPodName(live) != canonicalPodName(guest)
+}
+
+// offlineMigrationHoldRetry is how often a guest held by an offline migration
+// looks again. The migration's cutover patch and its cleanup on failure both
+// write the guest, which wakes it sooner.
+const offlineMigrationHoldRetry = 5 * time.Second
+
+// offlineMigrationHold returns the offline SwiftMigration that holds the guest
+// before its cutover, or "". Such a migration claimed the guest (the
+// migration-in-progress marker, runPolicy Stopped), deleted the launcher, and
+// starts the guest on the target itself, with one patch of runPolicy Running and
+// spec.nodeName. Until that patch, a runPolicy Running written by someone else
+// (a GitOps controller correcting drift, a kubectl apply) must not bring the
+// launcher back on the source: it would hold the disk the migration is moving
+// and fail the migration with the guest left pinned to a node it is not on
+// (#899). live is the guest read uncached, so a cache older than the claim
+// cannot miss the marker.
+func (r *SwiftGuestReconciler) offlineMigrationHold(ctx context.Context, live *swiftv1alpha1.SwiftGuest) (string, error) {
+	name := live.Annotations[migrationv1alpha1.AnnotationMigrationInProgress]
+	if name == "" {
+		return "", nil
+	}
+	var reader client.Reader = r.Client
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
+	var mig migrationv1alpha1.SwiftMigration
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: live.Namespace, Name: name}, &mig); err != nil {
+		// A marker without its migration holds nothing.
+		return "", client.IgnoreNotFound(err)
+	}
+	switch mig.Status.Phase {
+	case migrationv1alpha1.SwiftMigrationPhaseCompleted,
+		migrationv1alpha1.SwiftMigrationPhaseFailed,
+		migrationv1alpha1.SwiftMigrationPhaseCancelled:
+		return "", nil
+	}
+	if target := mig.Spec.Target.NodeName; target != "" && live.Spec.NodeName == target {
+		return "", nil // cut over: the launcher is the destination's
+	}
+	return name, nil
 }
