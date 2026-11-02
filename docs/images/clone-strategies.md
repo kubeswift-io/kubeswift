@@ -11,22 +11,30 @@ When a SwiftGuest boots from a SwiftImage, KubeSwift produces a per-guest root-d
 | `copy` (default) | Per-guest Copy Job: `cp` from the SwiftImage PVC to the new PVC, then `qemu-img resize` + `sgdisk -e` | Any CSI driver, including non-snapshot-capable ones (local-path, NFS, hostPath) |
 | `snapshot` | CSI VolumeSnapshot of the SwiftImage PVC + per-guest `dataSource: VolumeSnapshot` clones, expand-and-wait gate before guest pod schedule | Snapshot-capable CSI drivers (Longhorn, Rook Ceph, EBS, GCE PD) |
 
-The `snapshot` strategy is substantially faster on most snapshot-capable drivers because it skips the per-guest `cp` (≈8–12 GiB read + write for Ubuntu Noble). On true copy-on-write drivers (Rook Ceph, EBS, GCE PD) the speedup is dramatic — the `dataSource` clone and the expand are metadata operations, not data copies.
+On a true copy-on-write driver (Rook Ceph RBD, EBS, GCE PD) `snapshot` skips the per-guest `cp` (≈8–12 GiB read + write for Ubuntu Noble): the `dataSource` clone and the expand are metadata operations, not data copies. On a full-copy driver (Longhorn) it does not save the copy, and is usually slower.
 
-> **Caveat — full-copy drivers at single-guest scale can be *slower* with `snapshot`.**
-> On a full-copy driver like Longhorn the `dataSource` clone is itself a full
-> copy, and because Longhorn refuses different-size clones the PVC is created at
-> the *source* size and then expanded to the target — an **expand-and-wait** gate
-> plus a `clone-grow-init` container before the guest boots. When the resize
-> delta is large (e.g. a 10 GiB image → a 40 GiB guest), that overhead can exceed
-> what it saves: the snapshot-walkthrough measured `snapshot` **34 s slower** than
-> `copy` booting one guest (147 s vs 113 s). The Phase 0 spike's ≈3× Longhorn
-> speedup was measured on a small, matched-size source and at concurrent-clone
-> (fleet) scale, where `snapshot` clones run in parallel while `copy` Jobs
-> serialize on the source PVC. So on Longhorn: **fleet scale or matched size →
-> `snapshot` wins; single guest with a large resize delta → `copy` wins.** True
-> CoW drivers do not have this inversion (the expand is free). See the F7 finding
-> in [`../snapshots/operator-walkthrough.md`](../snapshots/operator-walkthrough.md).
+Measured on a three-node test cluster (v0.22.0, Ubuntu Noble, image disk the same size as the guest's, so no resize; seconds from creating the SwiftGuest to the guest's IP):
+
+| Storage | Strategy | 1 guest | 4 guests at once (first / last) |
+|---|---|---|---|
+| Longhorn | `copy` | 79 | 176 / 247 |
+| Longhorn | `snapshot` | 160 | 163 / 287 |
+| Rook Ceph RBD (Filesystem) | `copy` | 132 | not measured |
+| Rook Ceph RBD (Filesystem) | `snapshot` | 72 | 90 / 92 |
+
+> **Longhorn: keep `copy`.** A Longhorn `dataSource` clone is itself a full copy,
+> made by the storage instead of a Job, and it was slower than `copy` both for one
+> guest and for four at once, even with no resize. The earlier ≈3× Longhorn
+> figure (Phase 0 spike, small source) did not reproduce. With a large resize
+> delta it is slower still: the PVC is created at the *source* size and expanded
+> (Longhorn refuses different-size clones), then `clone-grow-init` runs (see the
+> F7 finding in [`../snapshots/operator-walkthrough.md`](../snapshots/operator-walkthrough.md)).
+> While a Longhorn clone is still copying, the guest already reports
+> `StorageReady=True`; it starts once the clone finishes (#909).
+>
+> **Rook Ceph RBD: `snapshot` is ≈2× faster for one guest and ≈2.7× for four**,
+> and the four finish together because no data is copied. Filesystem root disks
+> only (see the warning below).
 
 The default is **`copy`** for backward compatibility. Existing SwiftImages keep working unchanged.
 
@@ -34,11 +42,13 @@ The default is **`copy`** for backward compatibility. Existing SwiftImages keep 
 
 Use **copy** when:
 - Your storage class is local-path / NFS / hostPath — anything without VolumeSnapshot support.
+- Your storage is a full-copy driver such as Longhorn (`snapshot` is slower there).
+- The root disk is `volumeMode: Block` on Rook Ceph RBD (see the warning below).
 - You only run a handful of guests per image and start-up speed isn't a hot path.
 - You want behaviour identical to KubeSwift v0.1.
 
 Use **snapshot** when:
-- Your storage class is backed by a snapshot-capable CSI driver.
+- Your storage class is backed by a copy-on-write CSI driver (Rook Ceph RBD with a Filesystem root disk, EBS, GCE PD).
 - You scale a SwiftGuestPool, fan out from a base image, or care about cold-start latency.
 - You want one clean lifecycle for both clone seeds and user-facing snapshots (the same VolumeSnapshot machinery powers both — see [`docs/snapshots/csi-snapshots.md`](../snapshots/csi-snapshots.md)).
 
@@ -91,8 +101,8 @@ The behaviour you observe depends on what your CSI driver does for `VolumeSnapsh
 
 | CSI driver | Snapshot semantics | Clone semantics | Speedup vs copy |
 |---|---|---|---|
-| **Longhorn (validated)** | Block-level snapshot | Full-copy from snapshot at clone time | Up to ≈3× at fleet scale on a small, matched-size source; none or slower for a single guest (the v0.15.0 lab measured 0.7×: copy 78 s, snapshot 110 s). See the caveat above. |
-| **Rook Ceph RBD** (validated 2026-08-16) | RBD snapshot (CoW) | RBD clone (CoW) | Measured ~1.5x to first boot at a 6 GiB source; the clone PVC itself binds with no data movement. **Filesystem root disks only — see the warning below.** |
+| **Longhorn (validated)** | Block-level snapshot | Full-copy from snapshot at clone time | None: slower than `copy` (0.5× for one guest, 0.9× for the last of four). Keep `copy`. |
+| **Rook Ceph RBD** (validated 2026-08-16) | RBD snapshot (CoW) | RBD clone (CoW) | ≈2× for one guest, ≈2.7× for four (to the guest's IP); the clone PVC binds with no data movement. **Filesystem root disks only — see the warning below.** |
 | **AWS EBS** (untested in Phase 0) | EBS snapshot | EBS clone (CoW with hydration) | Expected: large (no full data copy) |
 | **GCE PD** (untested in Phase 0) | PD snapshot | PD clone | Expected: large |
 | **local-path / NFS / hostPath** | Not supported — must use `cloneStrategy: copy` | n/a | n/a |
