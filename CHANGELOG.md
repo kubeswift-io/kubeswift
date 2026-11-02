@@ -19,11 +19,13 @@ All notable changes to KubeSwift are documented here.
 
 ### Changed
 
-- Dependencies: oras-go 2.7.0, golang.org/x/net 0.62.0, sha2 0.11, tokio 1.54, refreshed base image digests (#858, #859, #860, #900).
+- **swiftletd: kube 5.0 with k8s-openapi 0.29** (#905). A major version of the Kubernetes client the launcher uses for its pod annotations and its own pod watch; no source change was needed.
+- Dependencies: oras-go 2.7.0, golang.org/x/net 0.62.0, Kubernetes Go modules 0.37.2, go-uuid 1.0.4, go-abnf 0.5.4, sha2 0.11, tokio 1.54, refreshed base image digests (#858, #859, #860, #900, #906, #907, #908).
 
 ### Docs
 
 - `docs/gitops/`: `runPolicy` is safe to keep in Git across an offline migration.
+- `docs/images/clone-strategies.md`: measured `copy` vs `snapshot` times. On Longhorn `snapshot` was slower (keep `copy`); on Rook Ceph RBD it was about 2× faster for one guest and 2.7× for four (Filesystem root disks only) (#910).
 
 ## [v0.22.0] — 2026-10-31
 
