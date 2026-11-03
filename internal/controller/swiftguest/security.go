@@ -94,10 +94,10 @@ func cloneGrowInitContainer(rg *resolved.ResolvedGuest, targetBytes int64) corev
 		// the raw image to the block device).
 		script = fmt.Sprintf(`set -e
 echo "clone-grow-init: Block mode, target=%d bytes, device=%s"
-sgdisk -e %s || sgdisk -e %s  # a first run that repairs the table can exit 4 (#875)
+%s
 sync
 echo "clone-grow-init: complete (Block)"`,
-			targetBytes, DiskRootDevicePath, DiskRootDevicePath, DiskRootDevicePath)
+			targetBytes, DiskRootDevicePath, growPartitionTable(DiskRootDevicePath))
 		volumeDevices = []corev1.VolumeDevice{
 			{Name: "root-disk", DevicePath: DiskRootDevicePath},
 		}
@@ -108,10 +108,10 @@ echo "clone-grow-init: complete (Block)"`,
 		script = fmt.Sprintf(`set -e
 echo "clone-grow-init: target=%d bytes"
 qemu-img resize -f raw %s/image.raw %d
-sgdisk -e %s/image.raw || sgdisk -e %s/image.raw  # a first run that repairs the table can exit 4 (#875)
+%s
 sync
 echo "clone-grow-init: complete ($(stat -c %%s %s/image.raw) bytes)"`,
-			targetBytes, DisksRootPath, targetBytes, DisksRootPath, DisksRootPath, DisksRootPath)
+			targetBytes, DisksRootPath, targetBytes, growPartitionTable(DisksRootPath+"/image.raw"), DisksRootPath)
 		volumeMounts = []corev1.VolumeMount{
 			{Name: "root-disk", MountPath: DisksRootPath},
 		}
@@ -157,4 +157,22 @@ func gpuInitSecurityContext() *corev1.SecurityContext {
 func launcherSecurityContext(hasGPU bool) *corev1.SecurityContext {
 	_ = hasGPU // both paths are privileged today; see the comment above
 	return privilegedContext()
+}
+
+// growPartitionTable is the shell step that moves a GPT's backup header to the
+// end of a grown root disk (`sgdisk -e`). A first run that repairs the table
+// can exit 4, so a failure is retried once (#875). sgdisk writes nothing when
+// it finds no GPT it can repair: exit 3 for an MBR disk or an xorriso hybrid
+// ISO, exit 2 with "Invalid partition data" for an isohybrid ISO whose MBR
+// partition starts at sector 0 (exit 2 alone also means an unreadable disk).
+// There is no backup header to move, the guest grows an MBR partition itself,
+// and an installer ISO must not be rewritten, so such a disk is left as it is
+// (#912).
+func growPartitionTable(disk string) string {
+	return fmt.Sprintf(`rc=0; out=$(sgdisk -e %[1]s 2>&1) || rc=$?; echo "$out"
+case "$rc:$out" in
+  0:*) ;;
+  3:*|2:*"Invalid partition data"*) echo "%[1]s has no GPT sgdisk can repair (MBR or hybrid ISO): partition table left unchanged" ;;
+  *) sgdisk -e %[1]s ;;
+esac`, disk)
 }

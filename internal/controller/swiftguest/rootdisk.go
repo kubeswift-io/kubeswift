@@ -540,11 +540,11 @@ func (r *SwiftGuestReconciler) createCloneJob(
 		script = fmt.Sprintf(`set -e
 echo "Cloning root disk from %s to %s (%d bytes, Block mode -> %s)"
 qemu-img convert -f raw -O raw /src/image.raw %s
-sgdisk -e %s || sgdisk -e %s  # a first run that repairs the table can exit 4 (#875)
+%s
 sync
 echo "Clone complete (Block mode)"`,
 			sourcePVC, clonePVC, targetBytes, CloneJobBlockDevicePath,
-			CloneJobBlockDevicePath, CloneJobBlockDevicePath, CloneJobBlockDevicePath)
+			CloneJobBlockDevicePath, growPartitionTable(CloneJobBlockDevicePath))
 		volumeMounts = []corev1.VolumeMount{
 			{Name: "src", MountPath: "/src", ReadOnly: true},
 		}
@@ -560,10 +560,10 @@ echo "Clone complete (Block mode)"`,
 echo "Cloning root disk from %s to %s (%d bytes)"
 cp /src/image.raw /dst/image.raw
 qemu-img resize -f raw /dst/image.raw %d
-sgdisk -e /dst/image.raw || sgdisk -e /dst/image.raw  # a first run that repairs the table can exit 4 (#875)
+%s
 sync
 echo "Clone complete: $(stat -c %%s /dst/image.raw) bytes"`,
-			sourcePVC, clonePVC, targetBytes, targetBytes)
+			sourcePVC, clonePVC, targetBytes, targetBytes, growPartitionTable("/dst/image.raw"))
 		volumeMounts = []corev1.VolumeMount{
 			{Name: "src", MountPath: "/src", ReadOnly: true},
 			{Name: "dst", MountPath: "/dst"},
