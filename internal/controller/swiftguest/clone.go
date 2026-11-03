@@ -61,6 +61,14 @@ func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 		// Transient — the snapshot may still be Capturing/Uploading.
 		return nil, nil, "", true, nil
 	}
+	// A memory snapshot from a later Cloud Hypervisor than the launcher's
+	// cannot be restored (#871). Checked before the first launcher only: a
+	// clone already running keeps running.
+	if guest.Status.PodRef == nil {
+		if msg := clonecommon.HypervisorVersionRefusal(snap.Status.HypervisorVersion, clonecommon.CloudHypervisorVersion); msg != "" {
+			return nil, nil, "SwiftSnapshot " + snap.Name + ": " + msg, false, nil
+		}
+	}
 
 	// Resolve the on-node snapshot directory + the node the clone runs on.
 	// Tier B (local): the snapshot already lives on its capture node. Tier C

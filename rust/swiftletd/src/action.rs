@@ -2146,12 +2146,22 @@ pub(crate) fn sanitize_ch_error(raw: &str) -> &'static str {
 
 /// The local Cloud Hypervisor's major version, asked up to three times.
 pub(crate) fn probe_ch_major(client: &swift_ch_client::ApiClient) -> Option<u32> {
+    probe_ch_version(client)
+        .and_then(|v| v.major_minor())
+        .map(|(major, _)| major)
+}
+
+/// The local Cloud Hypervisor's version (`vmm.ping`), asked up to three times;
+/// only a version that parses is returned.
+pub(crate) fn probe_ch_version(
+    client: &swift_ch_client::ApiClient,
+) -> Option<swift_ch_client::VmmVersion> {
     for attempt in 0..3 {
         if attempt > 0 {
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
-        if let Some((major, _)) = client.version().ok().and_then(|v| v.major_minor()) {
-            return Some(major);
+        if let Some(v) = client.version().ok().filter(|v| v.major_minor().is_some()) {
+            return Some(v);
         }
     }
     None

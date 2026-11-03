@@ -18,6 +18,9 @@ const (
 	ReasonSourceGuestGone  = "SourceGuestGone"
 	ReasonTargetConflict   = "TargetConflict"
 	ReasonRestoreFailed    = "RestoreFailed"
+	// ReasonHypervisorVersionIncompatible: the memory snapshot was captured
+	// by a later Cloud Hypervisor than the one that would restore it (#871).
+	ReasonHypervisorVersionIncompatible = "HypervisorVersionIncompatible"
 	// ReasonOverwriteUnsupported: overwriteExisting asked to restore over an
 	// existing guest in a mode that cannot replace its state.
 	ReasonOverwriteUnsupported = "OverwriteUnsupported"

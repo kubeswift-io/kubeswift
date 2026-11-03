@@ -545,15 +545,26 @@ fn main() {
                             serial_socket_path,
                             hypervisor
                         );
-                        // What this launcher's Cloud Hypervisor supports; asked
-                        // only when it has an event stream (never for QEMU).
-                        let launcher_features =
-                            report::launcher_features(crate::migevents::stream().and_then(|_| {
-                                action::probe_ch_major(
+                        // The Cloud Hypervisor version, recorded on the pod so a
+                        // snapshot can record what captured it (never for QEMU).
+                        let ch_version = (hypervisor == "cloud-hypervisor")
+                            .then(|| {
+                                action::probe_ch_version(
                                     &swift_ch_client::ApiClient::new(&api_socket)
                                         .with_timeout(std::time::Duration::from_secs(5)),
                                 )
+                            })
+                            .flatten();
+                        // What this launcher's Cloud Hypervisor supports; only
+                        // when it has an event stream.
+                        let launcher_features =
+                            report::launcher_features(crate::migevents::stream().and_then(|_| {
+                                ch_version
+                                    .as_ref()
+                                    .and_then(|v| v.major_minor())
+                                    .map(|(major, _)| major)
                             }));
+                        let ch_version = ch_version.map(|v| v.build_version).unwrap_or_default();
                         rt_clone.block_on(async {
                             let client = match kube_client::create_client().await {
                                 Ok(c) => c,
@@ -581,6 +592,7 @@ fn main() {
                                 hypervisor.as_str(),
                                 features.as_str(),
                                 launcher_features.as_str(),
+                                ch_version.as_str(),
                             )
                             .await
                             {
