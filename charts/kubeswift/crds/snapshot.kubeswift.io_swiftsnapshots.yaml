@@ -576,6 +576,12 @@ spec:
                       Tag is the memory artifact's tag; a full-state snapshot's disks are
                       tagged <tag>-disk and <tag>-disk-<disk>.
                     type: string
+                  verifyKey:
+                    description: |-
+                      VerifyKey is the location's cosign public key at resolution. Every
+                      artifact a restore or clone pulls (memory and full-state disks) must
+                      carry a valid signature for it; empty means not verified.
+                    type: string
                   volumeSnapshotClassName:
                     description: |-
                       VolumeSnapshotClassName is the class a csi-volume-snapshot snapshot

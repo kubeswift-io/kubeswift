@@ -30,6 +30,8 @@ import (
 	"fmt"
 	"os"
 
+	"oras.land/oras-go/v2/registry/remote"
+
 	"github.com/kubeswift-io/kubeswift/internal/oci"
 )
 
@@ -61,8 +63,8 @@ func main() {
 	insecure := flag.Bool("insecure", false, "allow a plaintext (http) registry — UNSAFE; in-cluster / test registry only")
 	snapName := flag.String("snapshot", "", "ns/name of the SwiftSnapshot, recorded in the manifest annotations (upload only)")
 	includeMemory := flag.Bool("include-memory", false, "record includeMemory=true in the manifest (upload only)")
-	signKey := flag.String("sign-key", "", "path to a cosign private key; when set, cosign-sign the pushed artifact as an OCI referrer (upload only; COSIGN_PASSWORD from env)")
-	verifyKey := flag.String("verify-key", "", "path to a cosign public key; when set, cosign-verify the artifact before pulling (download-image only; requires a TLS registry)")
+	signKey := flag.String("sign-key", "", "path to a cosign private key; when set, cosign-sign the pushed artifact as an OCI referrer (upload, upload-image; COSIGN_PASSWORD from env)")
+	verifyKey := flag.String("verify-key", "", "path to a cosign public key; when set, cosign-verify the artifact before pulling (download, download-image; requires a TLS registry). A PEM key in $"+verifyKeyEnv+" is used when this is empty")
 	file := flag.String("file", "", "raw disk image path — golden-image chunking (upload-image: source; download-image: destination)")
 	chunkSizeMiB := flag.Int("chunk-size-mib", 64, "chunk size in MiB for golden-image chunking (upload-image only)")
 	osType := flag.String("os-type", "linux", "os family recorded in the golden-image config: linux | windows (upload-image only)")
@@ -74,6 +76,15 @@ func main() {
 	if err := oci.SetRegistryCA(os.Getenv(oci.RegistryCAEnv)); err != nil {
 		fmt.Fprintln(os.Stderr, "snapshot-oras:", err)
 		os.Exit(1)
+	}
+
+	if *verifyKey == "" && os.Getenv(verifyKeyEnv) != "" {
+		path, err := writeVerifyKey(os.Getenv(verifyKeyEnv))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "snapshot-oras:", err)
+			os.Exit(1)
+		}
+		*verifyKey = path
 	}
 
 	if err := run(runArgs{
@@ -166,6 +177,10 @@ func run(a runArgs) error {
 		if a.digest != "" {
 			pullRef = a.digest // pinned pull by digest
 		}
+		pullRef, err := a.verified(ctx, repo, pullRef)
+		if err != nil {
+			return err
+		}
 		desc, err := pullAndMaterialize(ctx, repo, pullRef, a.dir)
 		if err != nil {
 			return err
@@ -182,31 +197,29 @@ func run(a runArgs) error {
 		if err != nil {
 			return err
 		}
-		reportTransfer(transferStats{
+		stats := transferStats{
 			TransferredBytes: r.TransferredBytes,
 			SkippedBytes:     r.SkippedBytes,
 			TotalBytes:       r.TotalBytes,
 			Reference:        ref,
 			ManifestDigest:   r.ManifestDigest,
-		})
+		}
+		if a.signKey != "" {
+			// Strict, as for upload: never report an unsigned disk as signed.
+			if err := oci.Sign(ctx, a.repository, r.ManifestDigest, a.signKey, a.insecure); err != nil {
+				return err
+			}
+			stats.Signed = true
+		}
+		reportTransfer(stats)
 	case "download-image":
 		pullRef := a.tag
 		if a.digest != "" {
 			pullRef = a.digest // pinned pull by digest
 		}
-		if a.verifyKey != "" {
-			// Verify BEFORE trusting any bytes: resolve the ref to a digest,
-			// cosign-verify that digest, then pull by the SAME digest — TOCTOU-safe
-			// (a tag can't be swapped between the verify and the pull). A failed
-			// verify returns here, so nothing is reassembled into the PVC.
-			vdesc, verr := repo.Resolve(ctx, pullRef)
-			if verr != nil {
-				return fmt.Errorf("resolve %s for verify: %w", pullRef, verr)
-			}
-			if verr := oci.Verify(ctx, a.repository, vdesc.Digest.String(), a.verifyKey); verr != nil {
-				return verr
-			}
-			pullRef = vdesc.Digest.String()
+		pullRef, err := a.verified(ctx, repo, pullRef)
+		if err != nil {
+			return err
 		}
 		desc, err := oci.PullAndReassemble(ctx, repo, pullRef, a.file)
 		if err != nil {
@@ -217,4 +230,43 @@ func run(a runArgs) error {
 		return deleteArtifact(ctx, repo, a.digest)
 	}
 	return nil
+}
+
+// verifyKeyEnv carries a PEM cosign public key (the controller's
+// clonecommon.VerifyKeyEnvName): a snapshot's key comes from its storage
+// location, inline, not from a Secret file.
+const verifyKeyEnv = "KUBESWIFT_VERIFY_KEY"
+
+// writeVerifyKey writes a PEM key to a file under TMPDIR for cosign.
+func writeVerifyKey(pem string) (string, error) {
+	f, err := os.CreateTemp("", "verify-*.pub")
+	if err != nil {
+		return "", fmt.Errorf("write verify key: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(pem); err != nil {
+		return "", fmt.Errorf("write verify key: %w", err)
+	}
+	return f.Name(), nil
+}
+
+// verified returns the reference to pull. With a verify key it verifies BEFORE
+// trusting any bytes: resolve the ref to a digest, cosign-verify that digest,
+// then pull by the SAME digest, so a tag cannot be swapped between the verify
+// and the pull. A failed verify returns an error and nothing is written.
+func (a runArgs) verified(ctx context.Context, repo *remote.Repository, pullRef string) (string, error) {
+	if a.verifyKey == "" {
+		return pullRef, nil
+	}
+	if a.insecure {
+		return "", fmt.Errorf("signature verification needs a TLS registry: %s is plaintext (insecure)", a.repository)
+	}
+	vdesc, err := repo.Resolve(ctx, pullRef)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s for verify: %w", pullRef, err)
+	}
+	if err := oci.Verify(ctx, a.repository, vdesc.Digest.String(), a.verifyKey); err != nil {
+		return "", err
+	}
+	return vdesc.Digest.String(), nil
 }

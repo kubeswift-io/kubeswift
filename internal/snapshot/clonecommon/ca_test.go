@@ -104,3 +104,30 @@ func TestBuildOCIDownloadJob_CABundle(t *testing.T) {
 		}
 	}
 }
+
+// A verify key reaches snapshot-oras as an env var, with a writable home for
+// cosign; without one the Job is unchanged (#703).
+func TestBuildOCIDownloadJob_VerifyKey(t *testing.T) {
+	p := OCIDownloadJobParams{Snapshot: locatedSnap("SwiftClusterStorageLocation/main", ""), Repository: "r", Tag: "t", Name: "j", Namespace: "team-a", VerifyKey: "PEM"}
+	spec := BuildOCIDownloadJob(p).Spec.Template.Spec
+	env := map[string]string{}
+	for _, e := range spec.Containers[0].Env {
+		env[e.Name] = e.Value
+	}
+	if env[VerifyKeyEnvName] != "PEM" || env["HOME"] != "/cosign-home" || env["TMPDIR"] != "/cosign-home" {
+		t.Errorf("env = %v", env)
+	}
+	var home bool
+	for _, v := range spec.Volumes {
+		home = home || (v.Name == "cosign-home" && v.EmptyDir != nil)
+	}
+	if !home {
+		t.Error("no writable cosign home")
+	}
+	p.VerifyKey = ""
+	for _, e := range BuildOCIDownloadJob(p).Spec.Template.Spec.Containers[0].Env {
+		if e.Name == VerifyKeyEnvName {
+			t.Error("no key, no verification")
+		}
+	}
+}

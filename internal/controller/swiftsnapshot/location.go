@@ -80,6 +80,7 @@ func (r *SwiftSnapshotReconciler) resolveLocation(ctx context.Context, snap *sna
 		CABundle:              o.CABundle,
 		CredentialsSecretName: storagelocation.CredentialsSecret(o),
 		SigningKeySecretName:  o.SigningKeySecretName,
+		VerifyKey:             o.VerifyKey,
 	}
 	wait, err = storagelocation.CheckSecrets(ctx, r.Client, snap.Namespace, loc.CredentialsSecretName, loc.SigningKeySecretName)
 	if err != nil || wait != nil {

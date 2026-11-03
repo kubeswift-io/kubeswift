@@ -2,10 +2,12 @@ package swiftsnapshot
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
 	volumesnapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -326,5 +328,51 @@ func TestLocation_CABundleReachesTheJobs(t *testing.T) {
 	snap.Status.Location.CABundle = ""
 	if hasCA(buildOCIPushJob(snap, "img", "node-1").Spec.Template.Spec.Containers[0].Env) {
 		t.Error("no recorded bundle, no variable")
+	}
+}
+
+// A signing location signs every artifact a full-state snapshot pushes, the
+// disks too, so a restore that verifies finds no unsigned part (#703).
+func TestLocation_SigningCoversDiskArtifacts(t *testing.T) {
+	snap := locSnap()
+	snap.Status.Location = &snapshotv1alpha1.SnapshotLocation{
+		Source: "SwiftClusterStorageLocation/main", Repository: "registry.example.com/k/team-a/snapshots", Tag: "snap1-0f1e2d3c",
+		SigningKeySecretName: "cosign",
+	}
+	for name, job := range map[string]*batchv1.Job{
+		"push":       buildOCIPushJob(snap, "img", "node-1"),
+		"disk chunk": buildChunkJob(snap, "img", "node-1", "j", "t-disk", "pvc", true),
+	} {
+		c := job.Spec.Template.Spec.Containers[0]
+		if !slices.Contains(c.Args, "--sign-key="+ociSignKeyMount+"/cosign.key") {
+			t.Errorf("%s Job does not sign: %v", name, c.Args)
+		}
+		var keyVol bool
+		for _, v := range job.Spec.Template.Spec.Volumes {
+			keyVol = keyVol || (v.Secret != nil && v.Secret.SecretName == "cosign")
+		}
+		if !keyVol {
+			t.Errorf("%s Job does not mount the signing Secret", name)
+		}
+	}
+	snap.Status.Location.SigningKeySecretName = ""
+	if c := buildChunkJob(snap, "img", "node-1", "j", "t-disk", "pvc", true).Spec.Template.Spec.Containers[0]; strings.Contains(strings.Join(c.Args, " "), "--sign-key") {
+		t.Error("no signing key, no signing")
+	}
+}
+
+// The location's verify key is recorded with the rest of it, so restores and
+// clones verify against the key in force when the snapshot was taken.
+func TestLocation_VerifyKeyRecorded(t *testing.T) {
+	const key = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdkexNGckTVr/ADwl/1Nh/R9g6vJV\nxG1aWFEBVhr4eBvJXWNaZWtQSMFvXnw4064nXFwAhLOpYIkgPqCxdDyV/g==\n-----END PUBLIC KEY-----\n"
+	snap := locSnap()
+	r, c := newReconciler(t, snap, clusterLocation("main", true,
+		&storagev1alpha1.OCILocation{Repository: "registry.example.com/kubeswift", Anonymous: true, VerifyKey: key}, nil))
+	got, _ := reconcileSnap(t, r, c, snap)
+	if got.Status.Location == nil || got.Status.Location.VerifyKey != key {
+		t.Fatalf("status.location = %+v, want the verify key recorded", got.Status.Location)
+	}
+	if conn, _ := clonecommon.SnapshotOCI(&got); conn.VerifyKey != key {
+		t.Errorf("SnapshotOCI verify key = %q", conn.VerifyKey)
 	}
 }

@@ -739,8 +739,8 @@ Where KubeSwift keeps the artifacts it pushes to a registry, set once for the cl
 | `oci.caBundle` | string | PEM CA certificates to trust in addition to the system roots, for a registry behind a private CA. Every Job that pushes, pulls or deletes a snapshot's artifacts trusts the bundle the snapshot recorded; restores, clones and deletions also trust the location's current bundle, so a CA rotated after the push still works. |
 | `oci.credentialsSecretName` | string | Name of the `kubernetes.io/dockerconfigjson` Secret each consuming namespace provides; never read from another namespace. Default `kubeswift-registry`. |
 | `oci.anonymous` | bool | The registry needs no credentials. Excludes `credentialsSecretName`. |
-| `oci.signingKeySecretName` | string | cosign key pair Secret (consumer's namespace) that signs every push. |
-| `oci.verifyKey` | string | PEM cosign public key that pulled artifacts must be signed with. |
+| `oci.signingKeySecretName` | string | cosign key pair Secret (consumer's namespace) that signs every push: a snapshot's memory artifact and each full-state disk artifact. |
+| `oci.verifyKey` | string | PEM cosign public key that pulled artifacts must be signed with. A snapshot records it in `status.location.verifyKey`; every restore or clone download (memory and disks) verifies the artifact's signature before it pulls, and fails on a missing or wrong signature. Needs a TLS registry: with `insecure: true` the download fails. |
 | `csi.volumeSnapshotClassName` | string | VolumeSnapshotClass for csi-volume-snapshot snapshots that name none. |
 
 Status conditions: `Valid` (the spec is well formed), `Ready` (valid, and not one of several defaults), and, on a cluster location only, `Reachable` (the registry answered `GET /v2/`, probed from the controller's pod every 10 minutes; the controller never probes a host a namespace chose).

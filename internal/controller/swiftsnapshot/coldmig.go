@@ -390,6 +390,14 @@ func buildChunkJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode, job
 		})
 	}
 
+	// Sign the disk artifact like the memory one: a signed snapshot has no
+	// unsigned part for a verifying restore to refuse.
+	sArgs, sMounts, sEnv, sVolumes := ociSigning(snap)
+	container.Args = append(container.Args, sArgs...)
+	container.VolumeMounts = append(container.VolumeMounts, sMounts...)
+	container.Env = append(container.Env, sEnv...)
+	volumes = append(volumes, sVolumes...)
+
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
