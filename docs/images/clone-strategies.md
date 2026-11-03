@@ -29,8 +29,9 @@ Measured on a three-node test cluster (v0.22.0, Ubuntu Noble, image disk the sam
 > delta it is slower still: the PVC is created at the *source* size and expanded
 > (Longhorn refuses different-size clones), then `clone-grow-init` runs (see the
 > F7 finding in [`../snapshots/operator-walkthrough.md`](../snapshots/operator-walkthrough.md)).
-> While a Longhorn clone is still copying, the guest already reports
-> `StorageReady=True`; it starts once the clone finishes (#909).
+> While a Longhorn clone is still copying, the guest stays in `Scheduling` with
+> `StorageReady=False`: `RootDiskAttaching` (Longhorn refuses the attach until the
+> copy is done), then `RootDiskMounting`.
 >
 > **Rook Ceph RBD: `snapshot` is ≈2× faster for one guest and ≈2.7× for four**,
 > and the four finish together because no data is copied. Filesystem root disks
