@@ -29,6 +29,7 @@ All notable changes to KubeSwift are documented here.
 ### Docs
 
 - `docs/gitops/`: `runPolicy` is safe to keep in Git across an offline migration.
+- `docs/snapshots/clone-from-snapshot.md`: load `vmgenid` in a snapshot's source so clones reseed their RNG on resume; on Ubuntu 24.04 it needs `linux-modules-extra` (#870).
 - `docs/images/clone-strategies.md`: measured `copy` vs `snapshot` times. On Longhorn `snapshot` was slower (keep `copy`); on Rook Ceph RBD it was about 2× faster for one guest and 2.7× for four (Filesystem root disks only) (#910).
 
 ## [v0.22.0] — 2026-10-31
