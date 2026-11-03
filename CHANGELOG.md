@@ -18,6 +18,7 @@ All notable changes to KubeSwift are documented here.
 ### Added
 
 - **SwiftImage `source.pvcClone`** (#902): make an image from a disk already in the cluster, such as a stopped guest's root disk, with no web server or registry round trip. A Block PVC is the disk; a Filesystem PVC holds it as `image.raw` at its root. The disk is copied, read-only from the source, so the image is independent of it once `Ready`. Only a PVC in the image's own namespace is accepted (webhook and controller). While a pod that has not finished uses the PVC, the image waits `Pending` with `SourceReady=False` (`SourceInUse`, naming the pod; also `SourceNotFound` and `SourceNotBound`). Before, the field was refused at creation (#715). CRD: swiftimages field descriptions only.
+- **`nestedVirtualization` on SwiftGuestClass and SwiftGuest** (#874). `Enabled` (the default, unchanged behaviour) exposes VMX/SVM so a guest can run its own hypervisor; `Disabled` hides it: Cloud Hypervisor `--cpus nested=off`, QEMU `-cpu host,vmx=off,svm=off`. Nested KVM is host attack surface reachable from inside the guest, which is why Cloud Hypervisor v54 turned it off by default; disable it for guests that do not run VMs. The guest's field overrides the class's. It applies when a launcher starts: running guests keep what they booted with, through live migration and restore, until they restart. CRDs: swiftguestclasses, swiftguests, swiftguestpools (new field).
 
 ### Changed
 

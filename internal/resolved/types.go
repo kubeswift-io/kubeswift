@@ -88,6 +88,9 @@ type ResolvedGuest struct {
 	// Hugepages is the guest-RAM page size from the SwiftGuestClass, in
 	// Kubernetes units ("2Mi"/"1Gi"); empty means ordinary 4K pages.
 	Hugepages string `json:"hugepages,omitempty"`
+	// NestedVirtualization is the guest's spec.nestedVirtualization, else
+	// the class's; empty means Enabled.
+	NestedVirtualization string `json:"nestedVirtualization,omitempty"`
 	// SharedBaseDisk is the SwiftGuestClass opt-in to a copy-on-write root disk
 	// over a node-local, digest-keyed base. It changes where the disk LIVES —
 	// a dm-thin pool on the node rather than a PVC — so it also decides which
@@ -386,6 +389,12 @@ func (r *ResolvedGuest) GetCPUPinning() string {
 // matching node resource is called; Cloud Hypervisor rejects those outright
 // (`ParseMemory(Conversion("hugepage_size", "2Mi"))`, verified against v53.0),
 // so the translation happens here — the same split the GPU path already uses.
+// GetNestedVirtualizationDisabled reports whether nested virtualization is
+// turned off for this guest. Anything but Disabled leaves it on.
+func (r *ResolvedGuest) GetNestedVirtualizationDisabled() bool {
+	return r.NestedVirtualization == string(swiftv1alpha1.NestedVirtualizationDisabled)
+}
+
 func (r *ResolvedGuest) GetHugepages() string {
 	switch r.Hugepages {
 	case string(swiftv1alpha1.Hugepages2Mi):

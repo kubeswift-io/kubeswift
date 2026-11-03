@@ -82,6 +82,11 @@ pub struct RuntimeIntent {
     /// units ("2Mi"/"1Gi"), which CH rejects.
     #[serde(default)]
     pub hugepages: Option<String>,
+    /// Hide VMX/SVM from the guest (`nestedVirtualization: Disabled`).
+    /// Absent/false keeps nested virtualization on, which is what an intent
+    /// from an older controller means.
+    #[serde(default)]
+    pub disable_nested: bool,
     /// Optional secondary data disk (appears as /dev/vdb in guest).
     /// LEGACY singular field — superseded by `data_disks`. Retained so a
     /// new swiftletd still honors intent JSON written by an older
@@ -1158,6 +1163,21 @@ mod tests {
         // exactly the magic + CWD + 3 ARGV + 1 ENV + END = 7 content lines.
         let content_lines = text.trim_end_matches('\u{0}').lines().count();
         assert_eq!(content_lines, 7, "unexpected line count: {text:?}");
+    }
+
+    #[test]
+    fn test_intent_disable_nested() {
+        let off: RuntimeIntent = serde_json::from_str(
+            r#"{"rootDisk":{"path":"/d/i.raw","format":"raw"},"seedPath":"","cpu":2,"memory":2048,"lifecycle":"start","guestId":"default/n","disableNested":true}"#,
+        )
+        .unwrap();
+        assert!(off.disable_nested);
+        // Absent (an older controller's intent): nested stays on.
+        let on: RuntimeIntent = serde_json::from_str(
+            r#"{"rootDisk":{"path":"/d/i.raw","format":"raw"},"seedPath":"","cpu":2,"memory":2048,"lifecycle":"start","guestId":"default/n"}"#,
+        )
+        .unwrap();
+        assert!(!on.disable_nested);
     }
 
     #[test]

@@ -91,6 +91,7 @@ fn main() {
                 host_cpu: 1,
             },
         ],
+        disable_nested: false,
     };
 
     for arg in config.to_args() {

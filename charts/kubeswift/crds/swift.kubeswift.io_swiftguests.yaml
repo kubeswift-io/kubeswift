@@ -578,6 +578,16 @@ spec:
                     - offline
                     type: string
                 type: object
+              nestedVirtualization:
+                description: |-
+                  NestedVirtualization overrides the class's nestedVirtualization for
+                  this guest: Enabled exposes VMX/SVM to the guest, Disabled hides it.
+                  Empty (default) uses the class's setting, which defaults to Enabled.
+                  Takes effect at the next launcher start.
+                enum:
+                - Enabled
+                - Disabled
+                type: string
               network:
                 description: |-
                   Network configures pod-network binding and declarative service ports

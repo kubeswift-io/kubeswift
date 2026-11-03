@@ -82,6 +82,29 @@ const (
 	SMTPolicyPack   SMTPolicy = "pack"
 )
 
+// NestedVirtualization controls whether a guest sees the host CPU's
+// virtualization extensions (Intel VMX / AMD SVM), so it can run its own
+// hypervisor (KVM, a nested KubeSwift, a CI job that boots VMs).
+//
+//	Enabled  (default) the guest gets VMX/SVM and a working /dev/kvm when the
+//	         host kernel allows nested KVM. Cloud Hypervisor v53 and earlier
+//	         behaved like this for every guest.
+//	Disabled the guest does not see VMX/SVM. Cloud Hypervisor v54 made this
+//	         its own default, because nested KVM adds host attack surface
+//	         reachable from inside the guest; choose it for guests that do
+//	         not run a hypervisor, and for untrusted tenants.
+//
+// It takes effect when the launcher starts: a running guest keeps what it
+// booted with, through live migration and restore, until it restarts.
+//
+// +kubebuilder:validation:Enum=Enabled;Disabled
+type NestedVirtualization string
+
+const (
+	NestedVirtualizationEnabled  NestedVirtualization = "Enabled"
+	NestedVirtualizationDisabled NestedVirtualization = "Disabled"
+)
+
 // Hugepages selects the page size backing a guest's RAM
 // (Cloud Hypervisor `--memory hugepages=on,hugepage_size=`).
 //
@@ -180,6 +203,11 @@ type SwiftGuestClassSpec struct {
 	// not schedule.
 	// +optional
 	Hugepages Hugepages `json:"hugepages,omitempty"`
+	// NestedVirtualization exposes VMX/SVM to guests of this class (Enabled,
+	// the default) or hides it (Disabled). A guest's own
+	// spec.nestedVirtualization overrides it.
+	// +optional
+	NestedVirtualization NestedVirtualization `json:"nestedVirtualization,omitempty"`
 }
 
 // SwiftGuestClass is the Schema for the swiftguestclasses API.
