@@ -38,6 +38,9 @@ type ResolvedGuest interface {
 	GetCPUPinning() string
 	GetSMTPolicy() string
 	GetHugepages() string
+	// GetNestedVirtualizationDisabled is true when the guest's class or spec
+	// set nestedVirtualization: Disabled.
+	GetNestedVirtualizationDisabled() bool
 	// GetVsockCID returns the vsock CID for a SOURCE guest that opted into the
 	// in-guest identity agent, or 0 when the agent is not enabled (or the guest
 	// is a clone — a clone reopens the captured vsock device from config.json).
@@ -56,6 +59,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 	coreScheduling := rg.GetCoreScheduling()
 	cpuPinning := rg.GetCPUPinning()
 	hugepages := rg.GetHugepages()
+	disableNested := rg.GetNestedVirtualizationDisabled()
 	// smtPolicy is only meaningful alongside cpuPinning; keep the intent
 	// clean by omitting it when the guest is not pinned.
 	smtPolicy := ""
@@ -93,6 +97,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			CPUPinning:          cpuPinning,
 			SMTPolicy:           smtPolicy,
 			Hugepages:           hugepages,
+			DisableNested:       disableNested,
 			Vsock:               vsock,
 			KernelBoot: &KernelBootSpec{
 				KernelPath:    rg.GetKernelPath(),
@@ -147,6 +152,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 		CPUPinning:          cpuPinning,
 		SMTPolicy:           smtPolicy,
 		Hugepages:           hugepages,
+		DisableNested:       disableNested,
 		Vsock:               vsock,
 	}
 }

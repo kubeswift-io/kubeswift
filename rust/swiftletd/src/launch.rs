@@ -526,6 +526,7 @@ where
             memory_mib: intent.memory.max(128),
             cpus: intent.cpu.max(1),
             kvm_hyperv: intent.is_windows(),
+            disable_nested: intent.disable_nested,
             core_scheduling: intent
                 .core_scheduling
                 .clone()
@@ -561,6 +562,7 @@ where
             memory_mib: intent.memory.max(128),
             cpus: intent.cpu.max(1),
             kvm_hyperv: intent.is_windows(),
+            disable_nested: intent.disable_nested,
             core_scheduling: intent
                 .core_scheduling
                 .clone()
@@ -726,6 +728,7 @@ where
         numa_nodes,
         hugepages,
         vcpu_pinning: vcpu_pinning.clone(),
+        disable_nested: intent.disable_nested,
     };
 
     let mut process = QemuProcess::spawn(&config)?;

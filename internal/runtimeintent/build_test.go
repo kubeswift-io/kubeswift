@@ -2,6 +2,7 @@ package runtimeintent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -28,6 +29,7 @@ type mockResolvedGuest struct {
 	cpuPinning          string
 	smtPolicy           string
 	hugepages           string
+	disableNested       bool
 	vsockCID            uint32
 	primaryUDNInterface string
 }
@@ -63,6 +65,9 @@ func (m *mockResolvedGuest) GetVhostUserDevices() []VhostUserDeviceIntent {
 func (m *mockResolvedGuest) GetCoreScheduling() string { return m.coreScheduling }
 func (m *mockResolvedGuest) GetCPUPinning() string     { return m.cpuPinning }
 func (m *mockResolvedGuest) GetHugepages() string      { return m.hugepages }
+func (m *mockResolvedGuest) GetNestedVirtualizationDisabled() bool {
+	return m.disableNested
+}
 func (m *mockResolvedGuest) GetSMTPolicy() string {
 	if m.smtPolicy == "" {
 		return "spread"
@@ -568,5 +573,24 @@ func TestBuild_SharedBaseDeviceIsTheRootDisk(t *testing.T) {
 	// And nothing changes for a guest without one.
 	if got := Build(&mockResolvedGuest{}).RootDisk.Path; got != DisksRootPath+"/"+RootDiskImageFile {
 		t.Errorf("a guest without a shared-base disk got root disk path %q", got)
+	}
+}
+
+// DisableNested reaches the intent on both boot paths and is omitted when
+// nested virtualization stays on, so an intent from an older controller reads
+// the same as Enabled (#874).
+func TestBuild_DisableNested(t *testing.T) {
+	disk := Build(&mockResolvedGuest{hasSeed: true, format: "raw", guestID: "default/n", disableNested: true})
+	kern := Build(&mockResolvedGuest{hasKernel: true, guestID: "default/n-k", disableNested: true})
+	if !disk.DisableNested || !kern.DisableNested {
+		t.Errorf("DisableNested disk=%v kernel=%v, want true", disk.DisableNested, kern.DisableNested)
+	}
+	on := Build(&mockResolvedGuest{hasSeed: true, format: "raw", guestID: "default/n"})
+	b, err := json.Marshal(on)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if on.DisableNested || strings.Contains(string(b), "disableNested") {
+		t.Errorf("nested on must leave the intent unchanged: %s", b)
 	}
 }

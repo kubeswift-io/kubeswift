@@ -39,9 +39,15 @@ func Merge(
 		rg.CPUPinning = string(guestClass.Spec.CPUPinning)
 		rg.SMTPolicy = string(guestClass.Spec.SMTPolicy)
 		rg.Hugepages = string(guestClass.Spec.Hugepages)
+		rg.NestedVirtualization = string(guestClass.Spec.NestedVirtualization)
 		// Shared base disk: the root disk becomes a thin snapshot of a
 		// node-local base instead of a private PVC.
 		rg.SharedBaseDisk = guestClass.Spec.SharedBaseDisk
+	}
+
+	// Nested virtualization: the guest's own setting overrides the class.
+	if guest.Spec.NestedVirtualization != "" {
+		rg.NestedVirtualization = string(guest.Spec.NestedVirtualization)
 	}
 
 	// RootDisk: from GuestClass

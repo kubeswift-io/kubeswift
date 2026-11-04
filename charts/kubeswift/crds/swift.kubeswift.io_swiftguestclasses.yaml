@@ -100,6 +100,15 @@ spec:
                 - type: string
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
+              nestedVirtualization:
+                description: |-
+                  NestedVirtualization exposes VMX/SVM to guests of this class (Enabled,
+                  the default) or hides it (Disabled). A guest's own
+                  spec.nestedVirtualization overrides it.
+                enum:
+                - Enabled
+                - Disabled
+                type: string
               rootDisk:
                 description: RootDiskSpec defines the root disk for a guest.
                 properties:

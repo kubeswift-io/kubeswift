@@ -84,8 +84,8 @@ Cloud Hypervisor v54 changed two defaults. KubeSwift sets both explicitly, so
 guests behave as they did on v53:
 
 - **Nested virtualization:** `--cpus ...,nested=on`. Guests see VMX/SVM and can
-  use `/dev/kvm`, as on v53 (v54's default is off). This is compatibility
-  behaviour; a future API may make it a per-guest choice.
+  use `/dev/kvm`, as on v53 (v54's default is off). A class or guest can turn it
+  off with `nestedVirtualization: Disabled` (`nested=off`).
 - **virtio-net offloads:** `offload_csum=on,offload_tso=on,offload_ufo=on` on
   every `--net` (tap and vhost-user). With v54's default (off), guest-to-pod
   TCP throughput on the same node fell from about 11 Gbps to under 1 Gbps.

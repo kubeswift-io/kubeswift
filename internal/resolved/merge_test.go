@@ -192,3 +192,35 @@ func TestMerge_NonNoCloudDatasourceIsUntouched(t *testing.T) {
 		t.Errorf("Seed.MetaData = %q, want empty: the meta-data requirement is NoCloud's", rg.Seed.MetaData)
 	}
 }
+
+// Nested virtualization stays on unless the class or the guest says Disabled,
+// and the guest's own setting wins over the class's (#874).
+func TestMerge_NestedVirtualization(t *testing.T) {
+	const (
+		unset    = swiftv1alpha1.NestedVirtualization("")
+		enabled  = swiftv1alpha1.NestedVirtualizationEnabled
+		disabled = swiftv1alpha1.NestedVirtualizationDisabled
+	)
+	for _, tc := range []struct {
+		class, guest swiftv1alpha1.NestedVirtualization
+		wantOff      bool
+	}{
+		{unset, unset, false},
+		{enabled, unset, false},
+		{disabled, unset, true},
+		{disabled, enabled, false},
+		{enabled, disabled, true},
+		{unset, disabled, true},
+	} {
+		guest := &swiftv1alpha1.SwiftGuest{
+			ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns", UID: "uid"},
+			Spec: swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"},
+				GuestClassRef: corev1.LocalObjectReference{Name: "gc"}, NestedVirtualization: tc.guest},
+		}
+		guestClass := &swiftv1alpha1.SwiftGuestClass{Spec: swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"),
+			Memory: resource.MustParse("2Gi"), NestedVirtualization: tc.class}}
+		if got := Merge(guest, guestClass, nil, nil).GetNestedVirtualizationDisabled(); got != tc.wantOff {
+			t.Errorf("class %q guest %q: disabled = %v, want %v", tc.class, tc.guest, got, tc.wantOff)
+		}
+	}
+}

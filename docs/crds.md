@@ -54,6 +54,7 @@ Represents a running virtual machine instance.
 | `guestClassRef.name` | string | Yes | — | SwiftGuestClass providing CPU, memory, and disk size. |
 | `seedProfileRef.name` | string | No | — | SwiftSeedProfile for cloud-init (disk boot only). Optional. |
 | `runPolicy` | enum | No | `Running` | `Running`, `Stopped`, `RestartOnFailure`, or `Always`. |
+| `nestedVirtualization` | enum | No | class setting | `Enabled` or `Disabled`; overrides the class's `nestedVirtualization` for this guest. Takes effect at the next launcher start. |
 | `gpuProfileRef.name` | string | No | — | SwiftGPUProfile for GPU passthrough. Mutually exclusive with `kernelRef`. |
 | `schedulerName` | string | No | — | kube-scheduler profile for the launcher pod. Use a profile with the `NodeResourcesFit` `LeastAllocated` strategy to bias placement toward less-loaded nodes. Ignored when `nodeName` pins the guest. An unknown name leaves the pod Pending — KubeSwift cannot validate it, since scheduler profiles are not exposed through the API. |
 
@@ -138,6 +139,7 @@ Cluster-scoped template defining default CPU, memory, and disk resources for VMs
 | `cpuPinning` | enum | No | `none` (default), `static` — pin each vCPU to one host CPU from the launcher pod's cpuset. See [CPU pinning](performance/cpu-pinning.md). |
 | `smtPolicy` | enum | No | `spread` (default), `pack` — which SMT siblings a pinned guest uses. Ignored unless `cpuPinning: static`. |
 | `hugepages` | enum | No | `""` (default), `2Mi`, `1Gi` — back guest RAM with hugepages instead of 4K pages. The launcher then requests `hugepages-<size>` equal to the guest's memory, so the node must have the pages reserved or the pod will not schedule. See [hugepages](performance/hugepages.md). |
+| `nestedVirtualization` | enum | No | `Enabled` (default) exposes VMX/SVM so guests can run their own hypervisor; `Disabled` hides it (Cloud Hypervisor `nested=off`, QEMU `-cpu host,vmx=off,svm=off`). Nested KVM is host attack surface reachable from the guest: disable it for guests that do not run VMs. A running guest keeps its setting, through live migration and restore, until it restarts. |
 | `sharedBaseDisk` | bool | No | `false` (default). `true` gives guests of this class a root disk that is a copy-on-write snapshot of a node-local base shared by every guest of that image, instead of a private copy. **Immutable**, and the disk cannot move: migration is refused in every mode, as are CSI and full-state snapshots. Nodes opt in with `kubeswift.io/basedisk-node=true`. See [shared-base root disks](shared-base-disks.md). |
 
 ### Example

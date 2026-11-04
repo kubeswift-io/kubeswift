@@ -107,6 +107,9 @@ pub struct QemuConfig {
     pub hugepages: String,
     /// vCPU→host-CPU pins, applied post-spawn (not CLI-expressible).
     pub vcpu_pinning: Vec<QemuVCPUPin>,
+    /// Hide VMX/SVM from the guest (`-cpu host,vmx=off,svm=off`):
+    /// `nestedVirtualization: Disabled`. False keeps `-cpu host`.
+    pub disable_nested: bool,
 }
 
 impl QemuConfig {
@@ -195,7 +198,11 @@ impl QemuConfig {
 
         args.extend([
             "-cpu".to_string(),
-            "host".to_string(),
+            if self.disable_nested {
+                "host,vmx=off,svm=off".to_string()
+            } else {
+                "host".to_string()
+            },
             "-smp".to_string(),
             self.smp_arg(),
             "-m".to_string(),
@@ -374,6 +381,7 @@ mod tests {
             numa_nodes: vec![],
             hugepages: String::new(),
             vcpu_pinning: vec![],
+            disable_nested: false,
         }
     }
 
@@ -690,6 +698,7 @@ mod hgx_tests {
                     host_cpu: 9,
                 },
             ],
+            disable_nested: false,
         }
     }
 
@@ -882,6 +891,7 @@ mod hgx_tests {
             numa_nodes: vec![],
             hugepages: String::new(),
             vcpu_pinning: vec![],
+            disable_nested: false,
         };
         let joined = cfg.to_args().join(" ");
         assert!(
@@ -897,5 +907,20 @@ mod hgx_tests {
         assert!(joined.contains("-smp 2 "), "{}", joined);
         assert!(!joined.contains("pcie-root-port"), "{}", joined);
         assert!(!joined.contains("-numa"), "{}", joined);
+    }
+
+    /// nestedVirtualization: Disabled masks VMX/SVM off the host CPU model.
+    #[test]
+    fn test_cpu_masks_vmx_svm_when_nested_disabled() {
+        let mut cfg = tier2_config();
+        assert!(cfg
+            .to_args()
+            .windows(2)
+            .any(|w| w[0] == "-cpu" && w[1] == "host"));
+        cfg.disable_nested = true;
+        assert!(cfg
+            .to_args()
+            .windows(2)
+            .any(|w| w[0] == "-cpu" && w[1] == "host,vmx=off,svm=off"));
     }
 }

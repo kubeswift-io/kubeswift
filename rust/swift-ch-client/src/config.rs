@@ -58,6 +58,9 @@ pub struct VmConfig {
     /// KVM Hyper-V enlightenments.
     /// Harmless/unused for Linux guests (default false).
     pub kvm_hyperv: bool,
+    /// When true, `--cpus` carries `nested=off` instead of `nested=on`: the
+    /// guest does not see VMX/SVM (`nestedVirtualization: Disabled`).
+    pub disable_nested: bool,
     /// vCPU core-scheduling policy ("vm"/"vcpu"), appended to --cpus as
     /// core_scheduling=<v>. None = off (param omitted). SMT side-channel mitigation.
     pub core_scheduling: Option<String>,
@@ -293,11 +296,13 @@ impl VmConfig {
             },
             "--cpus".to_string(),
             {
-                // nested=on: Cloud Hypervisor v54 turned nested virtualization
-                // off by default (v53 and earlier exposed VMX/SVM to every guest).
-                // Emitted explicitly so the v54 upgrade does not remove a guest
-                // capability; a future API may make this a per-guest choice.
-                let mut cpus = format!("boot={},nested=on", self.cpus.max(1));
+                // nested=on|off: Cloud Hypervisor v54 turned nested
+                // virtualization off by default (v53 and earlier exposed
+                // VMX/SVM to every guest). KubeSwift keeps it on unless the
+                // guest or its class sets nestedVirtualization: Disabled, and
+                // always says which, so the CH default never decides.
+                let nested = if self.disable_nested { "off" } else { "on" };
+                let mut cpus = format!("boot={},nested={}", self.cpus.max(1), nested);
                 if self.kvm_hyperv {
                     // Windows: KVM Hyper-V enlightenments (required on CH).
                     cpus.push_str(",kvm_hyperv=on");
@@ -582,6 +587,7 @@ mod tests {
             memory_mib: 2048,
             cpus: 2,
             kvm_hyperv: false,
+            disable_nested: false,
             core_scheduling: None,
             cpu_affinity: Vec::new(),
             hugepages: None,
@@ -1456,6 +1462,18 @@ mod tests {
                 args[i + 1]
             );
         }
+    }
+
+    /// nestedVirtualization: Disabled turns the same parameter off, and only
+    /// that: the rest of --cpus is unchanged.
+    #[test]
+    fn test_cpus_nested_off_when_disabled() {
+        let mut cfg = make_disk_boot_config();
+        cfg.disable_nested = true;
+        cfg.kvm_hyperv = true;
+        let args = cfg.to_args();
+        let i = args.iter().position(|a| a == "--cpus").expect("--cpus");
+        assert_eq!(args[i + 1], "boot=2,nested=off,kvm_hyperv=on");
     }
 
     /// Cloud Hypervisor v54 defaults virtio-net csum/TSO/UFO offload to off;

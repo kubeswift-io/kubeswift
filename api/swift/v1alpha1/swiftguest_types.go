@@ -152,6 +152,12 @@ type SwiftGuestSpec struct {
 	// to the guest's PRIMARY interface.
 	// +optional
 	Network *GuestNetworkSpec `json:"network,omitempty"`
+	// NestedVirtualization overrides the class's nestedVirtualization for
+	// this guest: Enabled exposes VMX/SVM to the guest, Disabled hides it.
+	// Empty (default) uses the class's setting, which defaults to Enabled.
+	// Takes effect at the next launcher start.
+	// +optional
+	NestedVirtualization NestedVirtualization `json:"nestedVirtualization,omitempty"`
 	// TopologySpreadConstraints applied to the launcher pod.
 	// Typically set by SwiftGuestPool controller for fleet spread.
 	// +optional

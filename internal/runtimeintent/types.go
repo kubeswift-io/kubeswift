@@ -32,8 +32,12 @@ type RuntimeIntent struct {
 	// Hugepages is the guest-RAM page size in CLOUD HYPERVISOR units ("2M"/"1G"),
 	// empty for ordinary pages. swiftletd appends
 	// hugepages=on,hugepage_size=<v> to --memory.
-	Hugepages string     `json:"hugepages,omitempty"`
-	GPU       *GPUIntent `json:"gpu,omitempty"` // populated when gpuProfileRef is set
+	Hugepages string `json:"hugepages,omitempty"`
+	// DisableNested hides VMX/SVM from the guest (Cloud Hypervisor
+	// `--cpus nested=off`, QEMU `-cpu host,vmx=off,svm=off`). False, the
+	// default and what an older controller sends, keeps nested=on.
+	DisableNested bool       `json:"disableNested,omitempty"`
+	GPU           *GPUIntent `json:"gpu,omitempty"` // populated when gpuProfileRef is set
 	// DataDisks are the secondary VM disks, in deterministic order. Each becomes
 	// one CH --disk and enumerates in the guest as /dev/vdc, /dev/vdd, ... in
 	// this order. Path is opaque to swiftletd (a file for Filesystem disks, a
