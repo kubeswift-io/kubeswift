@@ -756,7 +756,7 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 
 	var existingPod corev1.Pod
 	var podForMetrics *corev1.Pod
-	var cloneIdentityRequeue, ipWaitRequeue time.Duration
+	var cloneIdentityRequeue, ipWaitRequeue, rootDiskRequeue time.Duration
 	if err := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: canonicalPodName(&guest)}, &existingPod); err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			return ctrl.Result{}, err
@@ -839,6 +839,12 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 		// whether the guest ever acquired an IP, so "Running with no IP forever"
 		// stops being invisible on the CR (#527).
 		MapNetworkReadyCondition(&guest, &existingPod, status)
+		// A launcher scheduled but still waiting for its root disk to attach
+		// and mount says so on StorageReady (#909).
+		var rdErr error
+		if rootDiskRequeue, rdErr = r.reportRootDiskWait(ctx, &guest, &existingPod, status); rdErr != nil {
+			return ctrl.Result{}, rdErr
+		}
 		// In-guest identity agent (PR 4): for an agent-enabled cloneFromSnapshot
 		// clone, drive the one-shot identity-regen over vsock once it is Running.
 		// MUST run BEFORE the IP-not-discovered requeue below: a fresh clone has
@@ -896,9 +902,10 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 	// Requeue while an agent-enabled clone's identity regen is still in flight
 	// (0 = no requeue once it reaches a terminal CloneIdentityRegenerated state),
 	// while a running guest's IP is still undiscovered, or while a stopped
-	// guest's launcher shuts down or waits to be shut down.
+	// guest's launcher shuts down or waits to be shut down, or while a launcher
+	// waits for its root disk.
 	requeue := cloneIdentityRequeue
-	for _, d := range []time.Duration{ipWaitRequeue, stopRequeue} {
+	for _, d := range []time.Duration{ipWaitRequeue, stopRequeue, rootDiskRequeue} {
 		if d > 0 && (requeue == 0 || d < requeue) {
 			requeue = d
 		}
