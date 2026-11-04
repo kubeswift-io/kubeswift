@@ -6,6 +6,20 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.23.0] — 2026-11-04
+
+Guests boot from MBR disks and hybrid installer ISOs (#912), report `StorageReady=False` while their root disk is still attaching (#909), and can have nested virtualization turned off per class or guest (#874). Memory snapshots record the Cloud Hypervisor that captured them and a restore refuses only a newer one (#871). Signed snapshots now sign their disk artifacts too, and restores and clones verify every artifact before pulling it (#703). SwiftImage can be made from a PVC (#902), a sandbox's console is bounded (#855), and an offline migration no longer fails when GitOps writes `runPolicy` back (#899).
+
+### Upgrade
+
+- **CRDs changed: apply `crds/` before `helm upgrade`.** New fields on swiftguestclasses, swiftguests and swiftguestpools (`nestedVirtualization`) and swiftsnapshots (`status.location.verifyKey`); swiftimages field descriptions. Without the new CRDs the API server silently drops `nestedVirtualization` and the recorded verify key.
+- No chart value or template change.
+- A minor release: a GitOps source pinned to `"0.22.x"` does not take it. Move the range to `"0.23.x"`.
+- **Running guests keep their launcher.** The launcher's Cloud Hypervisor version annotation (#871) and `nestedVirtualization` (#874) take effect for launchers started after the upgrade; the console bound (#855) for sandboxes started after it.
+- **Snapshot restores and clones now verify signatures** when the snapshot's storage location has a `verifyKey` (#703). A snapshot taken after the upgrade under such a location records the key, and its restore or clone fails if an artifact is unsigned, signed with another key, or served by a plaintext (`insecure`) registry. Snapshots taken before the upgrade carry no key and are not verified. Keep `snapshotORAS.image.tag` on the release: an older snapshot-oras image ignores the key and pulls unverified.
+- **`StorageReady` can be `False` at guest start** (#909), with `RootDiskAttaching` or `RootDiskMounting`, until the kubelet has mounted the root disk. Scripts that waited for `StorageReady=True` as "storage done" now wait for the disk to be usable, which can take longer.
+- **A restore or clone of a memory snapshot captured by a newer Cloud Hypervisor than the launcher ships is refused** (`HypervisorVersionIncompatible`, #871). This release ships v54.0; `kubeswift.io/skip-hypervisor-version-check: "true"` overrides.
+
 ### Fixed
 
 - **An offline migration failed when something wrote `runPolicy: Running` back while it moved the guest** (#899). A GitOps controller correcting drift, or a `kubectl apply` of the original manifest, does this. The guest controller recreated the launcher on the source node, and the two controllers fought over the pod for about two minutes. The migration then failed with `atomicity invariant violated`, leaving the guest running on the source while `spec.nodeName` named the target. Now, while an offline migration holds the guest and has not cut over, the guest controller does not start a launcher, whatever `runPolicy` says (Event `LauncherHeldByMigration`). The guest starts on the target at cutover, or on its node again if the migration fails. Live migration was not affected.
