@@ -54,6 +54,11 @@ const PodAnnotationGuestSerialSocket = "kubeswift.io/guest-serial-socket"
 // PodAnnotationGuestHypervisor is the annotation key for the hypervisor type (set by swiftletd on socket ready).
 const PodAnnotationGuestHypervisor = "kubeswift.io/guest-hypervisor"
 
+// PodAnnotationGuestHypervisorVersion is the running Cloud Hypervisor's version
+// as vmm.ping reports it (e.g. "v54.0"), set by swiftletd on socket ready. A
+// memory snapshot records it at capture (#871).
+const PodAnnotationGuestHypervisorVersion = "kubeswift.io/guest-hypervisor-version"
+
 // PodAnnotationEgress is the annotation key ("true"/"false") for VM->cluster-DNS
 // ClusterIP reachability, set by the launcher entrypoint's egress probe (service
 // exposure §4). Mapped to status.network.egress + the EgressReady condition.

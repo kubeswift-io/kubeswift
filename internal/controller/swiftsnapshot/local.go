@@ -213,6 +213,9 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 	if guest.Status.Runtime != nil {
 		status.Hypervisor = guest.Status.Runtime.Hypervisor
 	}
+	// The Cloud Hypervisor that captures, so a restore can tell whether it can
+	// read the snapshot (#871). Empty from a launcher older than this field.
+	status.HypervisorVersion = pod.Annotations[swiftguest.PodAnnotationGuestHypervisorVersion]
 	// Resolve the destination directory before recording the node: with no
 	// node recorded it is the derived clonecommon.SnapshotDir, whatever the
 	// backend. swiftletd mkdir's it before capture.

@@ -596,3 +596,34 @@ func TestPrepareCloneFromSnapshot_KernelBootSource_Fails(t *testing.T) {
 		t.Errorf("restore annotations stamped on a clone that cannot run: %+v", got.Annotations)
 	}
 }
+
+// A clone of a snapshot from a later Cloud Hypervisor than the launcher's
+// fails before its first launcher (#871); one already running is left alone,
+// and an earlier Cloud Hypervisor's snapshot clones.
+func TestPrepareCloneFromSnapshot_HypervisorVersion(t *testing.T) {
+	for _, tc := range []struct {
+		version string
+		running bool
+		fails   bool
+	}{
+		{"v999.0", false, true},
+		{"v999.0", true, false},
+		{"v53.0", false, false},
+		{"", false, false},
+	} {
+		g := cloneGuest()
+		if tc.running {
+			g.Status.PodRef = &corev1.ObjectReference{Name: g.Name}
+		}
+		snap := localSnap(snapshotv1alpha1.SwiftSnapshotPhaseReady)
+		snap.Status.HypervisorVersion = tc.version
+		r, _ := newCloneReconciler(t, g, sourceGuest(), snap)
+		_, _, fail, _, err := r.prepareCloneFromSnapshot(context.Background(), g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if refused := strings.Contains(fail, "Cloud Hypervisor"); refused != tc.fails {
+			t.Errorf("version %q running %v: fail = %q", tc.version, tc.running, fail)
+		}
+	}
+}

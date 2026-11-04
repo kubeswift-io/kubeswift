@@ -33,8 +33,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -50,14 +48,10 @@ import (
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
-// SkipHypervisorVersionCheckAnnotation lets an operator bypass the
-// version check for disaster-recovery scenarios where the cluster's CH
-// has been upgraded past the snapshot's. Per architect risk #3 the
-// default behavior is conservative (block on major bumps) but this
-// escape hatch must exist — when an operator is restoring from a
-// snapshot taken six months ago, blocking that restore is worse than
-// the chance of restore failing with a "bar 0 already used"-style
-// error during the actual --restore boot.
+// SkipHypervisorVersionCheckAnnotation lets an operator try a restore the
+// version check refuses: a snapshot captured by a later Cloud Hypervisor than
+// the restoring launcher's (#871). Cloud Hypervisor then decides; expect the
+// restore to fail if its snapshot format changed.
 const SkipHypervisorVersionCheckAnnotation = "kubeswift.io/skip-hypervisor-version-check"
 
 // Action verbs / annotation keys mirrored from
@@ -82,97 +76,6 @@ const (
 // created by the user/another controller", which is the case
 // targetGuest.overwriteExisting protects against.
 const swiftRestoreOwnerLabel = "snapshot.kubeswift.io/swift-restore"
-
-// VersionCompatibility is the result of comparing snapshot's
-// HypervisorVersion to the current cluster CH version.
-type VersionCompatibility int
-
-const (
-	// VersionUnknown means we couldn't parse one or both versions —
-	// we err on the side of allowing (with a warning) because we'd
-	// rather restore than fail closed on bad data.
-	VersionUnknown VersionCompatibility = iota
-	// VersionExactMatch: full string match (e.g. v51.1 == v51.1).
-	VersionExactMatch
-	// VersionPatchDrift: same major.minor, different patch (or one
-	// has patch and the other doesn't). Restore proceeds; controller
-	// surfaces a Warning condition.
-	VersionPatchDrift
-	// VersionMinorMismatch: same major, different minor. Default
-	// policy: block. Architect risk #3 — minor bumps in CH have
-	// historically broken snapshot/restore compat.
-	VersionMinorMismatch
-	// VersionMajorMismatch: different major. Default policy: block.
-	// Major version bumps almost certainly break compat.
-	VersionMajorMismatch
-)
-
-// CompareHypervisorVersions classifies the relationship between the
-// snapshot's recorded version and the current cluster version. Both
-// strings are expected in the CH "v<major>.<minor>[.<patch>]" format
-// (matching what swift-ch-client's VmmVersion::major_minor parses).
-//
-// Empty inputs return VersionUnknown — the controller will allow the
-// restore but log. This handles the case where the snapshot was taken
-// before commit 8 added HypervisorVersion to status (pre-Phase-2
-// SwiftSnapshots).
-func CompareHypervisorVersions(snap, current string) VersionCompatibility {
-	if snap == "" || current == "" {
-		return VersionUnknown
-	}
-	if snap == current {
-		return VersionExactMatch
-	}
-	sM, sm, sp, sok := parseVersion(snap)
-	cM, cm, cp, cok := parseVersion(current)
-	if !sok || !cok {
-		return VersionUnknown
-	}
-	if sM != cM {
-		return VersionMajorMismatch
-	}
-	if sm != cm {
-		return VersionMinorMismatch
-	}
-	// major.minor match. Patch may differ (or one of them may be
-	// absent, in which case parseVersion returns -1 for missing).
-	if sp != cp {
-		return VersionPatchDrift
-	}
-	// Same major.minor and same patch (or both -1) → exact, but we
-	// already handled string-equal above. Reach here when whitespace
-	// or "v" prefix differs.
-	return VersionExactMatch
-}
-
-// parseVersion parses "v<major>.<minor>" or "v<major>.<minor>.<patch>"
-// (with or without leading "v"). Returns (major, minor, patch, ok).
-// Patch is -1 when absent — callers compare with this in mind.
-func parseVersion(s string) (int, int, int, bool) {
-	s = strings.TrimSpace(s)
-	s = strings.TrimPrefix(s, "v")
-	parts := strings.Split(s, ".")
-	if len(parts) < 2 {
-		return 0, 0, 0, false
-	}
-	major, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return 0, 0, 0, false
-	}
-	minor, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return 0, 0, 0, false
-	}
-	patch := -1
-	if len(parts) >= 3 {
-		p, err := strconv.Atoi(parts[2])
-		if err != nil {
-			return 0, 0, 0, false
-		}
-		patch = p
-	}
-	return major, minor, patch, true
-}
 
 // IsTierBRestore returns true when the snapshot's backend drives the
 // node-local-cache restore path (CH --restore from a hostPath) rather than
@@ -266,13 +169,6 @@ func (r *SwiftRestoreReconciler) diskDivergence(
 		"corrupt the guest's filesystems. " + instead + ". Or set annotation " +
 		snapshotv1alpha1.AnnotationAcceptDiskDivergence + "=\"true\" on the SwiftRestore to accept the risk", nil
 }
-
-// CurrentClusterHypervisorVersion is the CH version the cluster is
-// expected to have, sourced from the controller-manager environment.
-// Read at controller startup (not per-reconcile) by main.go and
-// passed into the reconciler. Empty string disables the version
-// check — controllers built without this configuration treat all
-// restores as VersionUnknown.
 
 // handlePendingLocal handles the Tier B (local-backend) Pending phase.
 //

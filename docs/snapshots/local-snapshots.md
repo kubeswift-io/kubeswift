@@ -160,21 +160,26 @@ do about evictions during capture.
 
 ## Hypervisor version compatibility
 
-The SwiftRestore controller checks the snapshot's recorded
-`status.hypervisorVersion` against the cluster's current CH version.
-Default policy:
+A memory snapshot records the Cloud Hypervisor that captured it in
+`status.hypervisorVersion` (reported by the launcher; empty for a
+snapshot of a guest whose launcher started before v0.23.0). A restore or
+`cloneFromSnapshot` boots a new launcher, so it runs the Cloud Hypervisor
+of the current release, and the rule is Cloud Hypervisor's own: it
+restores snapshots from its own and earlier releases, not from later
+ones (v54 restores v53 memory snapshots).
 
-- Exact match: proceed.
-- Same major.minor, different patch: proceed (routine upgrades).
-- Different minor: **block** (default).
-- Different major: **block** (default).
+- Snapshot from the same or an earlier version: proceed. This is the
+  normal case during an upgrade, when running guests keep their older
+  launcher and their snapshots are restored by the newer one.
+- Snapshot from a later version (for example after a downgrade): the
+  SwiftRestore fails with `HypervisorVersionIncompatible`, and a
+  `cloneFromSnapshot` guest fails before its first launcher, both naming
+  the two versions.
+- No recorded version: not checked.
 
-For disaster recovery after a major upgrade, set the
-`kubeswift.io/skip-hypervisor-version-check=true` annotation on the
-SwiftRestore (or pass `--skip-hypervisor-version-check` to
-`swiftctl restore create`). Restore may fail with `bar 0 already
-used`-style errors; the override exists because in DR scenarios
-"try the restore" is preferable to "give up".
+To try anyway, set the `kubeswift.io/skip-hypervisor-version-check=true`
+annotation on the SwiftRestore (or pass `--skip-hypervisor-version-check`
+to `swiftctl restore create`); Cloud Hypervisor then decides.
 
 ## Restore staging — disk cost & the in-place fast path
 

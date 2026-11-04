@@ -34,41 +34,30 @@ import (
 // node-local cache layout); the download Job itself is built by clonecommon.
 const s3DownloadMount = clonecommon.DownloadMount
 
-// hypervisorVersionBlocked runs the architect-risk-#3 CH version compatibility
-// gate shared by the local and s3 restore paths. Returns true (and stamps
-// Failed on status) when the restore must be blocked; false to proceed.
+// hypervisorVersionBlocked refuses to restore a memory snapshot captured by a
+// later Cloud Hypervisor than the restoring launcher's (#871); Cloud Hypervisor
+// restores snapshots from its own and earlier releases. Shared by the local,
+// s3 and oci paths. Returns true (and stamps Failed on status) when blocked.
 func (r *SwiftRestoreReconciler) hypervisorVersionBlocked(
 	restore *snapshotv1alpha1.SwiftRestore,
 	snap *snapshotv1alpha1.SwiftSnapshot,
 	status *snapshotv1alpha1.SwiftRestoreStatus,
 ) bool {
-	// Operator can override via SkipHypervisorVersionCheckAnnotation for
-	// disaster-recovery scenarios where the cluster's CH was upgraded past the
-	// snapshot's. Default policy: block on minor or major mismatch, allow patch
-	// drift with a Warning, allow exact match.
-	if restore.Annotations[SkipHypervisorVersionCheckAnnotation] == "true" || r.CurrentHypervisorVersion == "" {
+	if restore.Annotations[SkipHypervisorVersionCheckAnnotation] == "true" {
 		return false
 	}
-	switch CompareHypervisorVersions(snap.Status.HypervisorVersion, r.CurrentHypervisorVersion) {
-	case VersionMajorMismatch:
-		setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
-		setReadyCondition(status, metav1.ConditionFalse, ReasonRestoreFailed,
-			"hypervisor major-version mismatch: snapshot "+snap.Status.HypervisorVersion+
-				" vs cluster "+r.CurrentHypervisorVersion+
-				" (override with annotation "+SkipHypervisorVersionCheckAnnotation+"=true)")
-		return true
-	case VersionMinorMismatch:
-		setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
-		setReadyCondition(status, metav1.ConditionFalse, ReasonRestoreFailed,
-			"hypervisor minor-version mismatch: snapshot "+snap.Status.HypervisorVersion+
-				" vs cluster "+r.CurrentHypervisorVersion+
-				" (override with annotation "+SkipHypervisorVersionCheckAnnotation+"=true)")
-		return true
-	case VersionPatchDrift, VersionExactMatch, VersionUnknown:
-		// Proceed. Patch drift could be surfaced as a Warning condition in a
-		// future iteration — the version fields on status are enough for now.
+	current := r.CurrentHypervisorVersion
+	if current == "" {
+		current = clonecommon.CloudHypervisorVersion
 	}
-	return false
+	msg := clonecommon.HypervisorVersionRefusal(snap.Status.HypervisorVersion, current)
+	if msg == "" {
+		return false
+	}
+	setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
+	setReadyCondition(status, metav1.ConditionFalse, ReasonHypervisorVersionIncompatible,
+		msg+" (override with annotation "+SkipHypervisorVersionCheckAnnotation+"=true)")
+	return true
 }
 
 // s3RestoreLocalDir is the node-local cache directory the download Job writes

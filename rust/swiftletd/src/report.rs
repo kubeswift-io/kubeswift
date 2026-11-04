@@ -141,6 +141,10 @@ pub const BRIDGE_FEATURES_ANNOTATION: &str = "kubeswift.io/bridge-features";
 pub const LAUNCHER_FEATURES_ANNOTATION: &str = "kubeswift.io/launcher-features";
 pub const LAUNCHER_FEATURES: &str = "artifact-requirements";
 
+/// The running Cloud Hypervisor's version as `vmm.ping` reports it, e.g.
+/// `v54.0` (the controller's `hypervisorVersionAnnotation`).
+pub const HYPERVISOR_VERSION_ANNOTATION: &str = "kubeswift.io/guest-hypervisor-version";
+
 /// This launcher's features: [`LAUNCHER_FEATURES`] plus what its Cloud
 /// Hypervisor and event stream support (`migration-events`,
 /// `migration-cancel`; see migevents.rs). `ch_major` is the running Cloud
@@ -163,6 +167,7 @@ pub async fn report_guest_runtime(
     hypervisor: &str,
     bridge_features: &str,
     launcher_features: &str,
+    hypervisor_version: &str,
 ) -> Result<(), kube::Error> {
     let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
     let mut annotations = std::collections::BTreeMap::new();
@@ -189,6 +194,13 @@ pub async fn report_guest_runtime(
         "kubeswift.io/guest-hypervisor".to_string(),
         hypervisor.to_string(),
     );
+    if !hypervisor_version.is_empty() {
+        // A snapshot records it at capture; a restore compares it (#871).
+        annotations.insert(
+            HYPERVISOR_VERSION_ANNOTATION.to_string(),
+            hypervisor_version.to_string(),
+        );
+    }
     let patch = json!({
         "metadata": {
             "annotations": annotations

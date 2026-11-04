@@ -38,11 +38,9 @@ type SwiftRestoreReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
-	// CurrentHypervisorVersion is the cluster's current CH version
-	// string (e.g. "v51.1"), set at controller startup. Used by the
-	// Tier B restore path's version check (architect risk #3).
-	// Empty string disables the check — controller surfaces a Warning
-	// rather than blocking.
+	// CurrentHypervisorVersion is the Cloud Hypervisor version that restores
+	// (e.g. "v54.0"). Empty means clonecommon.CloudHypervisorVersion, the one
+	// the launcher image ships; tests set it.
 	CurrentHypervisorVersion string
 
 	// SnapshotS3Image is the snapshot-s3 image used by the s3 (Tier C)

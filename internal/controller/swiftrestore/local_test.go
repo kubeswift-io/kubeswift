@@ -12,61 +12,8 @@ import (
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	swiftguestctrl "github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
-
-// -------- Pure version-comparison tests --------
-
-func TestCompareHypervisorVersions_ExactMatch(t *testing.T) {
-	if got := CompareHypervisorVersions("v51.1", "v51.1"); got != VersionExactMatch {
-		t.Errorf("got %v, want VersionExactMatch", got)
-	}
-}
-
-func TestCompareHypervisorVersions_PatchDriftSameMinor(t *testing.T) {
-	if got := CompareHypervisorVersions("v51.1.0", "v51.1.2"); got != VersionPatchDrift {
-		t.Errorf("got %v, want VersionPatchDrift", got)
-	}
-}
-
-func TestCompareHypervisorVersions_MinorMismatch(t *testing.T) {
-	if got := CompareHypervisorVersions("v51.1", "v51.2"); got != VersionMinorMismatch {
-		t.Errorf("got %v, want VersionMinorMismatch", got)
-	}
-}
-
-func TestCompareHypervisorVersions_MajorMismatch(t *testing.T) {
-	if got := CompareHypervisorVersions("v51.1", "v52.0"); got != VersionMajorMismatch {
-		t.Errorf("got %v, want VersionMajorMismatch", got)
-	}
-}
-
-func TestCompareHypervisorVersions_EmptyEitherSide(t *testing.T) {
-	if got := CompareHypervisorVersions("", "v51.1"); got != VersionUnknown {
-		t.Errorf("empty snap version: got %v, want VersionUnknown", got)
-	}
-	if got := CompareHypervisorVersions("v51.1", ""); got != VersionUnknown {
-		t.Errorf("empty current version: got %v, want VersionUnknown", got)
-	}
-}
-
-func TestCompareHypervisorVersions_GarbageInputsAreUnknown(t *testing.T) {
-	if got := CompareHypervisorVersions("not a version", "v51.1"); got != VersionUnknown {
-		t.Errorf("got %v, want VersionUnknown", got)
-	}
-}
-
-func TestCompareHypervisorVersions_HandlesPrefixVariations(t *testing.T) {
-	// Both with v
-	if got := CompareHypervisorVersions("v51.1", "v51.1"); got != VersionExactMatch {
-		t.Errorf("got %v, want VersionExactMatch", got)
-	}
-	// One with v, one without — semantically equivalent. parseVersion
-	// strips "v" so this should behave as patch-drift-or-better; with
-	// no patch on either side, that's exact-match.
-	if got := CompareHypervisorVersions("51.1", "v51.1"); got != VersionExactMatch {
-		t.Errorf("got %v, want VersionExactMatch", got)
-	}
-}
 
 // -------- Tier B Pending dispatch tests --------
 
@@ -88,39 +35,42 @@ func makeLocalSnap(name, ns, sourceGuest, hostPath, hypervisorVersion string) *s
 	}
 }
 
-func TestLocal_Pending_MajorVersionMismatch_FailsWithVersionReason(t *testing.T) {
-	snap := makeLocalSnap("snap1", "default", "g1", "/var/lib/kubeswift/snapshots/default-snap1", "v51.1")
-	restore := makeRestore("restore1", "default", "snap1", "g1-restored", true)
+// A snapshot from a later Cloud Hypervisor than the restoring one is refused
+// before anything is created (#871), whether the major or the minor is later.
+func TestLocal_Pending_SnapshotFromLaterHypervisor_Fails(t *testing.T) {
+	for _, tc := range []struct{ snap, current string }{{"v52.0", "v51.1"}, {"v51.2", "v51.1"}} {
+		snap := makeLocalSnap("snap1", "default", "g1", "/var/lib/kubeswift/snapshots/default-snap1", tc.snap)
+		restore := makeRestore("restore1", "default", "snap1", "g1-restored", true)
 
-	r, c := newReconciler(t, snap, restore)
-	r.CurrentHypervisorVersion = "v52.0"
-	reconcile(t, r, "restore1", "default")
+		r, c := newReconciler(t, snap, restore)
+		r.CurrentHypervisorVersion = tc.current
+		reconcile(t, r, "restore1", "default")
 
-	got := get(t, c, "restore1", "default")
-	if got.Status.Phase != snapshotv1alpha1.SwiftRestorePhaseFailed {
-		t.Fatalf("phase = %s, want Failed", got.Status.Phase)
-	}
-	if cond := findReady(got); cond == nil || cond.Reason != ReasonRestoreFailed {
-		t.Errorf("reason = %q, want RestoreFailed", reasonOrEmpty(cond))
-	} else if !contains(cond.Message, "major-version mismatch") {
-		t.Errorf("message %q missing 'major-version mismatch'", cond.Message)
+		got := get(t, c, "restore1", "default")
+		if got.Status.Phase != snapshotv1alpha1.SwiftRestorePhaseFailed {
+			t.Fatalf("%s on %s: phase = %s, want Failed", tc.snap, tc.current, got.Status.Phase)
+		}
+		if cond := findReady(got); cond == nil || cond.Reason != ReasonHypervisorVersionIncompatible ||
+			!contains(cond.Message, tc.snap) || !contains(cond.Message, tc.current) {
+			t.Errorf("%s on %s: cond = %+v", tc.snap, tc.current, cond)
+		}
 	}
 }
 
-func TestLocal_Pending_MinorVersionMismatch_FailsWithVersionReason(t *testing.T) {
-	snap := makeLocalSnap("snap1", "default", "g1", "/var/lib/kubeswift/snapshots/default-snap1", "v51.1")
-	restore := makeRestore("restore1", "default", "snap1", "g1-restored", true)
+// A later Cloud Hypervisor restores an earlier one's snapshot: the check lets
+// it through (v54 restores v53 memory snapshots).
+func TestLocal_Pending_SnapshotFromEarlierHypervisor_Restores(t *testing.T) {
+	snap := makeLocalSnap("snap1", "default", "g1", "/var/lib/kubeswift/snapshots/default-snap1", "v53.0")
+	restore := makeRestore("restore1", "default", "snap1", "g1", true)
+	restore.Spec.TargetGuest.OverwriteExisting = true
+	source := makeSourceGuest("default", "g1", "ubuntu-noble")
 
-	r, c := newReconciler(t, snap, restore)
-	r.CurrentHypervisorVersion = "v51.2"
+	r, c := newReconciler(t, snap, restore, source)
+	r.CurrentHypervisorVersion = "v54.0"
 	reconcile(t, r, "restore1", "default")
 
-	got := get(t, c, "restore1", "default")
-	if got.Status.Phase != snapshotv1alpha1.SwiftRestorePhaseFailed {
-		t.Fatalf("phase = %s, want Failed", got.Status.Phase)
-	}
-	if cond := findReady(got); cond == nil || !contains(cond.Message, "minor-version mismatch") {
-		t.Errorf("missing minor-version mismatch reason; cond=%v", cond)
+	if got := get(t, c, "restore1", "default"); got.Status.Phase != snapshotv1alpha1.SwiftRestorePhaseRestoring {
+		t.Fatalf("phase = %s, want Restoring", got.Status.Phase)
 	}
 }
 
@@ -146,8 +96,8 @@ func TestLocal_Pending_PatchDrift_DoesNotBlockRestore(t *testing.T) {
 	if cond == nil {
 		t.Fatal("Ready condition missing")
 	}
-	if contains(cond.Message, "version mismatch") {
-		t.Errorf("patch drift should not surface as version mismatch; got %q", cond.Message)
+	if cond.Reason == ReasonHypervisorVersionIncompatible {
+		t.Errorf("patch drift must not be refused; got %q", cond.Message)
 	}
 }
 
@@ -156,7 +106,7 @@ func TestLocal_Pending_SkipAnnotationBypassesCheck(t *testing.T) {
 	// passes the version gate when the skip annotation is set. With
 	// the in-place target name + OverwriteExisting we sail through
 	// to Restoring rather than failing on either gate.
-	snap := makeLocalSnap("snap1", "default", "g1", "/var/lib/kubeswift/snapshots/default-snap1", "v50.0")
+	snap := makeLocalSnap("snap1", "default", "g1", "/var/lib/kubeswift/snapshots/default-snap1", "v53.0")
 	restore := makeRestore("restore1", "default", "snap1", "g1", true)
 	restore.Spec.TargetGuest.OverwriteExisting = true
 	restore.Annotations = map[string]string{SkipHypervisorVersionCheckAnnotation: "true"}
@@ -171,31 +121,25 @@ func TestLocal_Pending_SkipAnnotationBypassesCheck(t *testing.T) {
 	if cond == nil {
 		t.Fatal("Ready condition missing")
 	}
-	if contains(cond.Message, "version mismatch") {
+	if cond.Reason == ReasonHypervisorVersionIncompatible {
 		t.Errorf("skip annotation should bypass version check; got %q", cond.Message)
 	}
 }
 
-func TestLocal_Pending_NoCurrentVersionConfigured_AllowsRestore(t *testing.T) {
-	// Empty CurrentHypervisorVersion → version check is disabled (a
-	// controller deployed without the env wiring). Restores proceed
-	// rather than blocking.
-	snap := makeLocalSnap("snap1", "default", "g1", "/var/lib/kubeswift/snapshots/default-snap1", "v51.1")
-	restore := makeRestore("restore1", "default", "snap1", "g1", true)
-	restore.Spec.TargetGuest.OverwriteExisting = true
-	source := makeSourceGuest("default", "g1", "ubuntu-noble")
+// Unset CurrentHypervisorVersion means the version the launcher image ships,
+// so a snapshot from a later Cloud Hypervisor than that is still refused.
+func TestLocal_Pending_DefaultsToTheLauncherHypervisor(t *testing.T) {
+	snap := makeLocalSnap("snap1", "default", "g1", "/var/lib/kubeswift/snapshots/default-snap1", "v999.0")
+	restore := makeRestore("restore1", "default", "snap1", "g1-restored", true)
 
-	r, c := newReconciler(t, snap, restore, source)
+	r, c := newReconciler(t, snap, restore)
 	r.CurrentHypervisorVersion = ""
 	reconcile(t, r, "restore1", "default")
 
 	got := get(t, c, "restore1", "default")
-	cond := findReady(got)
-	if cond == nil {
-		t.Fatal("Ready condition missing")
-	}
-	if contains(cond.Message, "version mismatch") {
-		t.Errorf("empty CurrentHypervisorVersion should not run version check; got %q", cond.Message)
+	if cond := findReady(got); cond == nil || cond.Reason != ReasonHypervisorVersionIncompatible ||
+		!contains(cond.Message, clonecommon.CloudHypervisorVersion) {
+		t.Errorf("cond = %+v", cond)
 	}
 }
 
