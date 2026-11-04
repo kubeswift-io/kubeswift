@@ -116,8 +116,9 @@ v54 restores memory snapshots taken on v53 (including `cloneFromSnapshot`).
   KubeSwift emits.
 - **VM Generation ID:** v54 exposes the device (ACPI `VMGENCTR`). Ubuntu cloud
   images ship its driver as a module that is not loaded, so a guest cloned from
-  a memory snapshot does not reseed its RNG unless it loads `vmgenid`. Sandbox
-  kernels do not include it; sandboxes are never restored.
+  a memory snapshot does not reseed its RNG unless the source had `vmgenid`
+  loaded (see [clone from snapshot](../snapshots/clone-from-snapshot.md#randomness-load-vmgenid-in-the-source)).
+  Sandbox kernels do not include it; sandboxes are never restored.
 - **GPU:** passthrough uses legacy VFIO. v54's iommufd backend works only with
   its new P2P BAR mapping turned off (`vfio_p2p_dma=off`); KubeSwift does not
   use iommufd.

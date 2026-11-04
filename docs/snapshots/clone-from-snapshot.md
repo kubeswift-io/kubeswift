@@ -137,6 +137,35 @@ a warm, read-mostly replica. The legacy `kubeswift.clone=true` bootcmd path is
 kept as a fallback but **does not complete on CH v52** (the reboot hangs); install
 the agent to get independently-addressable clones.
 
+### Randomness: load `vmgenid` in the source
+
+Every clone also resumes the source's kernel random number generator state, so
+clones can produce the same "random" values (TLS session keys, UUIDs, nonces)
+until something reseeds them. Cloud Hypervisor gives each restored VM a new VM
+Generation ID (an ACPI device, `VMGENCTR`); a guest kernel with the `vmgenid`
+driver loaded sees the change on resume and reseeds at once:
+
+```
+random: crng reseeded due to virtual machine fork
+```
+
+The driver has to be loaded in the **source** before the snapshot is taken: a
+clone resumes the source's kernel and never runs a module load of its own.
+Ubuntu 24.04 cloud images build it as a module (`CONFIG_VMGENID=m`) that is not
+in the base kernel package, so on the image or the source guest:
+
+```bash
+sudo apt-get install linux-modules-extra-$(uname -r)
+echo vmgenid | sudo tee /etc/modules-load.d/vmgenid.conf   # load at every boot
+sudo modprobe vmgenid
+ls /sys/bus/acpi/drivers/vmgenid/                          # VMGENCTR:00 = bound
+```
+
+A kernel with `CONFIG_VMGENID=y` needs nothing. `modinfo vmgenid` failing means
+the module is not installed; clones from that source do not reseed. This applies
+to `cloneFromSnapshot` and SwiftRestore clones alike. SwiftSandbox kernels do not
+include the driver: sandboxes are never restored from a snapshot.
+
 ## Quick start (walkthrough)
 
 ```bash
