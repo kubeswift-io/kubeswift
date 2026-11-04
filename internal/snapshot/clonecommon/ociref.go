@@ -52,6 +52,9 @@ type OCIConnection struct {
 	CABundle              string
 	CredentialsSecretName string
 	SigningKeySecretName  string
+	// VerifyKey is the cosign public key every pulled artifact must be signed
+	// with ("" = not verified); recorded from the storage location.
+	VerifyKey string
 }
 
 // SnapshotOCI is the registry an oci snapshot uses: status.location, which
@@ -67,6 +70,7 @@ func SnapshotOCI(snap *snapshotv1alpha1.SwiftSnapshot) (OCIConnection, bool) {
 			CABundle:              l.CABundle,
 			CredentialsSecretName: l.CredentialsSecretName,
 			SigningKeySecretName:  l.SigningKeySecretName,
+			VerifyKey:             l.VerifyKey,
 		}, true
 	}
 	o := snap.Spec.Backend.OCI

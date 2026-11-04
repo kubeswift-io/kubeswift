@@ -166,6 +166,9 @@ type OCIDownloadJobParams struct {
 	CredentialsSecretName string
 	// CABundle is PEM CA certificates to trust for the registry (TransferCA).
 	CABundle string
+	// VerifyKey is the cosign public key the artifact must be signed with;
+	// "" = not verified.
+	VerifyKey string
 	// Image is the snapshot-oras uploader/downloader image.
 	Image string
 	// Name / Namespace / Node of the Job; Component is the component label.
@@ -204,6 +207,8 @@ func BuildOCIDownloadJob(p OCIDownloadJobParams) *batchv1.Job {
 	}}
 	mounts := []corev1.VolumeMount{{Name: "cache", MountPath: DownloadMount}}
 	env := RegistryCAEnvVars(p.CABundle)
+	vEnv, vMounts, vVolumes := VerifyKeyEnv(p.VerifyKey)
+	env, mounts, volumes = append(env, vEnv...), append(mounts, vMounts...), append(volumes, vVolumes...)
 	if p.CredentialsSecretName != "" {
 		env = append(env, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: ociDownloadAuthMount})
 		mounts = append(mounts, corev1.VolumeMount{Name: "oras-auth", MountPath: ociDownloadAuthMount, ReadOnly: true})
@@ -255,4 +260,25 @@ func BuildOCIDownloadJob(p OCIDownloadJobParams) *batchv1.Job {
 			},
 		},
 	}
+}
+
+// VerifyKeyEnvName carries a PEM cosign public key to snapshot-oras, which
+// verifies the artifact's signature before it pulls a byte of it.
+const VerifyKeyEnvName = "KUBESWIFT_VERIFY_KEY"
+
+// VerifyKeyEnv is what a snapshot-oras download container needs to verify
+// against key: the key in VerifyKeyEnvName, and a writable HOME/TMPDIR for
+// cosign (the container's rootfs is read-only). Nothing for "".
+func VerifyKeyEnv(key string) ([]corev1.EnvVar, []corev1.VolumeMount, []corev1.Volume) {
+	if key == "" {
+		return nil, nil, nil
+	}
+	const home = "/cosign-home"
+	return []corev1.EnvVar{
+			{Name: VerifyKeyEnvName, Value: key},
+			{Name: "HOME", Value: home},
+			{Name: "TMPDIR", Value: home},
+		},
+		[]corev1.VolumeMount{{Name: "cosign-home", MountPath: home}},
+		[]corev1.Volume{{Name: "cosign-home", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}
 }

@@ -480,6 +480,11 @@ type SnapshotLocation struct {
 	// namespace, the push signs with. Empty means unsigned.
 	// +optional
 	SigningKeySecretName string `json:"signingKeySecretName,omitempty"`
+	// VerifyKey is the location's cosign public key at resolution. Every
+	// artifact a restore or clone pulls (memory and full-state disks) must
+	// carry a valid signature for it; empty means not verified.
+	// +optional
+	VerifyKey string `json:"verifyKey,omitempty"`
 	// VolumeSnapshotClassName is the class a csi-volume-snapshot snapshot
 	// uses.
 	// +optional

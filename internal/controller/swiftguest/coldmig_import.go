@@ -192,6 +192,10 @@ func buildDiskFromOCIJob(guest *swiftv1alpha1.SwiftGuest, snap *snapshotv1alpha1
 		container.VolumeMounts = []corev1.VolumeMount{{Name: "rootdisk", MountPath: DisksRootPath}}
 	}
 	volumes := []corev1.Volume{vol}
+	vEnv, vMounts, vVolumes := clonecommon.VerifyKeyEnv(oci.VerifyKey)
+	container.Env = append(container.Env, vEnv...)
+	container.VolumeMounts = append(container.VolumeMounts, vMounts...)
+	volumes = append(volumes, vVolumes...)
 
 	if oci.CredentialsSecretName != "" {
 		container.Env = append(container.Env, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: "/oras-auth"})

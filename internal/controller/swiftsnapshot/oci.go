@@ -266,44 +266,8 @@ func buildOCIPushJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode st
 		})
 	}
 
-	// P2 provenance signing: mount the cosign key + password and tell
-	// snapshot-oras to sign the pushed digest as an OCI referrer. cosign needs a
-	// writable HOME/TMPDIR because the container rootfs is read-only.
-	if ociSigningRequested(snap) {
-		args = append(args, "--sign-key="+ociSignKeyMount+"/cosign.key")
-		mounts = append(mounts,
-			corev1.VolumeMount{Name: "oras-signing-key", MountPath: ociSignKeyMount, ReadOnly: true},
-			corev1.VolumeMount{Name: "cosign-home", MountPath: ociCosignHome},
-		)
-		env = append(env,
-			// Password for the encrypted key. Optional so a missing key fails
-			// loudly inside cosign (strict) rather than blocking pod creation.
-			corev1.EnvVar{Name: "COSIGN_PASSWORD", ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: oci.SigningKeySecretName},
-					Key:                  "cosign.password",
-					Optional:             ptr.To(true),
-				},
-			}},
-			corev1.EnvVar{Name: "HOME", Value: ociCosignHome},
-			corev1.EnvVar{Name: "TMPDIR", Value: ociCosignHome},
-		)
-		volumes = append(volumes,
-			corev1.Volume{
-				Name: "oras-signing-key",
-				VolumeSource: corev1.VolumeSource{
-					Secret: &corev1.SecretVolumeSource{
-						SecretName: oci.SigningKeySecretName,
-						Items:      []corev1.KeyToPath{{Key: "cosign.key", Path: "cosign.key"}},
-					},
-				},
-			},
-			corev1.Volume{
-				Name:         "cosign-home",
-				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
-			},
-		)
-	}
+	sArgs, sMounts, sEnv, sVolumes := ociSigning(snap)
+	args, mounts, env, volumes = append(args, sArgs...), append(mounts, sMounts...), append(env, sEnv...), append(volumes, sVolumes...)
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -377,4 +341,46 @@ func (r *SwiftSnapshotReconciler) ociTagConflict(ctx context.Context, snap *snap
 		}
 	}
 	return "", nil
+}
+
+// ociSigning is what a snapshot-oras push container needs to cosign-sign what
+// it pushes: the key + password from the snapshot's signing Secret, and a
+// writable HOME/TMPDIR for cosign (the rootfs is read-only). Nothing when the
+// snapshot does not sign. Used for the memory artifact and for every
+// full-state disk artifact, so a signed snapshot has no unsigned part.
+func ociSigning(snap *snapshotv1alpha1.SwiftSnapshot) ([]string, []corev1.VolumeMount, []corev1.EnvVar, []corev1.Volume) {
+	if !ociSigningRequested(snap) {
+		return nil, nil, nil, nil
+	}
+	oci := ociConn(snap)
+	return []string{"--sign-key=" + ociSignKeyMount + "/cosign.key"},
+		[]corev1.VolumeMount{
+			{Name: "oras-signing-key", MountPath: ociSignKeyMount, ReadOnly: true},
+			{Name: "cosign-home", MountPath: ociCosignHome},
+		},
+		[]corev1.EnvVar{
+			// Password for the encrypted key. Optional so a missing key fails
+			// loudly inside cosign (strict) rather than blocking pod creation.
+			{Name: "COSIGN_PASSWORD", ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: oci.SigningKeySecretName},
+					Key:                  "cosign.password",
+					Optional:             ptr.To(true),
+				},
+			}},
+			{Name: "HOME", Value: ociCosignHome},
+			{Name: "TMPDIR", Value: ociCosignHome},
+		},
+		[]corev1.Volume{
+			{
+				Name: "oras-signing-key",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: oci.SigningKeySecretName,
+						Items:      []corev1.KeyToPath{{Key: "cosign.key", Path: "cosign.key"}},
+					},
+				},
+			},
+			{Name: "cosign-home", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		}
 }

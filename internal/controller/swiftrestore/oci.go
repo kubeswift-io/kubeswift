@@ -187,6 +187,7 @@ func buildOCIDownloadJob(restore *snapshotv1alpha1.SwiftRestore, snap *snapshotv
 		Insecure:              oci.Insecure,
 		CredentialsSecretName: oci.CredentialsSecretName,
 		CABundle:              caBundle,
+		VerifyKey:             oci.VerifyKey,
 		Image:                 image,
 		Name:                  ociDownloadJobName(restore),
 		Namespace:             restore.Namespace,

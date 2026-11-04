@@ -490,6 +490,7 @@ func (r *SwiftGuestReconciler) buildCloneDownloadJob(snap *snapshotv1alpha1.Swif
 			Insecure:              oci.Insecure,
 			CredentialsSecretName: oci.CredentialsSecretName,
 			CABundle:              caBundle,
+			VerifyKey:             oci.VerifyKey,
 			Image:                 r.SnapshotORASImage,
 			Name:                  name,
 			Namespace:             snap.Namespace,
