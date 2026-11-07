@@ -285,9 +285,11 @@ impl Worker {
 
         let wanted: HashSet<&str> = desired.iter().map(|v| v.name.as_str()).collect();
         for v in &desired {
-            if plugged.contains_key(&v.name) {
+            if let Some(p) = plugged.get(&v.name) {
                 self.state.failed.remove(&v.name);
-                statuses.push(Status::new(&v.name, &v.serial, ATTACHED));
+                let mut st = Status::new(&v.name, &v.serial, ATTACHED);
+                st.attempt = parse_id(&p.id).map(|(_, a)| a).unwrap_or(0);
+                statuses.push(st);
                 continue;
             }
             let key = (v.pv_name.clone(), v.attachment_pod_uid.clone());
