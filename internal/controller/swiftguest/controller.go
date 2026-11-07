@@ -84,6 +84,12 @@ type SwiftGuestReconciler struct {
 	// cert-manager), so the controller enforces it too -- see hostpathguard.go.
 	AllowedHostPathPrefixes []string
 
+	// VolumeHotplug mirrors --volume-hotplug: every new launcher pod mounts
+	// kubelet's CSI volumeDevices directory (under KubeletRootDir), where the
+	// launcher reads the device of a hot-plugged volume.
+	VolumeHotplug  bool
+	KubeletRootDir string
+
 	// SystemNamespace is the controller-manager's own namespace, where the
 	// migration CA Issuer, the per-node identity Secrets, and the
 	// kubeswift-migration-stunnel ConfigMap live. Used to copy the stunnel

@@ -264,6 +264,13 @@
       "additionalProperties": false,
       "properties": {
         "allowedHostPathPrefixes": {},
+        "volumeHotplug": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {},
+            "kubeletRootDir": {}
+          }
+        },
         "sharedBaseDisk": {
           "additionalProperties": false,
           "properties": {

@@ -28,6 +28,20 @@ webhooks:
         apiGroups: ["swift.kubeswift.io"]
         apiVersions: ["v1alpha1"]
         resources: ["swiftguests"]
+  - name: vswiftvolumeattachment.swift.kubeswift.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    clientConfig:
+      service:
+        namespace: kubeswift-system
+        name: kubeswift-webhook-service
+        path: /validate-swift-kubeswift-io-v1alpha1-swiftvolumeattachment
+    rules:
+      - operations: [CREATE]
+        apiGroups: ["swift.kubeswift.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["swiftvolumeattachments"]
   - name: vswiftimage.image.kubeswift.io
     admissionReviewVersions: ["v1"]
     sideEffects: None

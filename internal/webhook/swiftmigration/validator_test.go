@@ -30,7 +30,8 @@ func migrationScheme(t *testing.T) *runtime.Scheme {
 	}
 	gvSwift := schema.GroupVersion{Group: "swift.kubeswift.io", Version: "v1alpha1"}
 	s.AddKnownTypes(gvSwift, &swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{},
-		&swiftv1alpha1.SwiftGuestClass{}, &swiftv1alpha1.SwiftGuestClassList{})
+		&swiftv1alpha1.SwiftGuestClass{}, &swiftv1alpha1.SwiftGuestClassList{},
+		&swiftv1alpha1.SwiftVolumeAttachment{}, &swiftv1alpha1.SwiftVolumeAttachmentList{})
 	metav1.AddToGroupVersion(s, gvSwift)
 	gvMig := schema.GroupVersion{Group: "migration.kubeswift.io", Version: "v1alpha1"}
 	s.AddKnownTypes(gvMig, &migrationv1alpha1.SwiftMigration{}, &migrationv1alpha1.SwiftMigrationList{})

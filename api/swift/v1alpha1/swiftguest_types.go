@@ -952,6 +952,10 @@ type SwiftGuestStatus struct {
 	// and the guest stays Pending (no silent boot with a missing disk).
 	// +optional
 	DataDisks []DataDiskStatus `json:"dataDisks,omitempty"`
+	// HotplugVolumes are the SwiftVolumeAttachment disks the guest's
+	// launcher has, or is plugging in or out, as it reports them.
+	// +optional
+	HotplugVolumes []HotplugVolumeStatus `json:"hotplugVolumes,omitempty"`
 }
 
 // DataDiskStatus is the observed state of one secondary data disk.

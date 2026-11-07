@@ -531,6 +531,16 @@ swiftGuest:
   #   allowedHostPathPrefixes:
   #     - /srv/kubeswift-shares
   allowedHostPathPrefixes: []
+  # Hot-plugged volumes (SwiftVolumeAttachment): attach a Block PVC to a
+  # running guest as a virtio-blk disk, and detach it, without a restart.
+  # Off by default while the feature is new. When on, every NEW launcher pod
+  # mounts kubelet's CSI volumeDevices directory read-only, where the launcher
+  # reads a hot-plugged volume's device; guests started before it was turned
+  # on cannot hot-plug until they restart. See docs/storage/volume-hotplug.md.
+  volumeHotplug:
+    enabled: false
+    # kubelet's --root-dir on the nodes that run guests.
+    kubeletRootDir: /var/lib/kubelet
   # Shared-base root disks (SwiftGuestClass.sharedBaseDisk: true), where guests
   # of one image share a copy-on-write base on their node instead of each
   # copying it.

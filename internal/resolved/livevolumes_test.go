@@ -89,6 +89,10 @@ func TestLiveMigrationVolumesError(t *testing.T) {
 			s.KernelRef = &corev1.LocalObjectReference{Name: "k"}
 			s.DataDiskRefs = []swiftv1alpha1.DataDiskRef{blank("scratch")}
 		}, []client.Object{livePVC(BlankDataDiskPVCName("g", "scratch"), corev1.ReadWriteOnce, true)}, `data disk "scratch"`},
+		{"a volume attachment for the guest", func(s *swiftv1alpha1.SwiftGuestSpec) {},
+			[]client.Object{sva("data", "g")}, `SwiftVolumeAttachment "data"`},
+		{"a volume attachment for another guest", func(s *swiftv1alpha1.SwiftGuestSpec) {},
+			[]client.Object{sva("data", "other")}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -124,5 +128,15 @@ func TestLiveMigrationVolumesError_BoundAccessModes(t *testing.T) {
 	gate, err := LiveMigrationVolumesError(context.Background(), c, guest)
 	if err != nil || gate == nil {
 		t.Fatalf("bound RWO must refuse live migration; gate=%v err=%v", gate, err)
+	}
+}
+
+func sva(name, guest string) *swiftv1alpha1.SwiftVolumeAttachment {
+	return &swiftv1alpha1.SwiftVolumeAttachment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},
+		Spec: swiftv1alpha1.SwiftVolumeAttachmentSpec{
+			GuestRef: corev1.LocalObjectReference{Name: guest},
+			PVCRef:   corev1.LocalObjectReference{Name: "pvc"},
+		},
 	}
 }

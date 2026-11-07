@@ -6,6 +6,10 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Hot-plugged volumes, controller side (#645, off by default).** New CRD `SwiftVolumeAttachment` (`sva`, group `swift.kubeswift.io`): attaches a Block, CSI-backed PVC to a running SwiftGuest as a virtio-blk disk (`/dev/disk/by-id/virtio-<status.serial>`) and detaches it on delete, held by the `kubeswift.io/volume-detach` finalizer until the guest has let go of it. The controller puts the volume on the guest's node with an unprivileged attachment pod and writes the guest's desired set onto its launcher pod (`kubeswift.io/hotplug-volumes`); the launcher side ships separately. Requires `spec.guestAgent.enabled`, Cloud Hypervisor, no GPU; at most 16 per guest; a claim on two guests only if it is ReadWriteMany and every attachment is `readOnly`. The guest reports what its launcher has in `status.hotplugVolumes`. Live migration and memory snapshots of a guest with an attachment are refused for now (`HotplugVolumesAttached`); offline migration and stop/start re-attach. Chart: `swiftGuest.volumeHotplug.enabled` (default `false`) and `.kubeletRootDir`; when on, new launcher pods mount kubelet's CSI `volumeDevices` directory read-only.
+
 ## [v0.23.0] — 2026-11-04
 
 Guests boot from MBR disks and hybrid installer ISOs (#912), report `StorageReady=False` while their root disk is still attaching (#909), and can have nested virtualization turned off per class or guest (#874). Memory snapshots record the Cloud Hypervisor that captured them and a restore refuses only a newer one (#871). Signed snapshots now sign their disk artifacts too, and restores and clones verify every artifact before pulling it (#703). SwiftImage can be made from a PVC (#902), a sandbox's console is bounded (#855), and an offline migration no longer fails when GitOps writes `runPolicy` back (#899).

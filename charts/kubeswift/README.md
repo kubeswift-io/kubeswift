@@ -203,6 +203,8 @@ point `ui.gateway.url` at an externally reachable gateway).
 |---|---|---|
 | `webhook.enabled` | Enable admission webhooks (runs the controller with `--webhook-enabled=true`). Requires cert-manager | `false` |
 | `swiftGuest.allowedHostPathPrefixes` | Host-path prefixes a SwiftGuest may mount (virtio-fs `hostPath` shares, vhost-user socket directories). Empty denies every host path. Enforced by the controller, and at admission too when `webhook.enabled` | `[]` |
+| `swiftGuest.volumeHotplug.enabled` | Hot-plugged volumes (`SwiftVolumeAttachment`). New launcher pods mount kubelet's CSI `volumeDevices` directory read-only; guests started before it was on cannot hot-plug until they restart | `false` |
+| `swiftGuest.volumeHotplug.kubeletRootDir` | kubelet's `--root-dir` on the nodes that run guests | `/var/lib/kubelet` |
 | `swiftGuest.sharedBaseDisk.poolSize` | Size of the thin pool a node creates for shared-base root disks (`SwiftGuestClass.sharedBaseDisk: true`). Preallocated, and only on nodes labelled `kubeswift.io/basedisk-node=true`; sizes a pool at creation only | `40Gi` |
 | `launcherSAGate.enabled` | Refuse any Pod, legacy token Secret or TokenRequest for a launcher ServiceAccount unless the KubeSwift controller (or, for a TokenRequest, the kubelet) makes it. **Closes a privilege escalation — see below before disabling** | `true` |
 | `launcherSAGate.guestServiceAccountName` | Guest launcher SA the gate protects. Must match what the controller stamps | `kubeswift-launcher` |

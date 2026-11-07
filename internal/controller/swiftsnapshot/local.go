@@ -40,6 +40,7 @@ import (
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
+	"github.com/kubeswift-io/kubeswift/internal/hotplug"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 	"github.com/kubeswift-io/kubeswift/internal/sharedbase"
 )
@@ -134,6 +135,17 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 				sharedbase.IncludeDiskRefusal(guest.Name, className))
 			return false, 0, nil
 		}
+	}
+
+	// Cloud Hypervisor's snapshot names a hot-plugged disk by its path in the
+	// launcher, which a restore does not have. The webhook refuses this too.
+	if name, err := hotplug.GuestAttachment(ctx, r.Client, snap.Namespace, guest.Name); err != nil {
+		return false, 0, err
+	} else if name != "" {
+		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseFailed)
+		setReadyCondition(status, metav1.ConditionFalse, ReasonHotplugVolumesAttached,
+			hotplug.MemorySnapshotRefusal(guest.Name, name))
+		return false, 0, nil
 	}
 
 	// Find the launcher pod. It must be Running for memory snapshot to
