@@ -1,12 +1,13 @@
 # CRD Reference
 
-All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **20 CRDs across 10 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, sandbox, fleet, and storage-location CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
+All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **21 CRDs across 10 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, sandbox, fleet, and storage-location CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
 
 | CRD | Short | API group | Scope | Reference |
 |-----|-------|-----------|-------|-----------|
 | SwiftGuest | `sg` | `swift.kubeswift.io` | Namespaced | [below](#swiftguest) |
 | SwiftGuestClass | `sgc` | `swift.kubeswift.io` | Cluster | [below](#swiftguestclass) |
 | SwiftGuestPool | `sgpool` | `swift.kubeswift.io` | Namespaced | [below](#swiftguestpool) |
+| SwiftVolumeAttachment | `sva` | `swift.kubeswift.io` | Namespaced | [below](#swiftvolumeattachment) |
 | SwiftImage | `si` | `image.kubeswift.io` | Namespaced | [below](#swiftimage) |
 | SwiftSeedProfile | `ssp` | `seed.kubeswift.io` | Namespaced | [below](#swiftseedprofile) |
 | SwiftKernel | `sk` | `kernel.kubeswift.io` | Namespaced | [below](#swiftkernel) |
@@ -450,6 +451,27 @@ Manages a fleet of identical VMs with ReplicaSet-style semantics: rolling update
 | `service` | PoolServiceSpec | One load-balanced Service across all replicas (`ports`, `type`, `headless`). See [Service exposure](networking/service-exposure.md). |
 
 Full reference: [SwiftGuestPool API](api/swiftguestpool.md) · [SwiftGuestPool guide](swiftguestpool-guide.md).
+
+---
+
+## SwiftVolumeAttachment
+
+**Group:** `swift.kubeswift.io/v1alpha1`
+**Scope:** Namespaced
+**Short name:** `sva`
+**Subresource:** status
+
+Hot-plugs a Block PVC into a running SwiftGuest as a virtio-blk disk; deleting it detaches the disk once the guest no longer uses it. Off by default (`swiftGuest.volumeHotplug.enabled`).
+
+| Key field | Type | Description |
+|-----------|------|-------------|
+| `guestRef` | LocalObjectReference | The guest. Cloud Hypervisor, no GPU, `spec.guestAgent.enabled`. Immutable. |
+| `pvcRef` | LocalObjectReference | The claim: `volumeMode: Block`, CSI-provisioned. Immutable. |
+| `readOnly` | bool | Attach read-only. Immutable. |
+| `status.serial` | string | The guest sees the disk at `/dev/disk/by-id/virtio-<serial>`. |
+| `status.phase` | string | `Pending`, `Attaching`, `Attached`, `Detaching` or `Failed`; the `Ready` condition says why. |
+
+Full reference: [Hot-plugged volumes](storage/volume-hotplug.md).
 
 ---
 

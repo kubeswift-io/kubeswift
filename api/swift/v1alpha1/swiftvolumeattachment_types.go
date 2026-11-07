@@ -33,6 +33,8 @@ type SwiftVolumeAttachment struct {
 // SwiftVolumeAttachmentSpec is immutable: to change an attachment, delete it
 // and create a new one.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable; delete the attachment and create a new one"
+// +kubebuilder:validation:XValidation:rule="self.guestRef.name != ''",message="spec.guestRef.name is required"
+// +kubebuilder:validation:XValidation:rule="self.pvcRef.name != ''",message="spec.pvcRef.name is required"
 type SwiftVolumeAttachmentSpec struct {
 	// GuestRef is the SwiftGuest, in this namespace, to attach the volume to.
 	// The guest must run on Cloud Hypervisor, have no GPU, and have

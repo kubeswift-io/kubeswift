@@ -116,6 +116,10 @@ spec:
             x-kubernetes-validations:
             - message: spec is immutable; delete the attachment and create a new one
               rule: self == oldSelf
+            - message: spec.guestRef.name is required
+              rule: self.guestRef.name != ''
+            - message: spec.pvcRef.name is required
+              rule: self.pvcRef.name != ''
           status:
             description: SwiftVolumeAttachmentStatus is the observed state of a SwiftVolumeAttachment.
             properties:
