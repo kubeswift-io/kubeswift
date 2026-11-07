@@ -147,11 +147,12 @@ pub const HYPERVISOR_VERSION_ANNOTATION: &str = "kubeswift.io/guest-hypervisor-v
 
 /// This launcher's features: [`LAUNCHER_FEATURES`] plus what its Cloud
 /// Hypervisor and event stream support (`migration-events`,
-/// `migration-cancel`; see migevents.rs). `ch_major` is the running Cloud
+/// `migration-cancel`; see migevents.rs) and `hotplug-volumes` (hotplug.rs). `ch_major` is the running Cloud
 /// Hypervisor's major version, when known.
 pub fn launcher_features(ch_major: Option<u32>) -> String {
     let mut f = vec![LAUNCHER_FEATURES];
     f.extend(crate::migevents::features(ch_major));
+    f.extend(crate::hotplug::features());
     f.join(" ")
 }
 

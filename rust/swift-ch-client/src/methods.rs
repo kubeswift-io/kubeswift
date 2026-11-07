@@ -45,6 +45,18 @@ pub struct VmInfo {
     pub state: String,
 }
 
+/// A disk to hot-plug with [`ApiClient::add_disk`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotplugDisk {
+    /// Block device node in the launcher.
+    pub path: String,
+    /// Cloud Hypervisor device id.
+    pub id: String,
+    /// virtio serial the guest sees.
+    pub serial: String,
+    pub readonly: bool,
+}
+
 /// Build/version information from `vmm.ping`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct VmmVersion {
@@ -427,6 +439,48 @@ impl ApiClient {
                 String::from_utf8_lossy(&resp.body)
             ))
         })
+    }
+
+    /// The whole `vm.info` response, for callers that read the VM's current
+    /// disks and device tree (hot-plugged volumes). [`vm_info`] stays the
+    /// typed view for everything else.
+    pub fn vm_info_value(&self) -> Result<serde_json::Value, ApiError> {
+        let resp = self.request_ok("GET", "/api/v1/vm.info", None)?;
+        serde_json::from_slice(&resp.body).map_err(|e| {
+            ApiError::Malformed(format!(
+                "vm.info parse: {} (body={:?})",
+                e,
+                String::from_utf8_lossy(&resp.body)
+            ))
+        })
+    }
+
+    /// Hot-plug a raw disk (`vm.add-disk`). Cloud Hypervisor v54 requires
+    /// `image_type`; `serial` is at most 20 bytes. A failure inside the device
+    /// manager (no free PCI slot) leaves `id` in the device tree for good, so
+    /// a caller must never retry with the same id.
+    pub fn add_disk(&self, disk: &HotplugDisk) -> Result<(), ApiError> {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "path": disk.path,
+            "id": disk.id,
+            "serial": disk.serial,
+            "readonly": disk.readonly,
+            "direct": true,
+            "image_type": "Raw",
+        }))
+        .map_err(|e| ApiError::Malformed(format!("add-disk body serialize: {}", e)))?;
+        self.request_ok("PUT", "/api/v1/vm.add-disk", Some(&body))
+            .map(drop)
+    }
+
+    /// Unplug a device by id (`vm.remove-device`). Returns once Cloud
+    /// Hypervisor accepted the request; the guest acknowledges the eject
+    /// asynchronously.
+    pub fn remove_device(&self, id: &str) -> Result<(), ApiError> {
+        let body = serde_json::to_vec(&serde_json::json!({ "id": id }))
+            .map_err(|e| ApiError::Malformed(format!("remove-device body serialize: {}", e)))?;
+        self.request_ok("PUT", "/api/v1/vm.remove-device", Some(&body))
+            .map(drop)
     }
 
     /// Query VMM build version and pid.
