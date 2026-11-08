@@ -9,6 +9,7 @@ resources:
   - bases/swift.kubeswift.io_swiftguests.yaml
   - bases/swift.kubeswift.io_swiftguestclasses.yaml
   - bases/swift.kubeswift.io_swiftguestpools.yaml
+  - bases/swift.kubeswift.io_swiftvolumeattachments.yaml
   - bases/image.kubeswift.io_swiftimages.yaml
   - bases/seed.kubeswift.io_swiftseedprofiles.yaml
   - bases/kernel.kubeswift.io_swiftkernels.yaml

@@ -18,6 +18,7 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/hotplug"
 	"github.com/kubeswift-io/kubeswift/internal/sharedbase"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
@@ -222,6 +223,11 @@ func (v *Validator) validateMemoryCaptureCompat(ctx context.Context, snap *snaps
 			return fmt.Errorf("includeMemory=true is not supported when source SwiftGuest %s has SR-IOV interfaces "+
 				"(VFIO + memory snapshot — same failure mode as gpuProfileRef)", guest.Name)
 		}
+	}
+	if name, err := hotplug.GuestAttachment(ctx, v.Client, snap.Namespace, guest.Name); err != nil {
+		return err
+	} else if name != "" {
+		return fmt.Errorf("%s", hotplug.MemorySnapshotRefusal(guest.Name, name))
 	}
 	if guest.Annotations[HypervisorOverrideAnnotation] == "qemu" {
 		return fmt.Errorf("includeMemory=true is not supported when source SwiftGuest %s uses the QEMU runtime "+

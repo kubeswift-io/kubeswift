@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/hotplug"
 )
 
 // LiveMigrationStorageError returns nil when the guest's resolved storage allows
@@ -52,6 +53,7 @@ func LiveMigrationStorageError(guest *swiftv1alpha1.SwiftGuest, class *swiftv1al
 //     ReadWriteOnce PVCs today, so they do not qualify.
 //   - A PVC mounted into the launcher as a directory (dataDiskRefs pvcRef
 //     without attachAsDisk, filesystems pvcRef) needs ReadWriteMany.
+//   - A guest with a SwiftVolumeAttachment cannot be live-migrated.
 //
 // gate is non-nil, naming the first volume that does not qualify, when the
 // guest cannot be live-migrated; err is a failed read the caller may retry. A
@@ -111,6 +113,17 @@ func LiveMigrationVolumesError(ctx context.Context, c client.Reader, guest *swif
 		if gate, err := check(fmt.Sprintf("filesystem %q", f.Name), f.Source.PVCRef.Name, false); gate != nil || err != nil {
 			return gate, err
 		}
+	}
+	// A hot-plugged volume is not in the launcher pod at all: the destination
+	// would boot without it. Live migration with hot-plugged volumes is not
+	// supported yet; an attachment that is still being deleted counts, since
+	// the guest may hold the disk until it is gone.
+	if name, err := hotplug.GuestAttachment(ctx, c, guest.Namespace, guest.Name); err != nil {
+		return nil, err
+	} else if name != "" {
+		return fmt.Errorf("SwiftGuest %q cannot be live-migrated: SwiftVolumeAttachment %q hot-plugs a volume into it, "+
+			"and live migration with hot-plugged volumes is not supported yet. Use spec.mode=offline, or delete the attachment first",
+			guest.Name, name), nil
 	}
 	return nil, nil
 }

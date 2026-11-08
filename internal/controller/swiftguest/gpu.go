@@ -323,6 +323,9 @@ func (r *SwiftGuestReconciler) buildPod(
 	if r.MigrationMTLSEnabled && migrationEligible(guest) {
 		applyMigrationSourceSidecar(pod, guest)
 	}
+	if r.VolumeHotplug {
+		applyHotplugVolumeDevices(pod, r.KubeletRootDir)
+	}
 	return pod, nil
 }
 

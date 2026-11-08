@@ -104,6 +104,12 @@ spec:
             {{- range .Values.swiftGuest.allowedHostPathPrefixes }}
             - --allowed-hostpath-prefix={{ . }}
             {{- end }}
+            {{- with .Values.swiftGuest.volumeHotplug }}
+            {{- if .enabled }}
+            - --volume-hotplug=true
+            - --kubelet-root-dir={{ .kubeletRootDir }}
+            {{- end }}
+            {{- end }}
           ports:
             - containerPort: 9443
               name: webhook

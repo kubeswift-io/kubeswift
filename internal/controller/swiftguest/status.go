@@ -122,6 +122,7 @@ func ClearRunState(status *swiftv1alpha1.SwiftGuestStatus, reason, message strin
 			Type: t, Status: metav1.ConditionFalse, Reason: reason, Message: message,
 		})
 	}
+	status.HotplugVolumes = nil
 	if status.Network != nil {
 		status.Network.PrimaryIP = ""
 		status.Network.PrimaryIPScope = ""
@@ -173,6 +174,10 @@ func MapPodToStatus(guest *swiftv1alpha1.SwiftGuest, pod *corev1.Pod, status *sw
 	if status.PodRef != nil && pod.UID != "" && status.PodRef.UID != pod.UID {
 		ClearRunState(status, "GuestStarting", "a new launcher is starting; nothing from the previous run applies")
 	}
+
+	// Hot-plugged volumes, as the launcher reports them. A new launcher has
+	// none until it plugs them in again.
+	status.HotplugVolumes = hotplugVolumesFromPod(pod)
 
 	// Set network from pod annotation (guest IP discovered by swiftletd)
 	if ip, ok := pod.Annotations[PodAnnotationGuestIP]; ok && ip != "" {

@@ -40,6 +40,7 @@ KubeSwift runs Linux and Windows VMs on Kubernetes. [Cloud Hypervisor](https://w
 ### Storage
 
 - [Shared-base root disks](shared-base-disks.md) — guests of one image share a copy-on-write base on their node instead of each copying it; node-local, so no migration or CSI snapshots
+- [Hot-plugged volumes](storage/volume-hotplug.md) — attach a Block PVC to a running guest, and detach it, without a restart
 
 ### Sandboxes
 

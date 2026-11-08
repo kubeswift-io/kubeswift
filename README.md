@@ -43,6 +43,7 @@ Boot your first VM → [Quickstart](docs/quickstart.md).
 | SwiftGuest | `sg` | `swift.kubeswift.io` | Namespaced | A VM instance |
 | SwiftGuestClass | `sgc` | `swift.kubeswift.io` | Cluster | CPU/memory/disk template |
 | SwiftGuestPool | `sgpool` | `swift.kubeswift.io` | Namespaced | Fleet of identical VMs |
+| SwiftVolumeAttachment | `sva` | `swift.kubeswift.io` | Namespaced | A PVC hot-plugged into a running guest |
 | SwiftImage | `si` | `image.kubeswift.io` | Namespaced | Disk image source |
 | SwiftSeedProfile | `ssp` | `seed.kubeswift.io` | Namespaced | cloud-init (NoCloud) config |
 | SwiftKernel | `sk` | `kernel.kubeswift.io` | Namespaced | Kernel + initramfs OCI artifact |
@@ -60,7 +61,7 @@ Boot your first VM → [Quickstart](docs/quickstart.md).
 | SwiftClusterStorageLocation | `csloc` | `storage.kubeswift.io` | Cluster | Registry for pushed artifacts, set once for the cluster |
 | SwiftStorageLocation | `sloc` | `storage.kubeswift.io` | Namespaced | A namespace's own registry, overriding the cluster's |
 
-20 CRDs, all `v1alpha1`.
+21 CRDs, all `v1alpha1`.
 
 ## Documentation
 

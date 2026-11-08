@@ -23,6 +23,10 @@ const (
 	// ReasonCaptureInProgress: the capture waits for the launcher's action
 	// slot, which another snapshot's capture or another action holds.
 	ReasonCaptureInProgress = "CaptureInProgress"
+
+	// ReasonHotplugVolumesAttached: the guest has a SwiftVolumeAttachment, and
+	// a snapshot that captures memory cannot carry a hot-plugged disk.
+	ReasonHotplugVolumesAttached = "HotplugVolumesAttached"
 )
 
 // setPhase updates status.phase.

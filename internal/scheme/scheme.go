@@ -25,7 +25,7 @@ var Scheme = runtime.NewScheme()
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(Scheme))
 	gvSwift := schema.GroupVersion{Group: "swift.kubeswift.io", Version: "v1alpha1"}
-	Scheme.AddKnownTypes(gvSwift, &swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{}, &swiftv1alpha1.SwiftGuestClass{}, &swiftv1alpha1.SwiftGuestClassList{}, &swiftv1alpha1.SwiftGuestPool{}, &swiftv1alpha1.SwiftGuestPoolList{})
+	Scheme.AddKnownTypes(gvSwift, &swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{}, &swiftv1alpha1.SwiftGuestClass{}, &swiftv1alpha1.SwiftGuestClassList{}, &swiftv1alpha1.SwiftGuestPool{}, &swiftv1alpha1.SwiftGuestPoolList{}, &swiftv1alpha1.SwiftVolumeAttachment{}, &swiftv1alpha1.SwiftVolumeAttachmentList{})
 	metav1.AddToGroupVersion(Scheme, gvSwift)
 	gvImage := schema.GroupVersion{Group: "image.kubeswift.io", Version: "v1alpha1"}
 	Scheme.AddKnownTypes(gvImage, &imagev1alpha1.SwiftImage{}, &imagev1alpha1.SwiftImageList{})

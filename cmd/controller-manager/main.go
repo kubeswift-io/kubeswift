@@ -41,6 +41,8 @@ import (
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftsnapshot"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftsnapshotschedule"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftstoragelocation"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftvolumeattachment"
+	"github.com/kubeswift-io/kubeswift/internal/hotplug"
 	kubeswiftmetrics "github.com/kubeswift-io/kubeswift/internal/metrics"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
 	"github.com/kubeswift-io/kubeswift/internal/scheme"
@@ -56,6 +58,7 @@ import (
 	swiftsnapshotwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsnapshot"
 	swiftsnapshotschedulewebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsnapshotschedule"
 	swiftstoragelocationwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftstoragelocation"
+	swiftvolumeattachmentwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftvolumeattachment"
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
@@ -103,6 +106,11 @@ func main() {
 		"Host-path prefix a SwiftGuest may mount into the (privileged) launcher pod "+
 			"-- spec.filesystems[].source.hostPath and vhost-user socket dirs. Repeatable. "+
 			"EMPTY DENIES ALL, which is the default: opt in per cluster.")
+	volumeHotplug := flag.Bool("volume-hotplug", false,
+		"Hot-plugged volumes (SwiftVolumeAttachment): run the attachment controller and give every new "+
+			"launcher pod kubelet's CSI volumeDevices directory, read-only.")
+	kubeletRootDir := flag.String("kubelet-root-dir", hotplug.DefaultKubeletRootDir,
+		"kubelet's --root-dir on the nodes that run guests (with --volume-hotplug).")
 	authTTL := flag.Duration("artifact-authorization-ttl", swiftsandbox.DefaultAuthorizationTTL,
 		"How long a registry's answer for a digest reference (an image, model or artifact pinned by "+
 			"digest) authorizes a sandbox's credentials to use that digest. A checkout within it asks no "+
@@ -295,6 +303,9 @@ func main() {
 		SnapshotS3Image:      swiftsnapshot.SnapshotS3Image(),
 		SnapshotORASImage:    swiftsnapshot.SnapshotORASImage(),
 
+		VolumeHotplug:  *volumeHotplug,
+		KubeletRootDir: *kubeletRootDir,
+
 		AllowedHostPathPrefixes: allowedHostPaths}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftGuest controller")
 		os.Exit(1)
@@ -307,6 +318,16 @@ func main() {
 	if err = (&swiftguest.LauncherRBACReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create launcher-rbac controller")
 		os.Exit(1)
+	}
+
+	if *volumeHotplug {
+		if err = (&swiftvolumeattachment.Reconciler{
+			Client:   mgr.GetClient(),
+			Recorder: mgr.GetEventRecorderFor("swiftvolumeattachment-controller"),
+		}).SetupWithManager(mgr); err != nil {
+			klog.ErrorS(err, "unable to create SwiftVolumeAttachment controller")
+			os.Exit(1)
+		}
 	}
 
 	if err = (&swiftkernel.SwiftKernelReconciler{
@@ -511,6 +532,14 @@ func main() {
 			WithCustomDefaulter(&swiftguestwebhook.Defaulter{}).
 			Complete(); err != nil {
 			klog.ErrorS(err, "unable to create SwiftGuest webhook")
+			os.Exit(1)
+		}
+		// Registered whether or not the feature is on: the webhook entry is,
+		// and it refuses every create when the feature is off.
+		if err = ctrl.NewWebhookManagedBy(mgr, &swiftv1alpha1.SwiftVolumeAttachment{}).
+			WithCustomValidator(&swiftvolumeattachmentwebhook.Validator{Client: mgr.GetClient(), Enabled: *volumeHotplug}).
+			Complete(); err != nil {
+			klog.ErrorS(err, "unable to create SwiftVolumeAttachment webhook")
 			os.Exit(1)
 		}
 		if err = ctrl.NewWebhookManagedBy(mgr, &imagev1alpha1.SwiftImage{}).

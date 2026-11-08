@@ -1193,6 +1193,33 @@ spec:
                       -1 means no partition (isolated or full passthrough mode).
                     type: integer
                 type: object
+              hotplugVolumes:
+                description: |-
+                  HotplugVolumes are the SwiftVolumeAttachment disks the guest's
+                  launcher has, or is plugging in or out, as it reports them.
+                items:
+                  description: |-
+                    HotplugVolumeStatus is one hot-plugged volume as the guest's launcher
+                    reports it.
+                  properties:
+                    name:
+                      description: Name is the SwiftVolumeAttachment's name.
+                      type: string
+                    reason:
+                      description: Reason explains a Failed or InUse state.
+                      type: string
+                    serial:
+                      description: Serial is the disk's virtio serial.
+                      type: string
+                    state:
+                      description: |-
+                        State is the launcher's state for the disk: Attaching, Attached,
+                        Detaching, InUse or Failed.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
               lastRestartTime:
                 format: date-time
                 type: string

@@ -41,6 +41,7 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	gvSwift := schema.GroupVersion{Group: "swift.kubeswift.io", Version: "v1alpha1"}
 	s.AddKnownTypes(gvSwift,
 		&swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{},
+		&swiftv1alpha1.SwiftVolumeAttachment{}, &swiftv1alpha1.SwiftVolumeAttachmentList{},
 		// The shared-base guard resolves a guest's class; an unregistered
 		// class type panics the fake client rather than failing the test.
 		&swiftv1alpha1.SwiftGuestClass{}, &swiftv1alpha1.SwiftGuestClassList{},
