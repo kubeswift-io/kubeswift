@@ -205,7 +205,13 @@ if network_enabled; then
     # waits up to 3 s for a reply, so the guest kernel's first DISCOVER went
     # unanswered and every boot spent ~3.4 s in DHCP (#780). The bridge is
     # this pod's own: no other host can hold an address on it.
+    # --dhcp-ignore-clid: key the lease on the guest's MAC, not its DHCP client
+    # identifier. The MAC holds for the life of the VM, the client identifier
+    # does not: systemd-networkd derives it from the interface (IAID), so a
+    # guest that comes back from an in-guest reboot with another IAID asked for
+    # a new lease and got a new address, while status kept the old one (#922).
     dnsmasq --no-daemon --bind-interfaces --interface="$BRIDGE" --no-ping \
+        --dhcp-ignore-clid \
         --dhcp-range="$range" \
         --dhcp-option=option:router,"$gateway" \
         --dhcp-option=option:dns-server,"$dns" \
