@@ -150,7 +150,7 @@ spec:
 - `maxUnavailable: 0, maxSurge: 1` -- zero-downtime; always at full capacity, needs headroom for one extra VM
 - Both are integers, and they cannot both be `0` (no replica could ever be replaced)
 
-A replica counts as available only while it is `Running` with `GuestRunning=True`. A replacement that is still booting does not count. Outdated replicas that are not serving are replaced first and do not use up `maxUnavailable`, so rolling back a rollout that never became ready is not blocked. Surge replicas take the next indices above `replicas` (e.g. `demo-pool-3` for a 3-replica pool) and are removed when the rollout finishes.
+A replica counts as available only while it is `Running` with `GuestRunning=True`. A replacement that is still booting does not count. When the replicas expose ports (`spec.service`, or `spec.network.ports` on a nat template), a replica also needs its launcher pod Ready, which happens once the launcher's readiness probe reaches the first TCP port inside the guest. `GuestRunning` turns true as soon as the VM starts, before the guest OS has booted, so without this a `maxUnavailable: 0` rollout could retire every old replica while the new ones were still booting and leave the pool Service without endpoints. Outdated replicas that are not serving are replaced first and do not use up `maxUnavailable`, so rolling back a rollout that never became ready is not blocked. Surge replicas take the next indices above `replicas` (e.g. `demo-pool-3` for a 3-replica pool) and are removed when the rollout finishes.
 
 ### Recreate strategy
 

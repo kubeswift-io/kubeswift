@@ -8,6 +8,7 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A `maxUnavailable: 0` rollout of a pool with a Service could leave it with no ready endpoints.** The pool counted a replica as available once `GuestRunning` was true, which is when the VM starts, not when the guest has booted and its ports answer. A rollout could retire every old replica while the new ones were still booting, and the pool Service had no ready endpoints for as long as the boot took. When the replicas expose ports (`spec.service`, or `spec.network.ports` on a nat template), a replica now also needs its launcher pod Ready before a rolling update counts it as available. `status.readyReplicas` is unchanged.
 - **A guest's IP in status went stale after an in-guest reboot (#922).** The launcher's DHCP server keyed leases on the guest's DHCP client identifier, which systemd-networkd guests derive from the interface (IAID) and can change across a reboot. The guest then got a new address while `status.network.primaryIP`, `swiftctl ssh` and the migration health check kept the old one. Leases are now keyed on the guest's MAC (`--dhcp-ignore-clid`), so a guest keeps its address for the life of its launcher. Applies to launchers created after the upgrade.
 
 ### Added
