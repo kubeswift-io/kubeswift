@@ -1,5 +1,5 @@
 # Multi-stage build for snapshot-s3 (Tier C object-storage uploader/downloader)
-FROM golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS builder
+FROM golang:1.27-bookworm@sha256:dc0963f32053e4bc451d24d87e3892d42d01021b61f093e98eb95c0352bb84b0 AS builder
 WORKDIR /build
 
 ARG VERSION=dev
@@ -21,7 +21,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o snapshot-s3 ./cmd/snapshot-s3
 
 # Runtime stage — needs CA certificates for TLS to S3/MinIO; nothing else.
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 LABEL org.opencontainers.image.version="${VERSION}"
