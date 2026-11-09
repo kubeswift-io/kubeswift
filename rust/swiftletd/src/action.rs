@@ -2912,6 +2912,7 @@ pub(crate) async fn run_action_loop<S: PodSource>(
             );
             return LoopEnd::Replaced;
         }
+        crate::hotplug::observe(&snapshot.annotations);
         let retry = handle_pod_state(
             client,
             namespace,

@@ -3,6 +3,7 @@ mod agent_ready;
 mod bridge;
 mod console;
 mod cpuset;
+mod hotplug;
 mod intent;
 mod kube_client;
 mod launch;
@@ -490,6 +491,25 @@ fn main() {
                 if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
                     let api_socket = runtime_dir.root().join("ch.sock");
                     action::spawn_action_loop(ns.clone(), n.clone(), api_socket);
+                }
+            }
+
+            // Hot-plugged volumes (hotplug.rs): Cloud Hypervisor guests whose
+            // pod mounts kubelet's volumeDevices directory. Before the launch,
+            // so the features it reports include hotplug-volumes.
+            if !is_primary_udn && !intent.is_sandbox() && intent.hypervisor() == "cloud-hypervisor"
+            {
+                if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
+                    let vsock = intent
+                        .vsock
+                        .is_some()
+                        .then(|| runtime_dir.root().join("vsock.sock"));
+                    hotplug::spawn(
+                        ns.clone(),
+                        n.clone(),
+                        runtime_dir.root().join("ch.sock"),
+                        vsock,
+                    );
                 }
             }
 

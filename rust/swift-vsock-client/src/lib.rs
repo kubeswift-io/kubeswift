@@ -215,6 +215,43 @@ pub fn ping(socket_path: &Path, timeout: Duration) -> Result<PingResponse, Vsock
         .map_err(|e| VsockError::Decode(format!("{}: {}", e, String::from_utf8_lossy(trimmed))))
 }
 
+/// Reply to a `block-in-use`: whether the guest uses the disk with a given
+/// virtio serial. Field names match the agent's `BlockUse`.
+#[derive(Debug, Clone, serde::Deserialize, Default)]
+pub struct BlockInUseResponse {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    /// The guest has a disk with that serial.
+    #[serde(default)]
+    pub present: bool,
+    /// The guest mounts it, swaps on it, stacks a device on it (dm, md), or
+    /// a process holds it open.
+    #[serde(rename = "inUse", default)]
+    pub in_use: bool,
+    /// One line on what uses it, for the operator.
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+/// Ask the guest agent whether the guest uses the disk with this virtio
+/// serial (`block-in-use`). An error means the agent did not answer.
+pub fn block_in_use(
+    socket_path: &Path,
+    serial: &str,
+    timeout: Duration,
+) -> Result<BlockInUseResponse, VsockError> {
+    let line = serde_json::to_vec(&serde_json::json!({
+        "v": PROTOCOL_VERSION, "op": "block-in-use", "serial": serial,
+    }))
+    .map_err(|e| VsockError::Decode(e.to_string()))?;
+    let raw = request_line(socket_path, AGENT_PORT, &line, timeout)?;
+    let trimmed = trim_trailing_newline(&raw);
+    serde_json::from_slice(trimmed)
+        .map_err(|e| VsockError::Decode(format!("{}: {}", e, String::from_utf8_lossy(trimmed))))
+}
+
 /// Single-shot `exec` request sent to the guest agent (the streaming variant is
 /// swiftctl-only). Field names match the agent's `Request`. Used by swiftletd to run a
 /// checked-out warm-slot's workload over vsock (SwiftSandboxPool checkout).

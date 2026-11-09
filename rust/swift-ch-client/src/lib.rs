@@ -14,5 +14,5 @@ mod spawn;
 pub use api::{await_api_client, ApiClient, ApiError, ApiResponse};
 pub use config::{FsMount, GenericVhostUser, NICConfig, VFIODeviceConfig, VmConfig, VsockConfig};
 pub use events::{EventStream, SendEnd, SendTracker};
-pub use methods::{CancelMigration, SendMigrationOutcome, VmInfo, VmmVersion};
+pub use methods::{CancelMigration, HotplugDisk, SendMigrationOutcome, VmInfo, VmmVersion};
 pub use spawn::{connect_socket, spawn_ch, spawn_ch_receive, spawn_ch_restore, wait_for_socket};

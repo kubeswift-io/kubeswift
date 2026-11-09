@@ -19,8 +19,8 @@
 // Installing/starting it on the clone is impossible (nothing new starts on a
 // resume).
 //
-// SECURITY: for identity guests the command surface is exactly two ops (ping,
-// regenerate-identity) with a fixed schema — inputs (MAC, hostname) are validated
+// SECURITY: for identity guests the command surface is exactly three ops (ping,
+// regenerate-identity, and the read-only block-in-use) with a fixed schema — inputs (MAC, hostname) are validated
 // then passed as argv (never shell-interpolated). The `exec` op (run an arbitrary
 // command in the guest) is ENABLED ONLY when the agent is started with --exec-root —
 // i.e. SwiftSandbox, which runs untrusted code the host already fully controls;
@@ -93,6 +93,8 @@ type Request struct {
 	// stops it before the command runs) as a FrameError, which a dispatching
 	// host tells apart from the workload's own exit.
 	ErrorFrames bool `json:"errorFrames,omitempty"`
+	// block-in-use op: the virtio serial of the disk to look at.
+	Serial string `json:"serial,omitempty"`
 }
 
 // ExecFile is one file the exec op writes into the exec root: a path inside it,
@@ -121,6 +123,8 @@ type Response struct {
 	Stdout   string `json:"stdout,omitempty"`
 	Stderr   string `json:"stderr,omitempty"`
 	ExitCode *int   `json:"exitCode,omitempty"`
+	// block-in-use op (blockinuse.go):
+	*BlockUse
 }
 
 var (
@@ -168,6 +172,12 @@ func (h *handler) handle(raw []byte) []byte {
 		resp = h.regenerate(req)
 	case "exec":
 		resp = h.exec(req)
+	case "block-in-use":
+		if use, err := blockInUse("", req.Serial); err != nil {
+			resp = Response{OK: false, Error: err.Error()}
+		} else {
+			resp = Response{OK: true, BlockUse: &use}
+		}
 	default:
 		resp = Response{OK: false, Error: "unknown op: " + req.Op}
 	}
