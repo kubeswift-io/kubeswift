@@ -6,6 +6,10 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A guest's IP in status went stale after an in-guest reboot (#922).** The launcher's DHCP server keyed leases on the guest's DHCP client identifier, which systemd-networkd guests derive from the interface (IAID) and can change across a reboot. The guest then got a new address while `status.network.primaryIP`, `swiftctl ssh` and the migration health check kept the old one. Leases are now keyed on the guest's MAC (`--dhcp-ignore-clid`), so a guest keeps its address for the life of its launcher. Applies to launchers created after the upgrade.
+
 ### Added
 
 - **Hot-plugged volumes, controller side (#645, off by default).** New CRD `SwiftVolumeAttachment` (`sva`, group `swift.kubeswift.io`): attaches a Block, CSI-backed PVC to a running SwiftGuest as a virtio-blk disk (`/dev/disk/by-id/virtio-<status.serial>`) and detaches it on delete, held by the `kubeswift.io/volume-detach` finalizer until the guest has let go of it. The controller puts the volume on the guest's node with an unprivileged attachment pod and writes the guest's desired set onto its launcher pod (`kubeswift.io/hotplug-volumes`); the launcher side ships separately. Requires `spec.guestAgent.enabled`, Cloud Hypervisor, no GPU; at most 16 per guest; a claim on two guests only if it is ReadWriteMany and every attachment is `readOnly`. The guest reports what its launcher has in `status.hotplugVolumes`. Live migration and memory snapshots of a guest with an attachment are refused for now (`HotplugVolumesAttached`); offline migration and stop/start re-attach. Chart: `swiftGuest.volumeHotplug.enabled` (default `false`) and `.kubeletRootDir`; when on, new launcher pods mount kubelet's CSI `volumeDevices` directory read-only.
