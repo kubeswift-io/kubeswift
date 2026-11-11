@@ -6,6 +6,10 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Security
+
+- Every Go binary is built with Go 1.27.4 (builder image `golang:1.27-bookworm`, re-pinned by digest), and `go.mod` requires Go 1.26.11: GO-2026-6859, an HTTP/1 server could crash on a race between `http.MaxBytesReader` and header handling (fixed in Go 1.26.11 / 1.27.4). v0.23.0 binaries were built with Go 1.27.3.
+
 ### Fixed
 
 - **A `maxUnavailable: 0` rollout of a pool with a Service could leave it with no ready endpoints (#931).** The pool counted a replica as available once `GuestRunning` was true, which is when the VM starts, not when the guest has booted and its ports answer. A rollout could retire every old replica while the new ones were still booting, and the pool Service had no ready endpoints for as long as the boot took. When the replicas expose ports (`spec.service`, or `spec.network.ports` on a nat template), a replica now also needs its launcher pod Ready before a rolling update counts it as available. `status.readyReplicas` is unchanged.
