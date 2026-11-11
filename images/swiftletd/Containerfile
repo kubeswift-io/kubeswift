@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # repo-root context. snapshot-stager imports
 # internal/snapshot/configjson — the source-of-truth for the narrow
 # config.json edits applied to a Tier B clone (see commits 12/13).
-FROM golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS go-builder
+FROM golang:1.27-bookworm@sha256:dc0963f32053e4bc451d24d87e3892d42d01021b61f093e98eb95c0352bb84b0 AS go-builder
 ARG VERSION=dev
 WORKDIR /go-build
 COPY go.mod go.sum ./
@@ -63,7 +63,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
     -o /out/kubeswift-guest-agent ./cmd/kubeswift-guest-agent
 
 # Runtime stage
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 LABEL org.opencontainers.image.version="${VERSION}"
