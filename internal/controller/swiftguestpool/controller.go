@@ -10,13 +10,17 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 )
 
 // SwiftGuestPoolReconciler reconciles SwiftGuestPool objects.
@@ -105,7 +109,14 @@ func (r *SwiftGuestPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// --- Scale down: delete highest indices first ---
 	// Surge replicas (above desired, current template) stay while the rollout
 	// still needs them; everything else above desired goes.
-	keepSurge := surgeReplicasToKeep(&pool, indexMap, currentHash, desired)
+	// Replicas whose VM is up but whose exposed ports are not answering yet.
+	// A rollout counts them as unavailable (see endpointsNotReady).
+	unready, err := r.endpointsNotReady(ctx, indexMap)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	keepSurge := surgeReplicasToKeep(&pool, indexMap, currentHash, desired, unready)
 	excess := findExcessIndices(indexMap, desired)
 	for _, idx := range excess {
 		if keepSurge[idx] {
@@ -131,7 +142,7 @@ func (r *SwiftGuestPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// --- Rolling updates ---
 	if r.hasOutdatedGuests(indexMap, currentHash) {
-		requeue, err := r.reconcileRollingUpdate(ctx, &pool, indexMap, currentHash, desired)
+		requeue, err := r.reconcileRollingUpdate(ctx, &pool, indexMap, currentHash, desired, unready)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -245,8 +256,8 @@ func rolloutParams(pool *swiftv1alpha1.SwiftGuestPool) (strategy string, maxUnav
 	return strategy, maxUnavailable, maxSurge
 }
 
-// guestReady reports whether a replica is serving: running, with its VM up,
-// and not on its way out.
+// guestReady reports whether a replica's VM is up: running, GuestRunning, and
+// not on its way out. A rollout also needs its ports answering; see serving.
 func guestReady(g *swiftv1alpha1.SwiftGuest) bool {
 	if g.DeletionTimestamp != nil || g.Status.Phase != swiftv1alpha1.SwiftGuestPhaseRunning {
 		return false
@@ -259,11 +270,62 @@ func guestReady(g *swiftv1alpha1.SwiftGuest) bool {
 	return false
 }
 
+// serving reports whether a replica is available to a rolling update: its VM is
+// up and, when it exposes ports, its launcher pod is Ready.
+func serving(g *swiftv1alpha1.SwiftGuest, endpointsNotReady map[string]bool) bool {
+	return guestReady(g) && !endpointsNotReady[g.Name]
+}
+
+// exposesPorts reports whether a replica's launcher carries a readiness probe
+// on its ports: spec.network.ports on a nat binding (spec.service injects them).
+// See swiftguest.applyExposedPorts.
+func exposesPorts(g *swiftv1alpha1.SwiftGuest) bool {
+	n := g.Spec.Network
+	return n != nil && n.Binding != "bridge" && len(n.Ports) > 0
+}
+
+// endpointsNotReady returns the replicas whose VM is up and that expose ports,
+// but whose launcher pod is not Ready (or not found). GuestRunning turns true
+// when the hypervisor starts the VM, well before the guest OS has booted and
+// its service listens; the launcher readiness probe passes only then, and only
+// then does the replica's Service endpoint go ready. Counting the replica as
+// available at GuestRunning let a maxUnavailable 0 rollout retire every old
+// replica while the new ones were still booting, leaving the pool Service
+// with no ready endpoints.
+func (r *SwiftGuestPoolReconciler) endpointsNotReady(ctx context.Context, indexMap map[int]swiftv1alpha1.SwiftGuest) (map[string]bool, error) {
+	unready := map[string]bool{}
+	for _, g := range indexMap {
+		if !guestReady(&g) || !exposesPorts(&g) {
+			continue
+		}
+		pod, err := swiftguest.LauncherPod(ctx, r.Client, &g)
+		if err != nil {
+			return nil, fmt.Errorf("launcher pod of %s: %w", g.Name, err)
+		}
+		if pod == nil || !podReady(pod) {
+			unready[g.Name] = true
+		}
+	}
+	return unready, nil
+}
+
+func podReady(pod *corev1.Pod) bool {
+	if pod.DeletionTimestamp != nil {
+		return false
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
 // surgeReplicasToKeep returns the indices at or above desired that are surge
 // replicas a rolling update still needs: current template, within maxSurge,
 // and either the rollout still has outdated replicas to replace or the surge
 // replica is serving in place of one that is not ready yet.
-func surgeReplicasToKeep(pool *swiftv1alpha1.SwiftGuestPool, indexMap map[int]swiftv1alpha1.SwiftGuest, currentHash string, desired int) map[int]bool {
+func surgeReplicasToKeep(pool *swiftv1alpha1.SwiftGuestPool, indexMap map[int]swiftv1alpha1.SwiftGuest, currentHash string, desired int, unready map[string]bool) map[int]bool {
 	strategy, _, maxSurge := rolloutParams(pool)
 	if strategy != swiftv1alpha1.UpdateStrategyRollingUpdate || maxSurge == 0 {
 		return nil
@@ -278,7 +340,7 @@ func surgeReplicasToKeep(pool *swiftv1alpha1.SwiftGuestPool, indexMap map[int]sw
 		if g.Annotations[swiftv1alpha1.AnnotationTemplateHash] != currentHash {
 			outdatedLeft = true
 		}
-		if !guestReady(&g) {
+		if !serving(&g, unready) {
 			notReady = true
 		}
 	}
@@ -288,7 +350,7 @@ func surgeReplicasToKeep(pool *swiftv1alpha1.SwiftGuestPool, indexMap map[int]sw
 		if !ok || g.DeletionTimestamp != nil || g.Annotations[swiftv1alpha1.AnnotationTemplateHash] != currentHash {
 			continue
 		}
-		if outdatedLeft || (notReady && guestReady(&g)) {
+		if outdatedLeft || (notReady && serving(&g, unready)) {
 			keep[idx] = true
 		}
 	}
@@ -310,6 +372,7 @@ func (r *SwiftGuestPoolReconciler) reconcileRollingUpdate(
 	indexMap map[int]swiftv1alpha1.SwiftGuest,
 	currentHash string,
 	desired int,
+	unready map[string]bool,
 ) (requeue bool, err error) {
 	strategy, maxUnavailable, maxSurge := rolloutParams(pool)
 
@@ -348,9 +411,11 @@ func (r *SwiftGuestPoolReconciler) reconcileRollingUpdate(
 	// one still booting and one terminating are all unavailable: counting the
 	// replicas that exist instead of the ones serving let a pass delete a
 	// second replica while the first one's replacement was still starting.
+	// A replica whose VM is up but whose ports do not answer yet is still
+	// starting too.
 	ready := 0
 	for _, g := range indexMap {
-		if guestReady(&g) {
+		if serving(&g, unready) {
 			ready++
 		}
 	}
@@ -362,7 +427,7 @@ func (r *SwiftGuestPoolReconciler) reconcileRollingUpdate(
 		if idx >= desired || guest.DeletionTimestamp != nil {
 			continue
 		}
-		if guestReady(&guest) {
+		if serving(&guest, unready) {
 			outdatedReady = append(outdatedReady, idx)
 			continue
 		}
@@ -722,5 +787,18 @@ func (r *SwiftGuestPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Per-replica PVCs are retained, not owned (see ensurePVC), and
 		// nothing here reacts to their changes.
 		Owns(&corev1.Service{}).
+		// A replica's launcher pod going Ready makes it available to a
+		// rollout (endpointsNotReady); its SwiftGuest does not change then.
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(poolOfPod)).
 		Complete(r)
+}
+
+// poolOfPod maps a replica's launcher pod to its pool, by the pool label every
+// replica pod carries.
+func poolOfPod(_ context.Context, obj client.Object) []reconcile.Request {
+	pool := obj.GetLabels()[swiftv1alpha1.LabelPoolName]
+	if pool == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: pool}}}
 }
