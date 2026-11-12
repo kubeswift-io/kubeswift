@@ -6,6 +6,10 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A pool keeps serving when its template changes mid-rollout (#934).** Reverting or changing a SwiftGuestPool's template while a rolling update was in flight deleted the rollout's surge replicas at once, serving or not, while the replicas it had already replaced were rebooting: a `maxUnavailable: 0` pool of 3 dropped to 2 ready endpoints for over a minute (1 serving replica in the worst case). A serving surge replica on the old template now stays until the in-range replicas are current and serving. Scaling a pool down mid-rollout can therefore keep one extra replica (within `maxSurge`) until the rollout finishes.
+
 ## [v0.24.0] — 2026-11-11
 
 Volumes can be hot-plugged into a running guest (#645, phase 1, off by default): a new `SwiftVolumeAttachment` attaches a Block, CSI-backed PVC to a running SwiftGuest and detaches it once the guest has let go of it. A guest keeps its IP across an in-guest reboot (#922), and a pool rollout waits for a replica's ports to answer before counting it available (#931). Every Go binary is built with Go 1.27.4 (GO-2026-6859).
