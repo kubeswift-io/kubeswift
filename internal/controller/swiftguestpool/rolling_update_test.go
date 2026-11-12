@@ -208,3 +208,88 @@ func TestRollingUpdate_BothBoundsZeroDoesNotDelete(t *testing.T) {
 		}
 	}
 }
+
+// Reverting the template mid-rollout turns the rollout's surge replicas into
+// outdated ones. They used to be deleted at once by the scale-down pass,
+// serving or not, while the in-range replicas the rollout had already
+// replaced were themselves now outdated and still booting: a maxUnavailable 0
+// pool of 3 fell to 1 serving replica. A serving surge replica now stays, on
+// whichever template, until the in-range replicas are back and serving.
+func TestRollingUpdate_RevertMidRolloutKeepsServingSurge(t *testing.T) {
+	clock := time.Now()
+	pool := failingPool()
+	pool.Spec.Replicas = 3
+	pool.Spec.UpdateStrategy = &swiftv1alpha1.UpdateStrategy{
+		Type:          swiftv1alpha1.UpdateStrategyRollingUpdate,
+		RollingUpdate: &swiftv1alpha1.RollingUpdateConfig{MaxUnavailable: 0, MaxSurge: 2},
+	}
+	c := stampedPoolClient(&clock, pool)
+	r := &SwiftGuestPoolReconciler{Client: c, now: func() time.Time { return clock }}
+	reconcilePool(t, r)
+	markAllServing(t, c)
+	oldHash := replicaHashes(t, c)["p-0"]
+
+	changeKernel(t, c, "k2")
+	reconcilePool(t, r) // surge replicas p-3, p-4 on the new template
+	markAllServing(t, c)
+	reconcilePool(t, r) // two old in-range replicas retired against the surge
+	reconcilePool(t, r) // ... and recreated on the new template, still booting
+	if n := servingCount(t, c); n < 3 {
+		t.Fatalf("before revert: %d serving (%v)", n, replicaHashes(t, c))
+	}
+
+	changeKernel(t, c, "k") // revert while the rollout is in flight
+	for i := 0; i < 30 && !allOn(t, c, oldHash, 3); i++ {
+		reconcilePool(t, r)
+		if n := servingCount(t, c); n < 3 {
+			t.Fatalf("pass %d after revert: %d replica(s) serving; maxUnavailable 0 must keep 3 (%v)", i, n, replicaHashes(t, c))
+		}
+		if n := len(replicaHashes(t, c)); n > 5 {
+			t.Fatalf("pass %d: %d replicas exist; maxSurge 2 allows at most 5", i, n)
+		}
+		markAllServing(t, c)
+	}
+	if !allOn(t, c, oldHash, 3) {
+		t.Fatalf("revert did not complete: %v (want all on %s)", replicaHashes(t, c), oldHash)
+	}
+}
+
+// Scaling down during a rollout can leave an outdated, serving replica in the
+// surge range. It is kept while the rollout needs the capacity, and the pool
+// still converges on the new replica count and template.
+func TestRollingUpdate_ScaleDownMidRolloutConverges(t *testing.T) {
+	clock := time.Now()
+	pool := failingPool()
+	pool.Spec.Replicas = 3
+	pool.Spec.UpdateStrategy = &swiftv1alpha1.UpdateStrategy{
+		Type:          swiftv1alpha1.UpdateStrategyRollingUpdate,
+		RollingUpdate: &swiftv1alpha1.RollingUpdateConfig{MaxUnavailable: 0, MaxSurge: 1},
+	}
+	c := stampedPoolClient(&clock, pool)
+	r := &SwiftGuestPoolReconciler{Client: c, now: func() time.Time { return clock }}
+	reconcilePool(t, r)
+	markAllServing(t, c)
+
+	newHash := changeKernel(t, c, "k2")
+	reconcilePool(t, r)
+	markAllServing(t, c)
+
+	var p swiftv1alpha1.SwiftGuestPool
+	if err := c.Get(context.Background(), testPoolKey, &p); err != nil {
+		t.Fatal(err)
+	}
+	p.Spec.Replicas = 2
+	if err := c.Update(context.Background(), &p); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 30 && !allOn(t, c, newHash, 2); i++ {
+		reconcilePool(t, r)
+		if n := servingCount(t, c); n < 2 {
+			t.Fatalf("pass %d: %d serving; want at least 2 (%v)", i, n, replicaHashes(t, c))
+		}
+		markAllServing(t, c)
+	}
+	if !allOn(t, c, newHash, 2) {
+		t.Fatalf("scale-down mid-rollout did not converge: %v", replicaHashes(t, c))
+	}
+}
