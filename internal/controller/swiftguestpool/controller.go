@@ -347,10 +347,24 @@ func surgeReplicasToKeep(pool *swiftv1alpha1.SwiftGuestPool, indexMap map[int]sw
 	keep := map[int]bool{}
 	for idx := desired; idx < desired+maxSurge; idx++ {
 		g, ok := indexMap[idx]
-		if !ok || g.DeletionTimestamp != nil || g.Annotations[swiftv1alpha1.AnnotationTemplateHash] != currentHash {
+		if !ok || g.DeletionTimestamp != nil {
 			continue
 		}
-		if outdatedLeft || (notReady && serving(&g, unready)) {
+		up := serving(&g, unready)
+		if g.Annotations[swiftv1alpha1.AnnotationTemplateHash] != currentHash {
+			// A surge replica left over from a template the pool has since
+			// moved off (a rollout reverted or changed mid-flight) is still
+			// capacity while it serves: keep it until the in-range replicas
+			// are current and serving, then the scale-down pass removes it.
+			// Deleting it at once, serving, while the in-range replicas the
+			// rollout had replaced were outdated and booting, dropped a
+			// maxUnavailable 0 pool to a single serving replica.
+			if up && (outdatedLeft || notReady) {
+				keep[idx] = true
+			}
+			continue
+		}
+		if outdatedLeft || (notReady && up) {
 			keep[idx] = true
 		}
 	}
