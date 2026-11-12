@@ -6,6 +6,10 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Security
+
+- **cosign v3.1.4** in the `sandbox-materialize` and `snapshot-oras` images (was v3.1.3). Fixable CVEs in the bundled binary drop from 49 (25 high) to 5 (1 high), all in cosign's own dependencies. `hack/cosign-interop.sh` passes: v2.6.5 and v3.1.4 verify each other's signatures, v3.1.4 signs with no transparency-log entry, and both reject a foreign key.
+
 ### Fixed
 
 - **A pool keeps serving when its template changes mid-rollout (#934).** Reverting or changing a SwiftGuestPool's template while a rolling update was in flight deleted the rollout's surge replicas at once, serving or not, while the replicas it had already replaced were rebooting: a `maxUnavailable: 0` pool of 3 dropped to 2 ready endpoints for over a minute (1 serving replica in the worst case). A serving surge replica on the old template now stays until the in-range replicas are current and serving. Scaling a pool down mid-rollout can therefore keep one extra replica (within `maxSurge`) until the rollout finishes.

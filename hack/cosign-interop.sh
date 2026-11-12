@@ -18,7 +18,7 @@
 #
 # Usage:
 #   hack/cosign-interop.sh                            # baseline — must be green
-#   COSIGN_VERSIONS="v2.6.5 v3.1.3" hack/cosign-interop.sh   # evaluate a candidate
+#   COSIGN_VERSIONS="v2.6.5 v3.1.4" hack/cosign-interop.sh   # evaluate a candidate
 #
 # Exit status is the test's: non-zero means a signature did not verify.
 #
@@ -37,7 +37,7 @@ set -euo pipefail
 # registries was made with, so it is always in the set: it is the baseline every
 # other implementation is judged against, and it generates the keypair.
 BASELINE="v2.6.5"
-COSIGN_VERSIONS="${COSIGN_VERSIONS:-$BASELINE v3.1.3}"
+COSIGN_VERSIONS="${COSIGN_VERSIONS:-$BASELINE v3.1.4}"
 case " $COSIGN_VERSIONS " in
   *" $BASELINE "*) ;;
   *) COSIGN_VERSIONS="$BASELINE $COSIGN_VERSIONS" ;;
