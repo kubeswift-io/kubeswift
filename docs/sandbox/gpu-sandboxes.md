@@ -73,10 +73,17 @@ A GPU sandbox image must ship the NVIDIA driver built for the `gpu-sandbox` kern
   6.6.x. **Pascal (GTX 10-series) and older need the proprietary driver**; Turing
   and newer can use `nvidia-open`. Build it against the kernel source tree with the
   buildroot toolchain (see `build/kernels/sandbox` — the module vermagic must match
-  the shipped `gpu-sandbox` kernel). `kernels/gpu-sandbox:6.6.5` and later (6.6.7
+  the shipped `gpu-sandbox` kernel). `kernels/gpu-sandbox:6.6.5` and later (6.6.8
   is current) carry Linux 6.6.158; earlier artifacts carried 6.6.44. A driver
   built for 6.6.44 does not load on 6.6.5 or later: rebuild it against the
   6.6.158 tree before moving to it.
+- **Rebuild for `gpu-sandbox:6.6.8`.** 6.6.8 enables `CONFIG_SECURITY` (for
+  Landlock), which changes the layout of core kernel structures. A module built
+  for 6.6.7 or earlier still loads (same vermagic, no modversions) and then
+  crashes the guest kernel on first use: on a GTX 1080, `nvidia-smi` hit a NULL
+  pointer dereference. Rebuild `nvidia.ko` and `nvidia-uvm.ko` against the
+  6.6.8 tree before pointing a GPU sandbox at it. Driver 580.95.05 rebuilt this
+  way ran CUDA 12.8 (`sm_61`) on a GTX 1080.
 - **Userspace** — `nvidia-smi` + `libnvidia-ml`, plus your framework (vLLM / TGI /
   PyTorch).
 - **Entrypoint** — `insmod` the modules, create the `/dev/nvidia*` nodes (read the

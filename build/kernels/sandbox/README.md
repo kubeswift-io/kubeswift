@@ -70,11 +70,11 @@ understands beyond argv/env/cwd (`make build` writes it from `BRIDGE_FEATURES`).
 
 ```
 cd output/images                # or output-gpu-sandbox/images for the gpu profile
-oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.18 \
+oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.19 \
   bzImage:application/vnd.kubeswift.kernel.binary \
   rootfs.cpio.gz:application/vnd.kubeswift.initramfs.binary \
   bridge-features:text/plain
-# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.7 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain
+# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.8 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain
 ```
 
 Then `kubectl apply -f config/samples/sandbox/swiftkernel-sandbox.yaml` (or
