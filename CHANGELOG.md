@@ -6,6 +6,17 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.24.1] — 2026-11-13
+
+A patch release. A pool no longer drops below its availability floor when its template is reverted or changed mid-rollout (#934), and the `sandbox-materialize` and `snapshot-oras` images ship cosign v3.1.4.
+
+### Upgrade
+
+- **No CRD change.** Nothing in `crds/` changed since v0.24.0; applying it is harmless but not needed.
+- **No chart values or template change.** Only the image tags move. `ui.image.tag` stays `v0.13.1`.
+- Running guests and sandboxes keep their launcher; nothing is restarted by the upgrade.
+- Scaling a SwiftGuestPool down while a rollout is in flight can now keep one extra, serving replica (within `maxSurge`) until the rollout finishes.
+
 ### Security
 
 - **cosign v3.1.4** in the `sandbox-materialize` and `snapshot-oras` images (was v3.1.3). Fixable CVEs in the bundled binary drop from 49 (25 high) to 5 (1 high), all in cosign's own dependencies. `hack/cosign-interop.sh` passes: v2.6.5 and v3.1.4 verify each other's signatures, v3.1.4 signs with no transparency-log entry, and both reject a foreign key.
