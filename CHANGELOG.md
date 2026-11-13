@@ -6,6 +6,15 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Sandbox kernels with Landlock and VM Generation ID: `kernels/sandbox:6.6.19`, `kernels/gpu-sandbox:6.6.8`** (Linux 6.6.158, unchanged). The guest kernel now enables `CONFIG_SECURITY_LANDLOCK` (ABI v3), `CONFIG_SECURITYFS` and `CONFIG_VMGENID`. Landlock-based tools such as nono run inside a sandbox (read-only workspace, blocked write and `--block-net` verified); a guest restored from a Cloud Hypervisor snapshot reseeds its RNG, where two restores of one snapshot used to produce the same `/dev/urandom` bytes. Bridge and guest agent are unchanged (`bridge-features` is the same).
+
+### Upgrade
+
+- **GPU images must rebuild their NVIDIA modules for `gpu-sandbox:6.6.8`.** `CONFIG_SECURITY` changes the layout of core kernel structures; a module built for 6.6.7 or earlier loads (same vermagic) and then crashes the guest kernel. Rebuild against the 6.6.8 tree; see [GPU sandboxes](docs/sandbox/gpu-sandboxes.md). Stay on `gpu-sandbox:6.6.7` until your image is rebuilt.
+- Samples, examples and docs pin `kernels/sandbox:6.6.19` and `kernels/gpu-sandbox:6.6.8`. A SwiftKernel's tag change pulls nothing by itself, see [SwiftKernel](docs/swiftkernel.md).
+
 ## [v0.24.1] — 2026-11-13
 
 A patch release. A pool no longer drops below its availability floor when its template is reverted or changed mid-rollout (#934), and the `sandbox-materialize` and `snapshot-oras` images ship cosign v3.1.4.
