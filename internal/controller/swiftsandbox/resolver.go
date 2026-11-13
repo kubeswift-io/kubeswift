@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -83,6 +84,9 @@ const (
 	// resolveDescriptor fetches the manifest as pushed (an index stays an
 	// index): its digest. What spec.artifacts layout oci records.
 	resolveDescriptorKind resolveKind = "descriptor"
+	// resolveModuleABIKind fetches a kernel artifact's module-abi file (WS1.5):
+	// the kernel release its loadable modules must be built for.
+	resolveModuleABIKind resolveKind = "module-abi"
 )
 
 type resolveKey struct {
@@ -118,7 +122,11 @@ type resolveResult struct {
 	repository string
 	digest     string
 	config     materialize.ImageConfig
-	err        error
+	// moduleABI is a kernel artifact's module-abi file, trimmed;
+	// moduleABIFound is false for an artifact that carries none.
+	moduleABI      string
+	moduleABIFound bool
+	err            error
 }
 
 // waiter is an object to enqueue when a request it asked for finishes.
@@ -507,6 +515,9 @@ func fetchRegistry(ctx context.Context, kind resolveKind, opts materialize.Optio
 	case resolveDescriptorKind:
 		repo, digest, err := materialize.ResolveDescriptor(opts)
 		return resolveResult{repository: repo, digest: digest, err: err}
+	case resolveModuleABIKind:
+		b, found, err := materialize.ArtifactFile(opts, materialize.ModuleABIFile)
+		return resolveResult{moduleABI: strings.TrimSpace(string(b)), moduleABIFound: found, err: err}
 	case resolveImageKind:
 		img, digest, err := materialize.RemotePull(opts)
 		if err != nil {

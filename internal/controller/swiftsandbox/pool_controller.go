@@ -371,6 +371,20 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 		// Image and model resolve at once, off this worker (resolver.go).
 		lookup := r.lookup(&pool)
+		// A GPU pool's image must carry kernel modules built for its kernel
+		// (WS1.5); read the kernel artifact's module-abi alongside the image.
+		gpuPool := pool.Spec.GPUProfileRef != nil
+		var abiReq resolveRequest
+		if gpuPool {
+			areq, ok, aerr := moduleABIRequest(ctx, r.Client, r.APIReader, pool.Namespace, kernelName)
+			if aerr != nil {
+				return ctrl.Result{}, aerr
+			}
+			if ok {
+				abiReq = areq
+				prime(lookup, abiReq)
+			}
+		}
 		resolved, imageReady, err := resolveImage(r.slotTemplate(&pool, "resolve"), auth, lookup)
 		var rm resolvedModel
 		modelReady := true
@@ -402,9 +416,32 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return r.degradedAfter(ctx, &pool, ready, claimed, "ModelResolveFailed",
 				fmt.Sprintf("%s (next attempt in %s)", merr.Error(), wait), wait)
 		}
-		if !imageReady || !modelReady {
+		kernelABI, kernelABIFound, kernelABIReady := "", false, true
+		if gpuPool {
+			var aerr error
+			kernelABI, kernelABIFound, kernelABIReady, aerr = resolveModuleABI(abiReq, lookup)
+			if aerr != nil {
+				wait := r.nextResolveBackoff(req.NamespacedName)
+				return r.degradedAfter(ctx, &pool, ready, claimed, reasonKernelResolveFailed,
+					fmt.Sprintf("%s (next attempt in %s)", aerr.Error(), wait), wait)
+			}
+		}
+		if !imageReady || !modelReady || !kernelABIReady {
 			// Enqueued again when the requests finish.
 			return ctrl.Result{RequeueAfter: registryPendingRecheck}, nil
+		}
+		if gpuPool {
+			// Checked before any slot allocates a GPU: a pool whose image
+			// cannot run on its kernel holds none.
+			switch reason, msg := moduleABIVerdict(kernelName, kernelABI, kernelABIFound, pool.Spec.Image, resolved.Labels); reason {
+			case reasonKernelModuleABIMismatch:
+				wait := r.nextResolveBackoff(req.NamespacedName)
+				return r.degradedAfter(ctx, &pool, ready, claimed, reason, msg, wait)
+			case reasonModuleABIUndeclared:
+				if r.Recorder != nil {
+					r.Recorder.Event(&pool, corev1.EventTypeWarning, reason, msg)
+				}
+			}
 		}
 		r.clearResolveBackoff(req.NamespacedName)
 		ri = &resolved

@@ -282,6 +282,19 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	// and the pass waits for them together.
 	lookup := r.lookup(sb)
 	prime(lookup, imageRequest(sb, auth))
+	// A GPU sandbox's image must carry kernel modules built for its kernel
+	// (WS1.5): read the kernel artifact's module-abi alongside the image.
+	var abiReq resolveRequest
+	if sb.UsesGPU() {
+		req, ok, err := moduleABIRequest(ctx, r.Client, r.APIReader, sb.Namespace, kernelName)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if ok {
+			abiReq = req
+			prime(lookup, abiReq)
+		}
+	}
 	var modelAuth authn.Authenticator
 	var modelAuthErr error
 	if sb.Spec.Model != nil {
@@ -308,6 +321,14 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		}
 	}
 	ri, imageReady, imageErr := resolveImage(sb, auth, lookup)
+	kernelABI, kernelABIFound, kernelABIReady := "", false, true
+	var kernelABIErr error
+	if sb.UsesGPU() {
+		kernelABI, kernelABIFound, kernelABIReady, kernelABIErr = resolveModuleABI(abiReq, lookup)
+		if abiReq.credErr != nil {
+			return r.fail(ctx, sb, reasonKernelResolveFailed, kernelABIErr.Error())
+		}
+	}
 	var rm resolvedModel
 	modelReady, artifactsReady := true, true
 	var modelErr, artifactsErr error
@@ -331,7 +352,7 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	for _, f := range []struct {
 		reason string
 		err    error
-	}{{"ImageResolveFailed", imageErr}, {"ModelResolveFailed", modelErr}, {"ArtifactResolveFailed", artifactsErr}} {
+	}{{"ImageResolveFailed", imageErr}, {reasonKernelResolveFailed, kernelABIErr}, {"ModelResolveFailed", modelErr}, {"ArtifactResolveFailed", artifactsErr}} {
 		if f.err == nil {
 			continue
 		}
@@ -348,7 +369,7 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		}
 		return r.registryUnavailable(ctx, sb, f.err)
 	}
-	if !imageReady || !modelReady || !artifactsReady {
+	if !imageReady || !kernelABIReady || !modelReady || !artifactsReady {
 		res, err := r.waitForRegistry(ctx, sb)
 		// An optional artifact stops being waited for at its deadline, which
 		// no registry answer announces.
@@ -358,6 +379,16 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		return res, err
 	}
 	r.registryFailures.Delete(client.ObjectKeyFromObject(sb))
+	if sb.UsesGPU() {
+		switch reason, msg := moduleABIVerdict(kernelName, kernelABI, kernelABIFound, sb.Spec.Image, ri.Labels); reason {
+		case reasonKernelModuleABIMismatch:
+			return r.fail(ctx, sb, reason, msg)
+		case reasonModuleABIUndeclared:
+			if r.Recorder != nil {
+				r.Recorder.Event(sb, corev1.EventTypeWarning, reason, msg)
+			}
+		}
+	}
 	var modelPath string
 	if sb.Spec.Model != nil {
 		modelPath = rm.TreePath

@@ -15,3 +15,17 @@
 CONFIG_MODULES=y
 CONFIG_MODULE_UNLOAD=y
 CONFIG_MODULE_FORCE_UNLOAD=y
+
+# Module ABI guard (WS1.5). A loadable module only works with the kernel it was
+# built against, and a config change can change core struct layouts without
+# changing the Linux version (CONFIG_SECURITY in gpu-sandbox 6.6.8 did: a 6.6.7
+# nvidia.ko loaded and then oopsed the guest). Two layers make a stale module
+# fail at insmod instead:
+# - CONFIG_LOCALVERSION carries the module ABI epoch, so `uname -r` and every
+#   module's vermagic name it (6.6.158-ksabi<N>). Bump N whenever this fragment,
+#   sandbox-linux.config or the Linux version changes, and record it in
+#   gpu-sandbox.abi; verify-module-abi.sh fails CI otherwise.
+# - CONFIG_MODVERSIONS records a CRC per exported symbol, so a layout change that
+#   reaches a symbol the module uses is refused even if N was not bumped.
+CONFIG_LOCALVERSION="-ksabi1"
+CONFIG_MODVERSIONS=y

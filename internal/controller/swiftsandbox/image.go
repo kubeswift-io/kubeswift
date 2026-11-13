@@ -60,6 +60,7 @@ type resolvedImage struct {
 	RootfsPath string // <cache>/<digest>{.ext4|/} — deterministic, matches what the init produces
 	Virtiofs   bool   // rootfs delivered over virtio-fs (tree) instead of a block ext4
 	Exec       execSpec
+	Labels     map[string]string // image config labels (ModuleABILabel)
 }
 
 // execSpec is the full workload exec (argv + env + cwd), delivered to the guest
@@ -123,6 +124,7 @@ func resolveImage(sb *sandboxv1alpha1.SwiftSandbox, auth authn.Authenticator, lo
 		RootfsPath: materialize.CachePathFor(rootfsCacheDir, res.digest, mode),
 		Virtiofs:   virtiofs,
 		Exec:       resolveExec(sb, res.config),
+		Labels:     res.config.Labels,
 	}, true, nil
 }
 
