@@ -22,13 +22,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # Fetch a pinned cosign for the verify-before-boot path (spec.verifyKeySecretRef).
 # Verified against the release checksums so a tampered binary fails the build.
 #
-# DELIBERATELY 3.x HERE while images/snapshot-oras/Containerfile stays on 2.x.
-# The two images no longer match, so the reasoning is worth stating (#486):
-#
-#   - This image only ever VERIFIES — cmd/sandbox-materialize calls oci.Verify
-#     alone and has no signing path. The 3.x blocker is signing: it rejects
-#     `--tlog-upload=false` at runtime, which internal/oci.SignArgs needs.
-#     snapshot-oras signs, so it cannot move; this image is not affected.
+# Same pin as images/snapshot-oras/Containerfile (#486). This image only ever
+# VERIFIES: cmd/sandbox-materialize calls oci.Verify alone and has no signing
+# path. (snapshot-oras signs; on 3.x internal/oci.SignArgs passes a
+# no-transparency-log --signing-config, since 3.x rejects --tlog-upload=false.)
 #
 #   - Verification stays compatible in the direction that matters. cosign 3.x
 #     verifies a v2.6.5-made signature under our own VerifyArgs, so signatures
@@ -39,12 +36,13 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 #
 #   - The reason to move: v2.6.5 carries 48 fixable CVEs (1 critical, 24 high)
 #     in cosign's own frozen dependency tree, none of them reachable by our
-#     tooling. v3.1.3 carries 4 (0 critical, 3 high).
+#     tooling. Stay on the latest 3.x: v3.1.3 had aged to 49 fixable (25 high)
+#     by its successor's release, v3.1.4 carries 5 (1 high).
 #
-# Re-run `COSIGN_VERSIONS="v2.6.5 v3.1.3" hack/cosign-interop.sh` before moving
-# this again. It is EXPECTED to exit non-zero on the v3.1.3 sign row; what must
-# stay green is the "signed by v2.6.5 / verified by v3.1.3" cell.
-ARG COSIGN_VERSION=v3.1.3
+# Re-run `COSIGN_VERSIONS="v2.6.5 <candidate>" hack/cosign-interop.sh` before
+# moving this again; the whole matrix must pass, the "signed by v2.6.5 /
+# verified by <candidate>" cell above all.
+ARG COSIGN_VERSION=v3.1.4
 RUN cd /tmp \
     && curl -sSfL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" -o cosign-linux-amd64 \
     && curl -sSfL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign_checksums.txt" -o cosign_checksums.txt \

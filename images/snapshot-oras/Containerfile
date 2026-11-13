@@ -43,7 +43,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 #
 # Signatures made either way verify with both majors — that is what
 # hack/cosign-interop.sh exists to prove, and it is the gate on changing this.
-ARG COSIGN_VERSION=v3.1.3
+ARG COSIGN_VERSION=v3.1.4
 RUN cd /tmp \
     && curl -sSfL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" -o cosign-linux-amd64 \
     && curl -sSfL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign_checksums.txt" -o cosign_checksums.txt \
