@@ -21,6 +21,10 @@ All notable changes to KubeSwift are documented here.
 - **GPU images must rebuild their NVIDIA modules for `gpu-sandbox:6.6.9`** and should add the label `io.kubeswift.gpu-sandbox.module-abi=6.6.158-ksabi1`. 6.6.8 enabled `CONFIG_SECURITY`, which changes the layout of core kernel structures: a module built for 6.6.7 or earlier loaded on 6.6.8 (same vermagic) and then crashed the guest kernel. On 6.6.9 a stale module is refused at `insmod`, and a labelled image for another kernel fails before boot. Skip 6.6.8 for GPU sandboxes; stay on `gpu-sandbox:6.6.7` until your image is rebuilt for 6.6.9. See [GPU sandboxes](docs/sandbox/gpu-sandboxes.md).
 - Samples, examples and docs pin `kernels/sandbox:6.6.21` and `kernels/gpu-sandbox:6.6.11`. A SwiftKernel's tag change pulls nothing by itself, see [SwiftKernel](docs/swiftkernel.md).
 
+### Security
+
+- **The sandbox bridge and the guest agent no longer follow an image's symlinks out of the sandbox root** when they write secret files, the resolver config, and the mount points for the model, artifacts, outputs and `/proc`, `/sys`, `/dev`. They joined paths onto the root, so an image with `/hostile -> /` had a secret written to `/hostile/token` land, as root, in the guest's bridge environment instead of the workload's filesystem (cold sandboxes, and secret files and artifacts on a warm checkout). Paths now resolve as the workload sees them: an absolute link starts from the sandbox root and `..` stops there. A mount point that resolves to the sandbox root itself (an image with `/proc -> /`) fails the boot. The effect stayed inside the microVM, but matters now that workloads can run as non-root. In the guest agent and bridge init, so it ships with the kernels named under Added.
+
 ### Fixed
 
 - **A warm checkout starts in the pool image's `WORKDIR`** when it sets no `spec.workingDir`, as a cold sandbox does. It started in `/`. The pool records the image's `WORKDIR` as `status.imageWorkingDir`; a pool created before the upgrade picks it up on its next reconcile.

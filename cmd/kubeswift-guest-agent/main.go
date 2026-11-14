@@ -33,6 +33,9 @@ func main() {
 	flag.BoolVar(&id.NoNewPrivs, "no-new-privs", false, "run the workload (and exec) with no_new_privs")
 	flag.BoolVar(&id.NonRoot, "non-root", false, "refuse to run the workload (or exec) as uid 0")
 	ownList := flag.String("own-list", "", "--run: file listing paths inside --exec-root (one per line) to give to the workload user first")
+	mkdirMode := flag.Bool("mkdir", false, "one-shot: create the directory named by the argument inside --exec-root, resolving the image's symlinks as the workload would, and print its path from outside --exec-root (the sandbox bridge mounts there)")
+	writeMode := flag.Bool("write-file", false, "one-shot: write stdin to the file named by the argument inside --exec-root, resolving the image's symlinks as the workload would")
+	fileMode := flag.String("mode", "0400", "--write-file: the file's octal mode")
 	flag.Parse()
 
 	// One-shot local exec (the sandbox cold-boot path): chroot + chdir + exec via
@@ -41,6 +44,9 @@ func main() {
 	// it stays PID 1 and still captures the exit code + powers the VM off.
 	if *runMode {
 		os.Exit(runOneShot(*execRoot, *runCwd, id, *ownList, flag.Args()))
+	}
+	if *mkdirMode || *writeMode {
+		os.Exit(pathOneShot(*execRoot, *mkdirMode, *fileMode, flag.Args()))
 	}
 	if env := os.Getenv("KUBESWIFT_GUEST_AGENT_PORT"); env != "" {
 		if p, err := strconv.Atoi(env); err == nil {
@@ -117,6 +123,36 @@ func runOneShot(root, cwd string, id identity, ownList string, argv []string) in
 		}
 		fmt.Fprintln(os.Stderr, "kubeswift-guest-agent --run:", err)
 		return 127
+	}
+	return 0
+}
+
+// pathOneShot is --mkdir and --write-file, for the sandbox bridge's cold
+// boot: the same root-confined resolution the warm checkout path uses, so an
+// image symlink cannot redirect a secret file or a mount point out of the
+// sandbox root. Exits 0 on success, 1 with the error on stderr otherwise.
+func pathOneShot(root string, mkdir bool, mode string, args []string) int {
+	fail := func(err error) int {
+		fmt.Fprintln(os.Stderr, "kubeswift-guest-agent:", err)
+		return 1
+	}
+	if len(args) != 1 {
+		return fail(errors.New("--mkdir and --write-file take exactly one path"))
+	}
+	if mkdir {
+		dir, err := mkdirInRoot(root, args[0], 0o755)
+		if err != nil {
+			return fail(fmt.Errorf("mkdir %s: %w", args[0], err))
+		}
+		fmt.Println(dir)
+		return 0
+	}
+	m, err := strconv.ParseUint(mode, 8, 32)
+	if err != nil || m > 0o7777 {
+		return fail(fmt.Errorf("--mode %q is not an octal file mode", mode))
+	}
+	if err := writeFileInRoot(root, args[0], os.Stdin, os.FileMode(m)); err != nil {
+		return fail(fmt.Errorf("write %s: %w", args[0], err))
 	}
 	return 0
 }

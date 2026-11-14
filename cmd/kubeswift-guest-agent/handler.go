@@ -614,8 +614,9 @@ func runPlanned(cmd *exec.Cmd, plan execPlan) error {
 	return cmd.Wait()
 }
 
-// writeExecFiles writes files under root, creating their directories. A path
-// must be absolute and clean; an error names the path, never the content.
+// writeExecFiles writes files under root, creating their directories, through
+// the sandbox root (writeFileInRoot). A path must be absolute and clean; an
+// error names the path, never the content.
 func writeExecFiles(root string, files []ExecFile) error {
 	for _, f := range files {
 		if !filepath.IsAbs(f.Path) || filepath.Clean(f.Path) != f.Path {
@@ -625,14 +626,7 @@ func writeExecFiles(root string, files []ExecFile) error {
 		if mode == 0 {
 			mode = 0o400
 		}
-		full := filepath.Join(root, f.Path)
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			return fmt.Errorf("exec: file %s: %w", f.Path, err)
-		}
-		if err := os.WriteFile(full, f.Data, mode); err != nil {
-			return fmt.Errorf("exec: file %s: %w", f.Path, err)
-		}
-		if err := os.Chmod(full, mode); err != nil { // WriteFile's perm is masked by the umask
+		if err := writeFileInRoot(root, f.Path, bytes.NewReader(f.Data), mode); err != nil {
 			return fmt.Errorf("exec: file %s: %w", f.Path, err)
 		}
 	}

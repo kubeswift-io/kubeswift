@@ -107,6 +107,22 @@ safe_path() {
 	return 0
 }
 
+# Paths inside /newroot hold an untrusted image, and its symlinks must not
+# redirect a platform write or mount out of it (an image with /hostile -> /
+# would have "/newroot/hostile/x" land in this bridge's own root). The guest
+# agent resolves each path as the workload would see it, inside /newroot.
+# in_root_dir <path>: create the directory, print where to mount it.
+# in_root_write <path> <mode>: write stdin to the file.
+AGENT=/usr/local/bin/kubeswift-guest-agent
+in_root_dir() {
+	[ -x "$AGENT" ] || fail "the guest agent is missing; cannot set up $1 in the sandbox root"
+	"$AGENT" --mkdir --exec-root=/newroot -- "$1"
+}
+in_root_write() {
+	[ -x "$AGENT" ] || fail "the guest agent is missing; cannot write $1 in the sandbox root"
+	"$AGENT" --write-file --exec-root=/newroot --mode="$2" -- "$1"
+}
+
 mkdir -p /lower /over /newroot
 
 # --- mount the OCI rootfs READ-ONLY as the overlay lower ---
@@ -146,9 +162,9 @@ mount -t overlay overlay \
 # checkout could corrupt the node-cached model shared by every other slot.
 # Retry the mount bounded, like the block rootfs (virtio device enumeration lags PID 1).
 if [ "$MODEL_KIND" = virtiofs ]; then
-	mkdir -p "/newroot${MODEL_PATH}"
+	target=$(in_root_dir "$MODEL_PATH") || fail "cannot create the model mount point ${MODEL_PATH}"
 	n=0
-	until mount -t virtiofs -o ro sandboxmodel "/newroot${MODEL_PATH}" 2>/dev/null; do
+	until mount -t virtiofs -o ro sandboxmodel "$target" 2>/dev/null; do
 		n=$((n + 1))
 		[ "$n" -ge 30 ] && fail "cannot mount virtio-fs tag 'sandboxmodel' at ${MODEL_PATH} after ${n}s"
 		sleep 1
@@ -166,9 +182,9 @@ if [ -n "$MOUNTS" ]; then
 		tag=${m%%:*}
 		mp=${m#*:}
 		safe_path "$mp" || fail "kubeswift.mounts: '$mp' is not a clean absolute path"
-		mkdir -p "/newroot${mp}"
+		target=$(in_root_dir "$mp") || fail "cannot create the mount point ${mp}"
 		n=0
-		until mount -t virtiofs -o ro "$tag" "/newroot${mp}" 2>/dev/null; do
+		until mount -t virtiofs -o ro "$tag" "$target" 2>/dev/null; do
 			n=$((n + 1))
 			[ "$n" -ge 30 ] && fail "cannot mount virtio-fs tag '$tag' at ${mp} after ${n}s"
 			sleep 1
@@ -192,14 +208,15 @@ if [ -n "$OUTPUTS" ]; then
 			''|*[!a-z0-9]*) fail "kubeswift.outputs: '$tag' is not a plain tag" ;;
 		esac
 		safe_path "$mp" || fail "kubeswift.outputs: '$mp' is not a clean absolute path"
-		mkdir -p "/newroot${mp}"
+		target=$(in_root_dir "$mp") || fail "cannot create the output mount point ${mp}"
 		n=0
-		until mount -t virtiofs -o rw,nosuid,nodev "$tag" "/newroot${mp}" 2>/dev/null; do
+		until mount -t virtiofs -o rw,nosuid,nodev "$tag" "$target" 2>/dev/null; do
 			n=$((n + 1))
 			[ "$n" -ge 30 ] && fail "cannot mount output tag '$tag' at ${mp} after ${n}s"
 			sleep 1
 		done
-		OUTPUT_PATHS="$OUTPUT_PATHS ${mp}"
+		OUTPUT_PATHS="$OUTPUT_PATHS
+${target}"
 		echo "${mp}" >> "$OWN_LIST"
 		echo "sandbox-bridge: output $tag mounted read-write at ${mp}"
 	done
@@ -231,20 +248,21 @@ fi
 # /etc/resolv.conf, so a workload can't resolve names without this. /proc/net/pnp
 # carries the DHCP-provided nameserver(s); write the resolver directives into the
 # guest (the tmpfs overlay upper is writable, so the signed image is untouched).
-mkdir -p /newroot/etc
-if [ -r /proc/net/pnp ]; then
-	grep -E '^(nameserver|domain)' /proc/net/pnp > /newroot/etc/resolv.conf 2>/dev/null || true
-fi
-# ip=dhcp captures the nameserver but not the DHCP search list, so cluster-internal
-# SHORT names (kubernetes.default) would NXDOMAIN. Add the k8s search domains the
-# controller passed on the cmdline (kubeswift.dns-search=, comma-separated).
-if [ -n "$DNS_SEARCH" ]; then
-	echo "search $(echo "$DNS_SEARCH" | tr ',' ' ')" >> /newroot/etc/resolv.conf
-	# Match the Kubernetes pod resolver: ndots:5 so a partially-qualified name like
-	# `svc.namespace` (1 dot) is tried against the search domains, not resolved absolute-
-	# only. Without it musl/glibc only search-expand names with fewer dots than ndots (1).
-	echo "options ndots:5" >> /newroot/etc/resolv.conf
-fi
+{
+	if [ -r /proc/net/pnp ]; then
+		grep -E '^(nameserver|domain)' /proc/net/pnp 2>/dev/null || true
+	fi
+	# ip=dhcp captures the nameserver but not the DHCP search list, so cluster-internal
+	# SHORT names (kubernetes.default) would NXDOMAIN. Add the k8s search domains the
+	# controller passed on the cmdline (kubeswift.dns-search=, comma-separated).
+	if [ -n "$DNS_SEARCH" ]; then
+		echo "search $(echo "$DNS_SEARCH" | tr ',' ' ')"
+		# Match the Kubernetes pod resolver: ndots:5 so a partially-qualified name like
+		# `svc.namespace` (1 dot) is tried against the search domains, not resolved absolute-
+		# only. Without it musl/glibc only search-expand names with fewer dots than ndots (1).
+		echo "options ndots:5"
+	fi
+} | in_root_write /etc/resolv.conf 0644 || echo "sandbox-bridge: cannot write /etc/resolv.conf in the sandbox root"
 
 # --- resolve the workload exec ---
 # Primary: the config disk (kubeswift.config) carries the full argv/env/cwd with
@@ -287,10 +305,11 @@ if [ -n "$CONFIG_DEV" ] && [ -r "$CONFIG_DEV" ]; then
 				fmode=${rest%%	*}; c64=${rest#*	}
 				fpath=$(printf '%s' "$p64" | base64 -d 2>/dev/null)
 				safe_path "$fpath" || fail "secret file path '$fpath' is not a clean absolute path"
-				mkdir -p "$(dirname "/newroot${fpath}")" || fail "cannot create the directory of secret file ${fpath}"
-				( umask 077; printf '%s' "$c64" | base64 -d > "/newroot${fpath}" ) 2>/dev/null \
+				case "$fmode" in
+					''|*[!0-7]*) fail "secret file ${fpath}: mode '${fmode}' is not octal" ;;
+				esac
+				printf '%s' "$c64" | base64 -d | in_root_write "$fpath" "$fmode" \
 					|| fail "cannot write secret file ${fpath}"
-				chmod "$fmode" "/newroot${fpath}" || fail "cannot set mode ${fmode} on secret file ${fpath}"
 				echo "${fpath}" >> "$OWN_LIST"
 				echo "sandbox-bridge: wrote secret file ${fpath} (mode ${fmode})" ;;
 		esac
@@ -302,13 +321,15 @@ fi
 # `mount --move` them out of the bridge's root — the bridge stays PID 1 (see below)
 # and needs to keep its own /dev/console + /proc to report the exit code and power
 # the VM off after the workload exits.
-mkdir -p /newroot/proc /newroot/sys /newroot/dev
-mount -t proc     none /newroot/proc 2>/dev/null || true
-mount -t sysfs    none /newroot/sys  2>/dev/null || true
-mount -t devtmpfs none /newroot/dev  2>/dev/null || mount --bind /dev /newroot/dev
+NR_PROC=$(in_root_dir /proc) || fail "cannot create /proc in the sandbox root"
+NR_SYS=$(in_root_dir /sys) || fail "cannot create /sys in the sandbox root"
+NR_DEV=$(in_root_dir /dev) || fail "cannot create /dev in the sandbox root"
+mount -t proc     none "$NR_PROC" 2>/dev/null || true
+mount -t sysfs    none "$NR_SYS"  2>/dev/null || true
+mount -t devtmpfs none "$NR_DEV"  2>/dev/null || mount --bind /dev "$NR_DEV"
 # securityfs, so an in-guest sandbox (nono, an OpenShell supervisor) can read
 # the active LSMs (/sys/kernel/security/lsm) before it applies Landlock.
-mount -t securityfs none /newroot/sys/kernel/security 2>/dev/null || true
+mount -t securityfs none "$NR_SYS/kernel/security" 2>/dev/null || true
 
 # The identity flags the guest agent takes, for the workload and as the default
 # for exec. Each is one word or empty (left unquoted on purpose); the user name
@@ -381,9 +402,13 @@ if [ -n "$OUTPUT_PATHS" ]; then
 	kill -KILL -1 2>/dev/null
 	sleep 1
 	sync
-	for mp in $OUTPUT_PATHS; do
-		umount "/newroot${mp}" 2>/dev/null || echo "sandbox-bridge: output at ${mp} still busy; synced"
+	oldifs=$IFS
+	IFS='
+'
+	for target in $OUTPUT_PATHS; do
+		umount "$target" 2>/dev/null || echo "sandbox-bridge: output at ${target#/newroot} still busy; synced"
 	done
+	IFS=$oldifs
 	sync
 fi
 printf 'KUBESWIFT-EXIT-CODE=%s\n' "$code" >/dev/console 2>/dev/null
