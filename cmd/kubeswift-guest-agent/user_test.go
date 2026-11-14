@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func testRoot(t *testing.T) string {
@@ -179,5 +180,125 @@ func TestChownPaths(t *testing.T) {
 	}
 	if st := fi.Sys().(*syscall.Stat_t); st.Uid != 1234 || st.Gid != 5678 {
 		t.Fatalf("owner %d:%d, want 1234:5678", st.Uid, st.Gid)
+	}
+}
+
+// The image's /etc/passwd is read as the workload would see it from its
+// chroot: an absolute symlink resolves inside the root, a link that climbs
+// with ".." stops at the root, and nothing outside the root is read.
+func TestResolveCredsSymlinks(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "root")
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(os.MkdirAll(filepath.Join(root, "etc/static"), 0o755))
+	must(os.WriteFile(filepath.Join(root, "etc/static/passwd"), []byte("agent:x:1000:1000::/home/agent:/bin/sh\n"), 0o644))
+	must(os.WriteFile(filepath.Join(parent, "outside"), []byte("evil:x:0:0::/:/bin/sh\n"), 0o644))
+
+	must(os.Symlink("/etc/static/passwd", filepath.Join(root, "etc/passwd")))
+	if c, err := resolveCreds(root, "agent"); err != nil || c.uid != 1000 {
+		t.Fatalf("absolute symlink: %+v %v", c, err)
+	}
+
+	must(os.Remove(filepath.Join(root, "etc/passwd")))
+	must(os.Symlink("../../outside", filepath.Join(root, "etc/passwd")))
+	if _, err := resolveCreds(root, "evil"); err == nil {
+		t.Fatal("a symlink climbing out of the root read a passwd outside it")
+	}
+
+	must(os.Remove(filepath.Join(root, "etc/passwd")))
+	must(os.Symlink("/etc/loop", filepath.Join(root, "etc/passwd")))
+	must(os.Symlink("/etc/passwd", filepath.Join(root, "etc/loop")))
+	if _, err := resolveCreds(root, "agent"); err == nil || !strings.Contains(err.Error(), "symbolic links") {
+		t.Fatalf("symlink loop: %v", err)
+	}
+}
+
+// A FIFO as /etc/passwd is refused instead of blocking the agent.
+func TestResolveCredsFIFO(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(root, "etc/passwd"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := resolveCreds(root, "agent"); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("err = %v, want not a regular file", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("resolveCreds blocked on a FIFO /etc/passwd")
+	}
+}
+
+// A chown path through a symlinked directory stays inside the root, and the
+// last element is never followed.
+func TestResolveInRootChownPaths(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "var/run"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	for _, tc := range []struct{ link, p, want string }{
+		{"/var/run", "/run/secrets/token", "var/run/secrets/token"},
+		{"../../../..", "/run/secrets/token", "secrets/token"},
+		{"/etc/shadow", "/run", "run"}, // the last element itself: Lchown, not followed
+	} {
+		_ = os.Remove(filepath.Join(root, "run"))
+		if err := os.Symlink(tc.link, filepath.Join(root, "run")); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := resolveInRoot(r, tc.p, false); err != nil || got != tc.want {
+			t.Errorf("run -> %s: resolve %s = %q, %v; want %q", tc.link, tc.p, got, err, tc.want)
+		}
+	}
+	if err := chownPaths(root, &creds{uid: 1, gid: 1}, []string{"/"}); err == nil {
+		t.Error("chownPaths chowned the sandbox root")
+	}
+	if err := chownPaths(root, &creds{uid: 1 << 31, gid: 1}, []string{"/run"}); err == nil {
+		t.Error("a uid above MaxInt32 reached Lchown")
+	}
+}
+
+// A secret path whose directory the image made a symlink to a host path
+// never chowns the host file.
+func TestChownPathsSymlinkEscape(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to chown")
+	}
+	parent := t.TempDir()
+	root := filepath.Join(parent, "root")
+	victim := filepath.Join(parent, "victim")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(victim, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, link := range []string{parent, "../.."} {
+		_ = os.Remove(filepath.Join(root, "sec"))
+		if err := os.Symlink(link, filepath.Join(root, "sec")); err != nil {
+			t.Fatal(err)
+		}
+		_ = chownPaths(root, &creds{uid: 4242, gid: 4242}, []string{"/sec/victim"})
+		fi, err := os.Stat(victim)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st := fi.Sys().(*syscall.Stat_t); st.Uid == 4242 {
+			t.Fatalf("sec -> %s: the host file outside the root was chowned", link)
+		}
 	}
 }

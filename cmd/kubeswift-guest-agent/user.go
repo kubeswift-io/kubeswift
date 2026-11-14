@@ -4,8 +4,9 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"math"
 	"os"
-	"path/filepath"
+	"path"
 	"runtime"
 	"slices"
 	"strconv"
@@ -70,6 +71,69 @@ type groupEntry struct {
 	members []string
 }
 
+// openRoot opens the sandbox root (the agent's own root when empty). The
+// root holds an untrusted image, so every file it names is opened through the
+// os.Root: a symlink in the image resolves inside it, never on the agent's
+// side of the chroot.
+func openRoot(root string) (*os.Root, error) {
+	if root == "" {
+		root = "/"
+	}
+	return os.OpenRoot(root)
+}
+
+// maxSymlinks bounds symlink resolution, as the kernel's ELOOP does.
+const maxSymlinks = 40
+
+// resolveInRoot resolves p as the workload sees it from inside its chroot:
+// an absolute symlink target is taken from the sandbox root and ".." stops
+// there. os.Root alone refuses an absolute symlink as escaping, which would
+// break images that use them (/etc/passwd -> /etc/static/passwd). With
+// followLast false the last element is not resolved (for Lchown). The result
+// has no symlinks left and is still opened through r, so a link swapped after
+// resolving can at worst fail the open, never leave the root.
+func resolveInRoot(r *os.Root, p string, followLast bool) (string, error) {
+	todo := strings.Split(strings.Trim(path.Clean("/"+p), "/"), "/")
+	done := ""
+	hops := 0
+	for len(todo) > 0 {
+		elem := todo[0]
+		todo = todo[1:]
+		if elem == "" || elem == "." {
+			continue
+		}
+		if elem == ".." {
+			done = strings.TrimPrefix(path.Dir("/"+done), "/")
+			continue
+		}
+		next := path.Join(done, elem)
+		if len(todo) == 0 && !followLast {
+			return next, nil
+		}
+		fi, err := r.Lstat(next)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			// Missing, or not a link: the caller's open reports it.
+			done = next
+			continue
+		}
+		if hops++; hops > maxSymlinks {
+			return "", fmt.Errorf("/%s: too many levels of symbolic links", p)
+		}
+		target, err := r.Readlink(next)
+		if err != nil {
+			return "", err
+		}
+		if strings.HasPrefix(target, "/") {
+			done = ""
+		}
+		todo = append(strings.Split(target, "/"), todo...)
+	}
+	if done == "" {
+		return ".", nil
+	}
+	return done, nil
+}
+
 // resolveCreds resolves spec against root's /etc/passwd and /etc/group. A
 // numeric user need not exist in /etc/passwd (its group is then 0 unless the
 // spec names one); a user or group name must.
@@ -78,7 +142,12 @@ func resolveCreds(root, spec string) (creds, error) {
 	if u == "" {
 		u = "0"
 	}
-	users, err := readPasswd(filepath.Join(root, "etc/passwd"))
+	r, err := openRoot(root)
+	if err != nil {
+		return creds{}, err
+	}
+	defer r.Close()
+	users, err := readPasswd(r, "etc/passwd")
 	if err != nil {
 		return creds{}, err
 	}
@@ -100,7 +169,7 @@ func resolveCreds(root, spec string) (creds, error) {
 		e := users[i]
 		name, c.uid, c.gid, c.home = e.name, e.uid, e.gid, e.home
 	}
-	groups, err := readGroup(filepath.Join(root, "etc/group"))
+	groups, err := readGroup(r, "etc/group")
 	if err != nil {
 		return creds{}, err
 	}
@@ -128,9 +197,9 @@ func resolveCreds(root, spec string) (creds, error) {
 }
 
 // readPasswd parses an /etc/passwd; a missing file is an empty one.
-func readPasswd(path string) ([]passwdEntry, error) {
+func readPasswd(r *os.Root, name string) ([]passwdEntry, error) {
 	var out []passwdEntry
-	err := eachLine(path, func(f []string) {
+	err := eachLine(r, name, func(f []string) {
 		if len(f) < 6 {
 			return
 		}
@@ -145,9 +214,9 @@ func readPasswd(path string) ([]passwdEntry, error) {
 }
 
 // readGroup parses an /etc/group; a missing file is an empty one.
-func readGroup(path string) ([]groupEntry, error) {
+func readGroup(r *os.Root, name string) ([]groupEntry, error) {
 	var out []groupEntry
-	err := eachLine(path, func(f []string) {
+	err := eachLine(r, name, func(f []string) {
 		if len(f) < 3 {
 			return
 		}
@@ -164,8 +233,15 @@ func readGroup(path string) ([]groupEntry, error) {
 	return out, err
 }
 
-func eachLine(path string, fn func([]string)) error {
-	f, err := os.Open(path)
+// eachLine calls fn with the fields of each line of name in r. Only a regular
+// file is read: it is opened non-blocking, so an image whose /etc/passwd is a
+// FIFO cannot hang the agent.
+func eachLine(r *os.Root, name string, fn func([]string)) error {
+	resolved, err := resolveInRoot(r, name, true)
+	if err != nil {
+		return err
+	}
+	f, err := r.OpenFile(resolved, os.O_RDONLY|unix.O_NONBLOCK, 0)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -173,6 +249,11 @@ func eachLine(path string, fn func([]string)) error {
 		return err
 	}
 	defer f.Close()
+	if fi, err := f.Stat(); err != nil {
+		return err
+	} else if !fi.Mode().IsRegular() {
+		return fmt.Errorf("/%s in the image is not a regular file", name)
+	}
 	s := bufio.NewScanner(f)
 	for s.Scan() {
 		line := strings.TrimSpace(s.Text())
@@ -249,16 +330,34 @@ func startNoNewPrivs(nnp bool, start func() error) error {
 
 // chownPaths gives the workload user the files and directories the platform
 // put in place for it (secret files, output shares). Only the paths named,
-// never recursively.
+// never recursively, and through the sandbox root: a symlinked directory in
+// the image cannot point the chown outside it.
 func chownPaths(root string, c *creds, paths []string) error {
 	if c == nil {
 		return nil
 	}
+	// The ids reach Lchown as int; on a 32-bit agent a larger id would wrap.
+	if c.uid > math.MaxInt32 || c.gid > math.MaxInt32 {
+		return fmt.Errorf("uid %d / gid %d is out of range for chown", c.uid, c.gid)
+	}
+	uid, gid := int(c.uid), int(c.gid)
+	r, err := openRoot(root)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
 	for _, p := range paths {
 		if p == "" {
 			continue
 		}
-		if err := os.Lchown(filepath.Join(root, p), int(c.uid), int(c.gid)); err != nil {
+		name, err := resolveInRoot(r, p, false)
+		if err == nil && name == "." {
+			err = errors.New("refusing to chown the sandbox root")
+		}
+		if err == nil {
+			err = r.Lchown(name, uid, gid)
+		}
+		if err != nil {
 			return fmt.Errorf("give %s to uid %d: %w", p, c.uid, err)
 		}
 	}
