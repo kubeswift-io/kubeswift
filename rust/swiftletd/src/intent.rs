@@ -656,6 +656,53 @@ pub struct SandboxExec {
     /// the values exist in swiftletd's memory and on the in-memory disk only.
     #[serde(skip)]
     pub files: Vec<GuestFile>,
+    /// Who the workload runs as (USER / NNP / NONROOT lines).
+    #[serde(default)]
+    pub user: Option<WorkloadUser>,
+}
+
+/// Who a sandbox workload runs as: the image USER or spec.securityContext, as
+/// the controller resolved it, and whether the sandbox asked for it
+/// (`explicit`) or it only came from the image.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkloadUser {
+    #[serde(default)]
+    pub user: String,
+    #[serde(default)]
+    pub explicit: bool,
+    #[serde(default)]
+    pub no_new_privs: bool,
+    #[serde(default)]
+    pub non_root: bool,
+}
+
+impl WorkloadUser {
+    fn is_root_unrestricted(&self) -> bool {
+        self.user.is_empty() && !self.no_new_privs && !self.non_root
+    }
+
+    /// What to ask the bridge for. A bridge without `run-as-user` would run
+    /// the workload as root: refused when the sandbox asked for an identity,
+    /// and when it only came from the image, the workload runs as root as it
+    /// did before (the controller tells the user with an Event). `has` says
+    /// whether the bridge has the feature.
+    pub fn gate(user: Option<Self>, has: bool) -> Result<Option<Self>, String> {
+        let Some(u) = user.filter(|u| !u.is_root_unrestricted()) else {
+            return Ok(None);
+        };
+        if has {
+            return Ok(Some(u));
+        }
+        if u.explicit {
+            return crate::bridge::require("run-as-user", "spec.securityContext").map(|_| None);
+        }
+        log::warn!(
+            "image_user_ignored user={:?}: the kernel's bridge has no run-as-user; the workload runs as root",
+            u.user
+        );
+        Ok(None)
+    }
 }
 
 /// One Secret key written to one file in the guest.
@@ -744,6 +791,18 @@ impl SandboxExec {
         }
         for e in &self.env {
             s.push_str(&format!("ENV\t{}\n", base64_encode(e.as_bytes())));
+        }
+        // USER / NNP / NONROOT: who the workload runs as (feature "run-as-user").
+        if let Some(u) = &self.user {
+            if !u.user.is_empty() {
+                s.push_str(&format!("USER\t{}\n", base64_encode(u.user.as_bytes())));
+            }
+            if u.no_new_privs {
+                s.push_str("NNP\t1\n");
+            }
+            if u.non_root {
+                s.push_str("NONROOT\t1\n");
+            }
         }
         // FILE <b64 path> <octal mode> <b64 content>: written by the bridge
         // (feature "files") into the guest's in-memory writable layer.
@@ -1112,6 +1171,7 @@ mod tests {
                 mode: 0o400,
                 data: b"{\"auths\":{}}".to_vec(),
             }],
+            user: None,
         };
         let blob = String::from_utf8(e.to_config_blob()).unwrap();
         let line = blob
@@ -1144,6 +1204,7 @@ mod tests {
             secret_env: vec![],
             secret_files: vec![],
             files: vec![],
+            user: None,
         };
         let blob = e.to_config_blob();
         assert_eq!(blob.len() % 512, 0, "blob must be sector-padded");
@@ -1163,6 +1224,65 @@ mod tests {
         // exactly the magic + CWD + 3 ARGV + 1 ENV + END = 7 content lines.
         let content_lines = text.trim_end_matches('\u{0}').lines().count();
         assert_eq!(content_lines, 7, "unexpected line count: {text:?}");
+    }
+
+    #[test]
+    fn test_sandbox_exec_config_blob_carries_user() {
+        let e: SandboxExec = serde_json::from_str(
+            r#"{"argv":["/app"],"user":{"user":"agent:staff","explicit":true,"noNewPrivs":true,"nonRoot":true}}"#,
+        )
+        .unwrap();
+        let text = String::from_utf8_lossy(&e.to_config_blob()).to_string();
+        assert!(text.contains(&format!("USER\t{}\n", base64_encode(b"agent:staff"))));
+        assert!(text.contains("NNP\t1\n"));
+        assert!(text.contains("NONROOT\t1\n"));
+        // No identity: no lines (an older controller's intent).
+        let none: SandboxExec = serde_json::from_str(r#"{"argv":["/app"]}"#).unwrap();
+        let text = String::from_utf8_lossy(&none.to_config_blob()).to_string();
+        assert!(!text.contains("USER\t") && !text.contains("NNP\t") && !text.contains("NONROOT\t"));
+    }
+
+    #[test]
+    fn test_workload_user_gate() {
+        let image = WorkloadUser {
+            user: "1000".into(),
+            ..Default::default()
+        };
+        let asked = WorkloadUser {
+            user: "1000".into(),
+            explicit: true,
+            ..Default::default()
+        };
+        // A bridge with run-as-user gets either.
+        assert_eq!(
+            WorkloadUser::gate(Some(image.clone()), true),
+            Ok(Some(image.clone()))
+        );
+        assert_eq!(
+            WorkloadUser::gate(Some(asked.clone()), true),
+            Ok(Some(asked.clone()))
+        );
+        // Without it: the image's user is dropped (root, as before) ...
+        assert_eq!(WorkloadUser::gate(Some(image), false), Ok(None));
+        // ... what the sandbox asked for is refused, naming the kernels.
+        let err = WorkloadUser::gate(Some(asked), false).unwrap_err();
+        assert!(
+            err.contains("run-as-user") && err.contains("6.6.20"),
+            "{err}"
+        );
+        // runAsNonRoot alone is an identity too.
+        let nonroot = WorkloadUser {
+            non_root: true,
+            explicit: true,
+            ..Default::default()
+        };
+        assert!(WorkloadUser::gate(Some(nonroot), false).is_err());
+        // Root with no restriction needs nothing.
+        assert_eq!(
+            WorkloadUser::gate(Some(WorkloadUser::default()), false),
+            Ok(None)
+        );
+        assert_eq!(WorkloadUser::gate(None, false), Ok(None));
     }
 
     #[test]

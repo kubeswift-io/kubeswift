@@ -135,7 +135,7 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 			configDev = sandboxConfigDeviceVirtiofs
 		}
 		cmdline += " kubeswift.config=" + configDev
-		sandboxExec = &runtimeintent.SandboxExecSpec{Argv: exec.Argv, Env: exec.Env, Cwd: exec.Cwd,
+		sandboxExec = &runtimeintent.SandboxExecSpec{Argv: exec.Argv, Env: exec.Env, Cwd: exec.Cwd, User: exec.User,
 			SecretEnv: secretEnvRefs(sb), SecretFiles: secretFileRefs(sb)}
 	}
 	cpu := int(sb.Spec.CPU)

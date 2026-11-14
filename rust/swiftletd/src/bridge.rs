@@ -51,6 +51,7 @@ fn minimum_kernels(feature: &str) -> (&'static str, &'static str) {
         "warm-mounts" => ("6.6.15", "6.6.4"),
         "outputs" => ("6.6.17", "6.6.6"),
         "workload-stream" => ("6.6.18", "6.6.7"),
+        "run-as-user" | "landlock" | "vmgenid" => ("6.6.20", "6.6.10"),
         _ => ("6.6.14", "6.6.3"),
     }
 }

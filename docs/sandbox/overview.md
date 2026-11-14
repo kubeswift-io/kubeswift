@@ -34,7 +34,7 @@ For bursts of same-image sandboxes where the ~15s cold boot dominates, a
 
 - A node labeled `kubeswift.io/kernel-node=true`
 - A `Ready` `SwiftKernel` named `sandbox` (OCI artifact
-  `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.19`, pulled per node)
+  `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.20`, pulled per node)
 
 The sandbox kernel is not a plain `kernelRef` SwiftGuest kernel — its
 bridge-initramfs needs the OCI rootfs disk that the SwiftSandbox controller
@@ -68,6 +68,7 @@ Ready-to-edit manifests and notes:
 | `args` | []string | — | Appended to `command` (or the image's CMD when `command` is empty). |
 | `env` | []EnvVar | — | Merged over the image's config env. |
 | `workingDir` | string | — | Overrides the image's working directory. Honored on both the cold-boot path (the bridge runs the workload via the guest agent's chroot+chdir+exec) and the warm-pool checkout path. Must exist in the image. |
+| `securityContext` | object | — | Who the workload runs as: `runAsUser`, `runAsGroup`, `runAsNonRoot`, `allowPrivilegeEscalation`, as in a Pod. Unset fields follow the image `USER`, else root. See [Workload user](#workload-user). |
 | `timeout` | Duration | none | Wall-clock run cap. Past `startedAt + timeout` the controller force-terminates the sandbox to `Failed` (`DeadlineExceeded`). |
 | `ttl` | Duration | none | Once the sandbox has been terminal (`Completed`/`Failed`) for at least `ttl`, the controller deletes it and frees the node's rootfs-cache reference. |
 | `rootfsMode` | enum | `block` | How the OCI rootfs is delivered: `block` (read-only ext4 disk) or `virtiofs` (the unpacked tree over virtio-fs, tag `sandboxroot` — skips `mkfs.ext4` and the ext4 size floor, shares the host page cache). Same RO-base + writable tmpfs-overlay either way. |
@@ -115,6 +116,7 @@ sandbox to change image, resources, command, or network.
 | `model.digest` / `model.mountPath` / `model.cachePath` | string / string / string | The resolved model artifact once materialized. Absent when `spec.model` is unset. |
 | `startedAt` | Time | When the guest began running. |
 | `terminalAt` | Time | When the sandbox first reached `Completed`/`Failed` — the anchor for `spec.ttl`. |
+| `user` | string | Who the workload runs as (`user`, `uid`, `user:group`, `uid:gid`), from `spec.securityContext` and the image `USER`. Empty: root. |
 | `exitCode` | int32 | The workload's real exit code: `0` → `Completed`, non-zero → `Failed`. |
 | `message` | string | Human-readable status detail. |
 
@@ -321,6 +323,42 @@ spec:
   change it on install.
 - Probe headers are stored in the spec in plain text; do not put credentials in
   them.
+
+## Workload user
+
+The workload runs as the image's `USER`, as it would in a container, and
+`spec.securityContext` overrides it with the Pod field names:
+
+```yaml
+spec:
+  securityContext:
+    runAsUser: 1000              # replaces the image USER's user
+    runAsGroup: 1000             # replaces its group; unset: the user's group in the image
+    runAsNonRoot: true           # refuse to run as uid 0
+    allowPrivilegeEscalation: false  # no_new_privs: setuid binaries grant nothing
+```
+
+A user or group name is looked up in the image's `/etc/passwd` and
+`/etc/group` inside the guest, and the user's supplementary groups are added.
+`HOME` follows the user's home directory unless the image or `spec.env` sets
+it. `status.user` shows the result. The microVM is the isolation boundary;
+this limits what the workload can do inside it, for example before an in-guest
+sandbox such as nono applies Landlock.
+
+- Secret files and `spec.outputs` directories are given to the workload user,
+  so a `0400` secret file stays readable by it and by nobody else.
+- `kubectl`-style exec (`swiftctl sandbox exec` and `attach`) runs as the
+  workload user too, on a cold sandbox and on a checkout.
+- `runAsNonRoot` with a numeric user (or an image without `USER`) that is root
+  fails the sandbox before boot with `RunAsNonRootViolation`. A user name that
+  resolves to uid 0 is refused in the guest: the workload exits 126.
+- A scratch disk is a raw block device that the workload formats and mounts,
+  which needs root. Run such a workload as root (`runAsUser: 0`).
+- Needs kernels `sandbox:6.6.20` / `gpu-sandbox:6.6.10` or newer (bridge
+  feature `run-as-user`). On an older kernel a sandbox that sets
+  `securityContext` fails with `KernelUnsupported`; one that does not runs as
+  root, as before, with an `ImageUserIgnored` Warning Event when its image
+  names a `USER`.
 
 ## Secrets
 

@@ -171,6 +171,10 @@ spec:
   injected over the vsock exec channel. The pool image's own config env is
   merged in too (resolved once at materialize, no per-checkout pull), so the
   workload sees **image env + your `spec.env`**, same as a cold sandbox.
+- The workload runs as the pool image's `USER` (stamped on the pool as
+  `status.imageUser`) under the checkout's own `spec.securityContext`, and
+  later execs run as that user too. See
+  [Workload user](overview.md#workload-user).
 - `status.podRef` points at the claimed slot pod (`<pool>-slot-<x>`), not at a
   pod named after the sandbox. `status.exitCode` carries the workload's real
   exit code just like a cold sandbox.

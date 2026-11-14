@@ -95,6 +95,19 @@ type Request struct {
 	ErrorFrames bool `json:"errorFrames,omitempty"`
 	// block-in-use op: the virtio serial of the disk to look at.
 	Serial string `json:"serial,omitempty"`
+	// User, NoNewPrivs and NonRoot are who the exec runs as (user.go). A
+	// request with none of them runs as the workload does.
+	User       string `json:"user,omitempty"`
+	NoNewPrivs bool   `json:"noNewPrivs,omitempty"`
+	NonRoot    bool   `json:"nonRoot,omitempty"`
+	// Workload marks a checkout's workload: its identity becomes the one
+	// later execs default to.
+	Workload bool `json:"workload,omitempty"`
+}
+
+// identity is who the request asks to run as; zero means the default.
+func (r Request) identity() identity {
+	return identity{User: r.User, NoNewPrivs: r.NoNewPrivs, NonRoot: r.NonRoot}
 }
 
 // ExecFile is one file the exec op writes into the exec root: a path inside it,
@@ -153,6 +166,19 @@ type handler struct {
 	execRoot string
 	// stageDir is where the bridge mounted the warm-slot staging share.
 	stageDir string
+	// workload is who an exec without its own identity runs as.
+	workload defaultIdentity
+}
+
+// execPlan is what buildExecCmd decided beyond the command itself.
+type execPlan struct {
+	creds *creds // nil: run as root
+	nnp   bool
+}
+
+// start starts cmd (through startCmd, e.g. a PTY) under the plan's no_new_privs.
+func (p execPlan) start(startCmd func() error) error {
+	return startNoNewPrivs(p.nnp, startCmd)
 }
 
 // handle parses one request, dispatches it, and returns the JSON response bytes.
@@ -479,15 +505,15 @@ const execOutputCap = 1 << 20 // 1 MiB
 // binary is resolved against a PATH INSIDE the chroot — Go's LookPath would search
 // the agent's own (initramfs) root. It returns an error (never runs) when exec is
 // disabled or argv is empty.
-func (h *handler) buildExecCmd(req Request) (*exec.Cmd, error) {
+func (h *handler) buildExecCmd(req Request) (*exec.Cmd, execPlan, error) {
 	// exec is enabled ONLY when the agent was started with --exec-root (SwiftSandbox).
 	// Identity guests run without it, so they keep the minimal two-op surface — no
 	// arbitrary command execution, even over the host-only vsock.
 	if h.execRoot == "" {
-		return nil, fmt.Errorf("exec is disabled (no --exec-root; SwiftSandbox only)")
+		return nil, execPlan{}, fmt.Errorf("exec is disabled (no --exec-root; SwiftSandbox only)")
 	}
 	if len(req.Argv) == 0 {
-		return nil, fmt.Errorf("exec: empty argv")
+		return nil, execPlan{}, fmt.Errorf("exec: empty argv")
 	}
 	root := h.execRoot
 	prog := req.Argv[0]
@@ -509,25 +535,41 @@ func (h *handler) buildExecCmd(req Request) (*exec.Cmd, error) {
 		}
 	}
 	cmd.Dir = dir // "" inherits the agent's cwd (no-chroot case); otherwise relative to the chroot
-	cmd.Env = execEnv(req.Env)
-	return cmd, nil
+	id := req.identity()
+	if req.Workload {
+		h.workload.set(id)
+	} else if id.zero() {
+		id = h.workload.get()
+	}
+	c, err := workloadCreds(root, id)
+	if err != nil {
+		return nil, execPlan{}, fmt.Errorf("exec: %w: %w", errIdentity, err)
+	}
+	if c != nil {
+		if cmd.SysProcAttr == nil {
+			cmd.SysProcAttr = &syscall.SysProcAttr{}
+		}
+		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: c.uid, Gid: c.gid, Groups: c.groups}
+	}
+	cmd.Env = withHome(execEnv(req.Env), c)
+	return cmd, execPlan{creds: c, nnp: id.NoNewPrivs}, nil
 }
 
 // exec runs argv chrooted into the sandbox root (h.execRoot) and returns its stdout,
 // stderr and exit code in one response.
 func (h *handler) exec(req Request) Response {
-	cmd, err := h.buildExecCmd(req)
+	cmd, plan, err := h.buildExecCmd(req)
 	if err != nil {
 		return Response{OK: false, Error: err.Error()}
 	}
-	if err := h.prepareExec(req); err != nil {
+	if err := h.prepareExec(req, plan); err != nil {
 		return Response{OK: false, Error: err.Error()}
 	}
 	stdout := &capBuffer{max: execOutputCap}
 	stderr := &capBuffer{max: execOutputCap}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	code := 0
-	if err := cmd.Run(); err != nil {
+	if err := runPlanned(cmd, plan); err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			code = ee.ExitCode()
@@ -540,7 +582,7 @@ func (h *handler) exec(req Request) Response {
 
 // prepareExec binds the request's staged artifacts and writes its files into
 // the exec root, before the command runs (both exec forms).
-func (h *handler) prepareExec(req Request) error {
+func (h *handler) prepareExec(req Request, plan execPlan) error {
 	if len(req.Mounts) > 0 {
 		if h.execRoot == "" || h.execRoot == "/" {
 			return fmt.Errorf("exec: mounts need an exec root")
@@ -553,7 +595,23 @@ func (h *handler) prepareExec(req Request) error {
 			return err
 		}
 	}
-	return writeExecFiles(h.execRoot, req.Files)
+	if err := writeExecFiles(h.execRoot, req.Files); err != nil {
+		return err
+	}
+	// The workload's secret files are the workload user's to read.
+	paths := make([]string, 0, len(req.Files))
+	for _, f := range req.Files {
+		paths = append(paths, f.Path)
+	}
+	return chownPaths(h.execRoot, plan.creds, paths)
+}
+
+// runPlanned is cmd.Run under the plan's no_new_privs.
+func runPlanned(cmd *exec.Cmd, plan execPlan) error {
+	if err := plan.start(cmd.Start); err != nil {
+		return err
+	}
+	return cmd.Wait()
 }
 
 // writeExecFiles writes files under root, creating their directories. A path

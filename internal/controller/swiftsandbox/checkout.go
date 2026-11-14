@@ -23,6 +23,7 @@ import (
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/artifactpolicy"
 	sandboxwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsandbox"
 )
@@ -86,6 +87,12 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	argv, env, cwd := poolExecArgs(sb, imageEnv)
 	if len(argv) == 0 {
 		return r.coldFallback(ctx, sb, kernelName, "no command to inject (needs image entrypoint)")
+	}
+	// Who the workload runs as: the pool image's USER under this sandbox's
+	// securityContext, decided before any slot is claimed.
+	user := workloadUser(sb.Spec.SecurityContext, pool.Status.ImageUser)
+	if msg, bad := runAsNonRootViolation(user); bad {
+		return r.fail(ctx, sb, reasonRunAsNonRootViolation, msg)
 	}
 
 	// Artifacts are resolved and authorized with this sandbox's credentials
@@ -177,7 +184,7 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 			if err != nil {
 				return r.fail(ctx, sb, artifactArgsFailure(err), err.Error())
 			}
-			inject = &execInject{argv: argv, env: env, cwd: cwd, arts: arts}
+			inject = &execInject{argv: argv, env: env, cwd: cwd, arts: arts, user: user}
 		}
 		if slot, err = r.tryClaimWarmSlot(ctx, sb, poolSlotProfile(&pool), inject); err != nil {
 			return ctrl.Result{}, err
@@ -232,7 +239,7 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 			_ = r.Delete(ctx, slot)
 			return r.fail(ctx, sb, artifactArgsFailure(err), err.Error())
 		}
-		if err := r.stampExecAction(ctx, slot, sb, string(sb.UID), execInject{argv: argv, env: env, cwd: cwd, arts: arts}); err != nil {
+		if err := r.stampExecAction(ctx, slot, sb, string(sb.UID), execInject{argv: argv, env: env, cwd: cwd, arts: arts, user: user}); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -265,6 +272,10 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	}
 	// The slot's network-init enforces the allowlist it was booted with.
 	setEgressAllowed(sb, parseEgressAllowed(slot.Annotations[EgressAllowedAnnotation]))
+	sb.Status.User = userString(user)
+	if msg := imageUserIgnored(user, slot); msg != "" && r.Recorder != nil {
+		r.Recorder.Event(sb, corev1.EventTypeWarning, reasonImageUserIgnored, msg)
+	}
 	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
 		Type: sandboxv1alpha1.SwiftSandboxConditionGuestRunning, Status: metav1.ConditionTrue,
 		Reason:             "CheckedOut",
@@ -476,6 +487,7 @@ type execInject struct {
 	argv, env []string
 	cwd       string
 	arts      []warmArtifactArg
+	user      *runtimeintent.WorkloadUser
 }
 
 // execActionAnnotations are the sandbox-exec action annotations that make
@@ -492,6 +504,9 @@ func execActionAnnotations(slot *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox, a
 	}
 	if w.cwd != "" {
 		args["cwd"] = w.cwd
+	}
+	if w.user != nil {
+		args["user"] = w.user
 	}
 	if sb.Spec.Timeout != nil {
 		args["timeoutSeconds"] = int64(sb.Spec.Timeout.Duration.Seconds())

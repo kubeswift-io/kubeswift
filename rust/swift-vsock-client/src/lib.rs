@@ -281,6 +281,20 @@ pub struct ExecRequest {
     /// Ask the agent to report a refusal as an error frame, not as exit 255.
     #[serde(rename = "errorFrames", skip_serializing_if = "std::ops::Not::not")]
     pub error_frames: bool,
+    /// Who the command runs as: a user, uid, user:group or uid:gid, resolved
+    /// in the sandbox root (bridge feature `run-as-user`; an older agent
+    /// ignores it and runs as root, so the caller checks the feature first).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub user: String,
+    /// Run with no_new_privs.
+    #[serde(rename = "noNewPrivs", skip_serializing_if = "std::ops::Not::not")]
+    pub no_new_privs: bool,
+    /// Refuse to run as uid 0.
+    #[serde(rename = "nonRoot", skip_serializing_if = "std::ops::Not::not")]
+    pub non_root: bool,
+    /// This is the checkout's workload: later execs default to its identity.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub workload: bool,
 }
 
 /// One staged artifact: its directory name in the slot's staging share and the
@@ -329,6 +343,10 @@ impl ExecRequest {
             mounts: vec![],
             stream: false,
             error_frames: false,
+            user: String::new(),
+            no_new_privs: false,
+            non_root: false,
+            workload: false,
         }
     }
 }
@@ -804,6 +822,24 @@ mod tests {
         );
         assert!(sent.contains("\"env\":[\"FOO=bar\"]"), "sent={}", sent);
         assert!(sent.contains("\"cwd\":\"/tmp\""), "sent={}", sent);
+        // No identity: the fields are absent, as an older agent expects.
+        for f in ["\"user\"", "noNewPrivs", "nonRoot", "workload"] {
+            assert!(!sent.contains(f), "sent={}", sent);
+        }
         let _ = std::fs::remove_file(&sock);
+    }
+
+    #[test]
+    fn exec_request_identity_fields_match_the_agent() {
+        let mut req = ExecRequest::new(vec!["/app".into()], vec![], String::new());
+        req.user = "agent:staff".into();
+        req.no_new_privs = true;
+        req.non_root = true;
+        req.workload = true;
+        let v = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["user"], "agent:staff");
+        assert_eq!(v["noNewPrivs"], true);
+        assert_eq!(v["nonRoot"], true);
+        assert_eq!(v["workload"], true);
     }
 }

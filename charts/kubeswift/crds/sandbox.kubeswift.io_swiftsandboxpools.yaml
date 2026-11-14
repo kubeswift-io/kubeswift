@@ -566,6 +566,12 @@ spec:
                 items:
                   type: string
                 type: array
+              imageUser:
+                description: |-
+                  ImageUser is the pool image's config USER, resolved with ImageEnv. A
+                  checkout runs its workload as this user unless its own
+                  spec.securityContext says otherwise.
+                type: string
               message:
                 type: string
               observedGeneration:

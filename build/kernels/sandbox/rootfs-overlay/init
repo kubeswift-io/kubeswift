@@ -50,6 +50,16 @@ OUTPUT_PATHS=""
 # common case (a missing init was a regression that panicked PID 1: "WORKDIR:
 # parameter not set" -> init exits -> "Attempted to kill init").
 WORKDIR=""
+# Who the workload runs as (config-disk USER / NNP / NONROOT lines, written from
+# the image USER and spec.securityContext). Empty: root, as before.
+RUN_USER=""
+RUN_NNP=""
+RUN_NONROOT=""
+# Paths inside the new root the platform put there for the workload (secret
+# files, output shares): the guest agent gives them to the workload user.
+OWN_LIST=/run/kubeswift-own
+mkdir -p /run
+: > "$OWN_LIST"
 for arg in $(cat /proc/cmdline); do
 	case "$arg" in
 		kubeswift.rootfs=*)     ROOTFS_KIND="${arg#kubeswift.rootfs=}" ;;
@@ -69,7 +79,9 @@ done
 # same list to the artifact's bridge-features file, which swiftletd checks
 # before it asks for any of them: an older bridge ignores what it does not
 # know, and would run the workload without its files or mounts.
-BRIDGE_FEATURES="files mounts warm-mounts outputs workload-stream"
+# run-as-user: the USER/NNP/NONROOT lines below. landlock, vmgenid: the kernel's
+# own (CONFIG_SECURITY_LANDLOCK, CONFIG_VMGENID), listed so swiftletd can ask.
+BRIDGE_FEATURES="files mounts warm-mounts outputs workload-stream run-as-user landlock vmgenid"
 echo "sandbox-bridge: features: $BRIDGE_FEATURES"
 
 # fail ends the sandbox. It reports an exit code first (125), as a workload
@@ -188,6 +200,7 @@ if [ -n "$OUTPUTS" ]; then
 			sleep 1
 		done
 		OUTPUT_PATHS="$OUTPUT_PATHS ${mp}"
+		echo "${mp}" >> "$OWN_LIST"
 		echo "sandbox-bridge: output $tag mounted read-write at ${mp}"
 	done
 	IFS=$oldifs
@@ -263,6 +276,9 @@ if [ -n "$CONFIG_DEV" ] && [ -r "$CONFIG_DEV" ]; then
 			ARGV) set -- "$@" "$(printf '%s' "$val" | base64 -d 2>/dev/null)" ;;
 			ENV)  export "$(printf '%s' "$val" | base64 -d 2>/dev/null)" 2>/dev/null || true ;;
 			CWD)  WORKDIR="$(printf '%s' "$val" | base64 -d 2>/dev/null)" ;;
+			USER) RUN_USER="$(printf '%s' "$val" | base64 -d 2>/dev/null)" ;;
+			NNP)  RUN_NNP=1 ;;
+			NONROOT) RUN_NONROOT=1 ;;
 			# FILE <b64 path> <octal mode> <b64 content>: a secret file, written
 			# into the writable layer (tmpfs), so it lives in guest memory only.
 			# The name is never printed with its content.
@@ -275,6 +291,7 @@ if [ -n "$CONFIG_DEV" ] && [ -r "$CONFIG_DEV" ]; then
 				( umask 077; printf '%s' "$c64" | base64 -d > "/newroot${fpath}" ) 2>/dev/null \
 					|| fail "cannot write secret file ${fpath}"
 				chmod "$fmode" "/newroot${fpath}" || fail "cannot set mode ${fmode} on secret file ${fpath}"
+				echo "${fpath}" >> "$OWN_LIST"
 				echo "sandbox-bridge: wrote secret file ${fpath} (mode ${fmode})" ;;
 		esac
 	done
@@ -289,6 +306,16 @@ mkdir -p /newroot/proc /newroot/sys /newroot/dev
 mount -t proc     none /newroot/proc 2>/dev/null || true
 mount -t sysfs    none /newroot/sys  2>/dev/null || true
 mount -t devtmpfs none /newroot/dev  2>/dev/null || mount --bind /dev /newroot/dev
+# securityfs, so an in-guest sandbox (nono, an OpenShell supervisor) can read
+# the active LSMs (/sys/kernel/security/lsm) before it applies Landlock.
+mount -t securityfs none /newroot/sys/kernel/security 2>/dev/null || true
+
+# The identity flags the guest agent takes, for the workload and as the default
+# for exec. Each is one word or empty (left unquoted on purpose); the user name
+# itself is always passed quoted, as --user="$RUN_USER".
+NNP_FLAG=""; [ -n "$RUN_NNP" ] && NNP_FLAG=--no-new-privs
+NONROOT_FLAG=""; [ -n "$RUN_NONROOT" ] && NONROOT_FLAG=--non-root
+
 
 if [ "$#" -eq 0 ]; then
 	if [ -n "$ENTRYPOINT" ]; then set -- "$ENTRYPOINT"
@@ -316,7 +343,7 @@ fi
 # exec. Logs go to /dev/kmsg (kernel log) so they don't interleave the workload console
 # that swiftletd captures as the sandbox log.
 if [ -x /usr/local/bin/kubeswift-guest-agent ]; then
-	/usr/local/bin/kubeswift-guest-agent --exec-root=/newroot >/dev/kmsg 2>&1 &
+	/usr/local/bin/kubeswift-guest-agent --exec-root=/newroot --user="$RUN_USER" $NNP_FLAG $NONROOT_FLAG >/dev/kmsg 2>&1 &
 fi
 
 # Warm-pool keeper (kubeswift.idle=1): the slot is pre-booted with NO workload yet;
@@ -331,7 +358,15 @@ if [ "$IDLE" = 1 ]; then
 fi
 
 echo "sandbox-bridge: OCI rootfs ($ROOTFS_KIND) + tmpfs overlay; run $1 ($# arg(s))"
-if [ -n "$WORKDIR" ] && [ "$WORKDIR" != "/" ] && [ -x /usr/local/bin/kubeswift-guest-agent ]; then
+if [ -n "$RUN_USER$RUN_NNP$RUN_NONROOT" ]; then
+	# A workload identity needs the agent (setuid/setgid, no_new_privs, name
+	# lookup in the image's /etc/passwd). Without it, refuse rather than run
+	# as root.
+	[ -x /usr/local/bin/kubeswift-guest-agent ] || fail "a workload user is set but the guest agent is missing"
+	echo "sandbox-bridge: user=${RUN_USER:-root}${RUN_NNP:+ no_new_privs}${RUN_NONROOT:+ non-root} (via guest-agent --run)"
+	/usr/local/bin/kubeswift-guest-agent --run --exec-root=/newroot --cwd="$WORKDIR" \
+		--user="$RUN_USER" $NNP_FLAG $NONROOT_FLAG --own-list="$OWN_LIST" -- "$@"
+elif [ -n "$WORKDIR" ] && [ "$WORKDIR" != "/" ] && [ -x /usr/local/bin/kubeswift-guest-agent ]; then
 	echo "sandbox-bridge: workingDir=$WORKDIR (via guest-agent --run)"
 	/usr/local/bin/kubeswift-guest-agent --run --exec-root=/newroot --cwd="$WORKDIR" -- "$@"
 else

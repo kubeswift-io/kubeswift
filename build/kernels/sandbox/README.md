@@ -72,11 +72,11 @@ loadable modules must be built for (see [Module ABI](#module-abi-gpu-sandbox)).
 
 ```
 cd output/images                # or output-gpu-sandbox/images for the gpu profile
-oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.19 \
+oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.20 \
   bzImage:application/vnd.kubeswift.kernel.binary \
   rootfs.cpio.gz:application/vnd.kubeswift.initramfs.binary \
   bridge-features:text/plain
-# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.9 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain \
+# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.10 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain \
 #   module-abi:text/plain
 ```
 
@@ -155,7 +155,20 @@ The guest agent's single-shot `exec` request takes the same files as
 `/run/kubeswift-stage/<name>` is bound read-only (nosuid, nodev) at `path` in
 the new root before the files and the command.
 
+**Workload user** (feature `run-as-user`). Config-disk lines `USER <b64 spec>`
+(`user`, `uid`, `user:group`, `uid:gid`), `NNP 1` and `NONROOT 1` make the
+bridge run the workload through `kubeswift-guest-agent --run --user=... [--no-new-privs]
+[--non-root] --own-list=...`, which resolves names in the new root's
+`/etc/passwd` and `/etc/group`, gives the secret files and output shares to
+that user, and refuses (exit 126) what it cannot honour. The agent daemon gets
+the same flags, so exec defaults to the workload user; a warm checkout's
+request sets it with `workload: true` and `user` / `noNewPrivs` / `nonRoot`.
+The bridge also mounts securityfs at `/sys/kernel/security` in the new root.
+
 **Features.** A bridge ignores what it does not know, so an older one would run
 the workload without its files or mounts. swiftletd therefore reads
 `bridge-features` next to the kernel before asking for either, and fails the
 sandbox if the feature is missing: point the SwiftKernel at a newer artifact.
+`landlock` and `vmgenid` are listed for the kernel's own
+`CONFIG_SECURITY_LANDLOCK` and `CONFIG_VMGENID` (since 6.6.20 / 6.6.10; the
+kernels have them since 6.6.19 / 6.6.8).

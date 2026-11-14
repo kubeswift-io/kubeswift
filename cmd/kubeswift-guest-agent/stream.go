@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 
@@ -19,12 +20,12 @@ import (
 // connection back to the host.
 func (h *handler) execStream(rw io.ReadWriter, req Request) {
 	fc := &frameConn{FrameWriter: guestagent.NewFrameWriter(rw), errorFrames: req.ErrorFrames}
-	cmd, err := h.buildExecCmd(req)
+	cmd, plan, err := h.buildExecCmd(req)
 	if err != nil {
 		fc.exitErr(err.Error())
 		return
 	}
-	if err := h.prepareExec(req); err != nil {
+	if err := h.prepareExec(req, plan); err != nil {
 		fc.exitErr(err.Error())
 		return
 	}
@@ -45,7 +46,7 @@ func (h *handler) execStream(rw io.ReadWriter, req Request) {
 			return
 		}
 	}
-	if err := cmd.Start(); err != nil {
+	if err := plan.start(cmd.Start); err != nil {
 		fc.exitErr("exec: " + err.Error())
 		return
 	}
@@ -67,7 +68,7 @@ func (h *handler) execStream(rw io.ReadWriter, req Request) {
 // chroot as fds, so /newroot needs no /dev/pts of its own).
 func (h *handler) execAttach(rw io.ReadWriter, req Request) {
 	fc := &frameConn{FrameWriter: guestagent.NewFrameWriter(rw)}
-	cmd, err := h.buildExecCmd(req)
+	cmd, plan, err := h.buildExecCmd(req)
 	if err != nil {
 		fc.exitErr(err.Error())
 		return
@@ -79,7 +80,11 @@ func (h *handler) execAttach(rw io.ReadWriter, req Request) {
 	if sz.Cols == 0 {
 		sz.Cols = 80
 	}
-	ptmx, err := pty.StartWithSize(cmd, sz)
+	var ptmx *os.File
+	err = plan.start(func() (err error) {
+		ptmx, err = pty.StartWithSize(cmd, sz)
+		return err
+	})
 	if err != nil {
 		fc.exitErr("pty: " + err.Error())
 		return

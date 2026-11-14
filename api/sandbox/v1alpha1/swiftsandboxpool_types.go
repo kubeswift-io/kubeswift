@@ -160,6 +160,11 @@ type SwiftSandboxPoolStatus struct {
 	// without a per-checkout registry pull.
 	// +optional
 	ImageEnv []string `json:"imageEnv,omitempty"`
+	// ImageUser is the pool image's config USER, resolved with ImageEnv. A
+	// checkout runs its workload as this user unless its own
+	// spec.securityContext says otherwise.
+	// +optional
+	ImageUser string `json:"imageUser,omitempty"`
 	// +optional
 	// +listType=map
 	// +listMapKey=type
