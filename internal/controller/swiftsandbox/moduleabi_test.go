@@ -20,6 +20,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/static"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -193,6 +194,12 @@ func TestCreateLaunch_GPUModuleABI(t *testing.T) {
 				}
 				if !strings.Contains(got.Status.Message, "6.6.158-ksabi1") {
 					t.Errorf("message %q does not name the kernel's module ABI", got.Status.Message)
+				}
+				if c := apimeta.FindStatusCondition(got.Status.Conditions, sandboxv1alpha1.SwiftSandboxConditionResolved); c == nil || c.Reason != reasonKernelModuleABIMismatch {
+					t.Errorf("Resolved condition %+v, want reason %s", c, reasonKernelModuleABIMismatch)
+				}
+				if !hasEvent(rec, reasonKernelModuleABIMismatch) {
+					t.Errorf("no %s Event", reasonKernelModuleABIMismatch)
 				}
 				return
 			}

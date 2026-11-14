@@ -382,6 +382,11 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	if sb.UsesGPU() {
 		switch reason, msg := moduleABIVerdict(kernelName, kernelABI, kernelABIFound, sb.Spec.Image, ri.Labels); reason {
 		case reasonKernelModuleABIMismatch:
+			// The registry answered; say what it answered, not "Resolving".
+			apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
+				Type: sandboxv1alpha1.SwiftSandboxConditionResolved, Status: metav1.ConditionFalse,
+				Reason: reason, Message: msg, ObservedGeneration: sb.Generation,
+			})
 			return r.fail(ctx, sb, reason, msg)
 		case reasonModuleABIUndeclared:
 			if r.Recorder != nil {
@@ -622,7 +627,7 @@ func (r *SwiftSandboxReconciler) finishTerminal(ctx context.Context, sb *sandbox
 func (r *SwiftSandboxReconciler) fail(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, reason, msg string) (ctrl.Result, error) {
 	// A platform verification refusal is announced as well as recorded.
 	switch reason {
-	case "ArtifactPolicyDenied", "ArtifactVerificationFailed", "ArtifactClaimMismatch":
+	case "ArtifactPolicyDenied", "ArtifactVerificationFailed", "ArtifactClaimMismatch", reasonKernelModuleABIMismatch:
 		if r.Recorder != nil && sb.Status.Phase != sandboxv1alpha1.SwiftSandboxFailed {
 			r.Recorder.Event(sb, corev1.EventTypeWarning, reason, msg)
 		}
