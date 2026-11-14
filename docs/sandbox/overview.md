@@ -82,6 +82,7 @@ Ready-to-edit manifests and notes:
 | `podMetadata.labels` / `podMetadata.annotations` | map | — | Added to the launcher pod; `*kubeswift.io` keys and pod-network annotations refused. |
 | `network.egress.allow[]` | list | — | Destinations a `restricted` sandbox may reach: `service: {name, namespace}` or `cidr`, with optional `ports: [{port, protocol}]`. See [Allowing specific destinations](#allowing-specific-destinations-under-restricted). |
 | `kernelProfileRef.name` | string | `sandbox` | SwiftKernel to boot. |
+| `nestedVirtualization` | enum | `Disabled` | `Enabled` exposes the host CPU's VMX/SVM so the workload can run its own hypervisor (a CI job that boots VMs, a nested cluster). Off unless set: nested KVM is host attack surface reachable from the guest. The opposite default to SwiftGuest. |
 | `nodeSelector` | map[string]string | — | Additional node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
 | `poolRef.name` | string | — | Check out a pre-booted slot from this `SwiftSandboxPool` (sub-second) instead of the cold materialize+boot path; falls back to cold on a miss. Same namespace. See [Warm pools](warm-pool.md). |
 | `gpuResourceClaim` | GPUResourceClaimSpec | — | Pass a GPU through via Kubernetes **DRA**: the scheduler + a DRA driver allocate at pod-schedule time. Mutually exclusive with `gpuProfileRef` and with `poolRef`. See [GPU sandboxes](gpu-sandboxes.md). |

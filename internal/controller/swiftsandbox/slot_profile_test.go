@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/scheme"
 )
 
@@ -113,6 +114,9 @@ func TestSlotMismatches_NamesEveryDifference(t *testing.T) {
 		{"kernel", func(s *sandboxv1alpha1.SwiftSandbox) {
 			s.Spec.KernelProfileRef = &corev1.LocalObjectReference{Name: "custom"}
 		}, "kernel (pool sandbox, sandbox custom)"},
+		{"nested", func(s *sandboxv1alpha1.SwiftSandbox) {
+			s.Spec.NestedVirtualization = swiftv1alpha1.NestedVirtualizationEnabled
+		}, "nestedVirtualization (pool Disabled, sandbox Enabled)"},
 		{"cpu", func(s *sandboxv1alpha1.SwiftSandbox) { s.Spec.CPU = 2 }, "cpu (pool 1, sandbox 2)"},
 		{"memory", func(s *sandboxv1alpha1.SwiftSandbox) { s.Spec.Memory = resource.MustParse("1Gi") },
 			"memory (pool 512Mi, sandbox 1Gi)"},
