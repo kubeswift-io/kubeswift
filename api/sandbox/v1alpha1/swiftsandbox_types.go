@@ -117,6 +117,15 @@ type SwiftSandboxSpec struct {
 	// +optional
 	RootfsMode SandboxRootfsMode `json:"rootfsMode,omitempty"`
 
+	// NestedVirtualization exposes the host CPU's virtualization extensions
+	// (Intel VMX / AMD SVM) to the guest, so it can run its own hypervisor.
+	// Disabled when unset: a sandbox runs untrusted code, and nested KVM adds
+	// host attack surface reachable from inside the guest. Set Enabled for a
+	// workload that boots VMs (a CI job, a nested cluster). Same values as
+	// SwiftGuestClass.
+	// +optional
+	NestedVirtualization swiftv1alpha1.NestedVirtualization `json:"nestedVirtualization,omitempty"`
+
 	// KernelProfileRef names the SwiftKernel sandbox profile to boot. Defaults to
 	// the well-known "sandbox" kernel when unset.
 	// +optional

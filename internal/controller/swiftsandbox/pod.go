@@ -73,6 +73,28 @@ func workloadGated(sb *sandboxv1alpha1.SwiftSandbox) bool {
 	return networked(sb) && len(sb.Spec.Network.Ports) > 0
 }
 
+// nestedEnabled is whether a sandbox's guest sees VMX/SVM: only when it says
+// Enabled. Unlike a SwiftGuest, unset means Disabled.
+func nestedEnabled(v swiftv1alpha1.NestedVirtualization) bool {
+	return v == swiftv1alpha1.NestedVirtualizationEnabled
+}
+
+// nestedShape is the slot-shape value: empty for Enabled (see slotShape).
+func nestedShape(v swiftv1alpha1.NestedVirtualization) string {
+	if nestedEnabled(v) {
+		return ""
+	}
+	return string(swiftv1alpha1.NestedVirtualizationDisabled)
+}
+
+// nestedKey is the effective setting, as a sandbox's events name it.
+func nestedKey(v swiftv1alpha1.NestedVirtualization) string {
+	if nestedEnabled(v) {
+		return string(swiftv1alpha1.NestedVirtualizationEnabled)
+	}
+	return string(swiftv1alpha1.NestedVirtualizationDisabled)
+}
+
 // egressMode is the effective egress posture for a networked sandbox. The CRD
 // default is restricted; the fallthrough also covers a pre-admission empty value.
 func egressMode(sb *sandboxv1alpha1.SwiftSandbox) sandboxv1alpha1.SandboxNetworkMode {
@@ -205,7 +227,9 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 			InitramfsPath: kernelDir + "/rootfs.cpio.gz",
 			Cmdline:       cmdline,
 		},
-		Outputs:       outputs,
+		Outputs: outputs,
+		// Nested virtualization off unless the sandbox opts in (WS4.1).
+		DisableNested: !nestedEnabled(sb.Spec.NestedVirtualization),
 		SandboxRootfs: sandboxRootfs,
 		Filesystems:   filesystems,
 		SandboxExec:   sandboxExec,

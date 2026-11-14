@@ -4,6 +4,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 // SwiftSandboxPoolSpec defines a warm buffer of pre-booted, workload-less microVMs of
@@ -57,6 +59,16 @@ type SwiftSandboxPoolSpec struct {
 	// SwiftSandbox: restricted | open | none.
 	// +optional
 	Network SandboxNetwork `json:"network,omitempty"`
+
+	// NestedVirtualization exposes the host CPU's virtualization extensions
+	// (Intel VMX / AMD SVM) to each warm slot's guest, so it can run its own hypervisor.
+	// Disabled when unset: a sandbox runs untrusted code, and nested KVM adds
+	// host attack surface reachable from inside the guest. Set Enabled for a
+	// workload that boots VMs (a CI job, a nested cluster). Same values as
+	// SwiftGuestClass.
+	// A claiming SwiftSandbox must resolve to the same value.
+	// +optional
+	NestedVirtualization swiftv1alpha1.NestedVirtualization `json:"nestedVirtualization,omitempty"`
 
 	// KernelProfileRef names the SwiftKernel sandbox profile to boot; defaults to the
 	// well-known "sandbox" kernel when unset ("gpu-sandbox" for a GPU pool). A

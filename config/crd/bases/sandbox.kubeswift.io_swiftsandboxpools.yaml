@@ -183,6 +183,19 @@ spec:
                 required:
                 - imageRef
                 type: object
+              nestedVirtualization:
+                description: |-
+                  NestedVirtualization exposes the host CPU's virtualization extensions
+                  (Intel VMX / AMD SVM) to each warm slot's guest, so it can run its own hypervisor.
+                  Disabled when unset: a sandbox runs untrusted code, and nested KVM adds
+                  host attack surface reachable from inside the guest. Set Enabled for a
+                  workload that boots VMs (a CI job, a nested cluster). Same values as
+                  SwiftGuestClass.
+                  A claiming SwiftSandbox must resolve to the same value.
+                enum:
+                - Enabled
+                - Disabled
+                type: string
               network:
                 description: |-
                   Network is the slot networking posture (default restricted), the same modes as
