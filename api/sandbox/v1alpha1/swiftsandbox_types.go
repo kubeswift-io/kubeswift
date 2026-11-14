@@ -81,6 +81,15 @@ type SwiftSandboxSpec struct {
 	// +optional
 	WorkingDir string `json:"workingDir,omitempty"`
 
+	// SecurityContext sets who the workload runs as inside the microVM, with
+	// the Pod field names. Unset fields follow the image: its USER, else root.
+	// Needs kernels/sandbox 6.6.22 or kernels/gpu-sandbox 6.6.12 or newer
+	// (bridge feature run-as-user); on an older kernel a sandbox that sets it
+	// fails with KernelUnsupported, and one that does not runs as root with
+	// an ImageUserIgnored Warning Event when its image names a USER.
+	// +optional
+	SecurityContext *SandboxSecurityContext `json:"securityContext,omitempty"`
+
 	// Timeout is the wall-clock run cap. Past startedAt+timeout the controller
 	// force-terminates the sandbox to Failed(DeadlineExceeded). Unset = no cap.
 	// +optional
@@ -900,6 +909,13 @@ type SwiftSandboxStatus struct {
 	// spec.model is unset.
 	// +optional
 	Model *SandboxModelStatus `json:"model,omitempty"`
+	// User is who the workload runs as, as the controller resolved it from
+	// spec.securityContext and the image USER ("user", "uid", "user:group",
+	// "uid:gid"); names are looked up in the image's /etc/passwd and
+	// /etc/group inside the guest. Empty: root, which includes an image USER
+	// that the kernel's bridge could not honour (ImageUserIgnored Event).
+	// +optional
+	User string `json:"user,omitempty"`
 	// Artifacts reports each spec.artifacts entry as resolved: the digest
 	// mounted and where.
 	// +optional
@@ -978,4 +994,32 @@ func (s *SandboxReadinessStartup) WindowOrDefault() time.Duration {
 		return ReadinessStartupDefaultWindow
 	}
 	return s.Window.Duration
+}
+
+// SandboxSecurityContext is who a SwiftSandbox workload runs as: a subset of
+// the Pod SecurityContext, with its field names and meaning, so a framework
+// that writes Pod specs can map it one to one. The microVM is the isolation
+// boundary; this limits what the workload can do inside it.
+type SandboxSecurityContext struct {
+	// RunAsUser is the uid the workload runs as. Overrides the image USER.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2147483647
+	// +optional
+	RunAsUser *int64 `json:"runAsUser,omitempty"`
+	// RunAsGroup is the primary gid. Unset: the group the image USER names,
+	// else the user's group in the image's /etc/passwd, else 0.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2147483647
+	// +optional
+	RunAsGroup *int64 `json:"runAsGroup,omitempty"`
+	// RunAsNonRoot refuses to run the workload as uid 0. Checked by the
+	// controller when the user is numeric (Failed, RunAsNonRootViolation, no
+	// launcher), and in the guest when it is a name.
+	// +optional
+	RunAsNonRoot *bool `json:"runAsNonRoot,omitempty"`
+	// AllowPrivilegeEscalation false runs the workload with no_new_privs:
+	// setuid binaries and file capabilities grant nothing. Unset or true:
+	// allowed, as in a Pod.
+	// +optional
+	AllowPrivilegeEscalation *bool `json:"allowPrivilegeEscalation,omitempty"`
 }

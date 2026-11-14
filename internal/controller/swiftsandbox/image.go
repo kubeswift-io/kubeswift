@@ -13,6 +13,7 @@ import (
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/oci"
+	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
 )
 
@@ -61,22 +62,25 @@ type resolvedImage struct {
 	Virtiofs   bool   // rootfs delivered over virtio-fs (tree) instead of a block ext4
 	Exec       execSpec
 	Labels     map[string]string // image config labels (ModuleABILabel)
+	ImageUser  string            // image config USER (a pool stamps it for its checkouts)
+	ImageCwd   string            // image config WORKDIR (likewise)
 }
 
 // execSpec is the full workload exec (argv + env + cwd), delivered to the guest
 // via the per-sandbox config disk (NOT the kernel cmdline — that would leak env to
 // /proc/cmdline + the host's ps/logs and cap at ~2-4KB).
 type execSpec struct {
-	Argv []string // full argv (command/args merged over the image entrypoint/cmd)
-	Env  []string // "KEY=VAL", image env overlaid by spec.env
-	Cwd  string   // working dir; honored on the cold path (bridge -> guest-agent chroot+chdir) and checkout path
+	Argv []string                    // full argv (command/args merged over the image entrypoint/cmd)
+	Env  []string                    // "KEY=VAL", image env overlaid by spec.env
+	Cwd  string                      // working dir; honored on the cold path (bridge -> guest-agent chroot+chdir) and checkout path
+	User *runtimeintent.WorkloadUser // who the workload runs as; nil = root
 }
 
 // nonTrivial reports whether the exec spec carries anything worth a config disk.
 // A bare scratch image with no overrides yields an empty spec — the bridge then
 // falls back to /sbin/init -> /bin/sh with no config disk.
 func (e execSpec) nonTrivial() bool {
-	return len(e.Argv) > 0 || len(e.Env) > 0 || e.Cwd != ""
+	return len(e.Argv) > 0 || len(e.Env) > 0 || e.Cwd != "" || e.User != nil
 }
 
 // pullSecretAuth builds an in-memory registry authenticator from a
@@ -125,6 +129,8 @@ func resolveImage(sb *sandboxv1alpha1.SwiftSandbox, auth authn.Authenticator, lo
 		Virtiofs:   virtiofs,
 		Exec:       resolveExec(sb, res.config),
 		Labels:     res.config.Labels,
+		ImageUser:  res.config.User,
+		ImageCwd:   res.config.WorkingDir,
 	}, true, nil
 }
 
@@ -200,7 +206,8 @@ func resolveExec(sb *sandboxv1alpha1.SwiftSandbox, cfg materialize.ImageConfig) 
 	if cwd == "" {
 		cwd = cfg.WorkingDir
 	}
-	return execSpec{Argv: argv, Env: mergeEnv(cfg.Env, sb.Spec.Env), Cwd: cwd}
+	return execSpec{Argv: argv, Env: mergeEnv(cfg.Env, sb.Spec.Env), Cwd: cwd,
+		User: workloadUser(sb.Spec.SecurityContext, cfg.User)}
 }
 
 // mergeEnv overlays spec.env (literal values) onto the image env, preserving the

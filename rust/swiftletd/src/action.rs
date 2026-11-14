@@ -966,6 +966,9 @@ struct SandboxExecArgs {
     /// The checked-out sandbox's spec.termination (its drain on SIGTERM).
     #[serde(default)]
     termination: Option<crate::intent::SandboxTermination>,
+    /// Who the workload runs as (and later execs default to).
+    #[serde(default)]
+    user: Option<crate::intent::WorkloadUser>,
 }
 
 /// Default sandbox-exec timeout. The single-shot exec's connection is idle while
@@ -1064,9 +1067,20 @@ async fn dispatch_sandbox_exec(
             started.elapsed().as_millis()
         );
     }
+    // An older agent would ignore the identity and run the workload as root.
+    let user = crate::intent::WorkloadUser::gate(args.user, crate::bridge::has("run-as-user"))
+        .map_err(|e| format!("KernelUnsupported: {}", e))?;
     let mut req = swift_vsock_client::ExecRequest::new(args.argv, env, args.cwd);
     req.files = files;
     req.mounts = mounts;
+    // The workload's identity becomes the default for later execs, also when
+    // it is root (a slot is used once, but say so).
+    req.workload = true;
+    if let Some(u) = user {
+        req.user = u.user;
+        req.no_new_privs = u.no_new_privs;
+        req.non_root = u.non_root;
+    }
     if let Some(t) = &args.termination {
         crate::shutdown::set_drain(Duration::from_millis(t.drain_ms));
     }
@@ -4584,6 +4598,17 @@ mod tests {
         assert_eq!(args.env, vec!["FOO=bar"]);
         assert_eq!(args.cwd, "/tmp");
         assert_eq!(args.timeout_seconds, Some(42));
+    }
+
+    #[test]
+    fn sandbox_exec_args_carry_the_workload_user() {
+        let args: SandboxExecArgs = serde_json::from_str(
+            r#"{"argv":["/app"],"user":{"user":"65532","explicit":false,"noNewPrivs":true}}"#,
+        )
+        .unwrap();
+        let u = args.user.unwrap();
+        assert_eq!(u.user, "65532");
+        assert!(!u.explicit && u.no_new_privs && !u.non_root);
     }
 
     #[test]

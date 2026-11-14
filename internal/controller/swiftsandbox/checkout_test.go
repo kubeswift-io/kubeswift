@@ -2,6 +2,7 @@ package swiftsandbox
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -28,7 +29,7 @@ func TestPoolExecArgs(t *testing.T) {
 		Env:        []corev1.EnvVar{{Name: "A", Value: "1"}},
 		WorkingDir: "/tmp",
 	}}
-	argv, env, cwd := poolExecArgs(sb, []string{"PATH=/usr/bin", "A=image"})
+	argv, env, cwd := poolExecArgs(sb, []string{"PATH=/usr/bin", "A=image"}, "/work")
 	if strings.Join(argv, " ") != "sh -c echo hi" {
 		t.Errorf("argv = %v", argv)
 	}
@@ -37,8 +38,13 @@ func TestPoolExecArgs(t *testing.T) {
 		t.Errorf("env=%v cwd=%q", env, cwd)
 	}
 	// No command -> nil argv (caller cold-falls-back to the image entrypoint).
-	if a, _, _ := poolExecArgs(&sandboxv1alpha1.SwiftSandbox{}, nil); a != nil {
+	if a, _, _ := poolExecArgs(&sandboxv1alpha1.SwiftSandbox{}, nil, "/work"); a != nil {
 		t.Errorf("no-command argv should be nil, got %v", a)
+	}
+	// No spec.workingDir: the pool image's WORKDIR, as on the cold path.
+	sb.Spec.WorkingDir = ""
+	if _, _, cwd := poolExecArgs(sb, nil, "/work"); cwd != "/work" {
+		t.Errorf("cwd = %q, want the image WORKDIR /work", cwd)
 	}
 }
 
@@ -287,5 +293,40 @@ func TestCheckoutFailure(t *testing.T) {
 		if reason != c.reason || msg != c.msg {
 			t.Errorf("checkoutFailure(%q) = %q, %q; want %q, %q", c.detail, reason, msg, c.reason, c.msg)
 		}
+	}
+}
+
+// A checkout starts its workload in the pool image's WORKDIR unless its own
+// spec.workingDir says otherwise, as a cold sandbox does.
+func TestCheckout_ImageWorkingDir(t *testing.T) {
+	for _, tc := range []struct{ name, specDir, want string }{
+		{"image WORKDIR", "", "/work"},
+		{"spec.workingDir wins", "/data", "/data"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := shapedPool()
+			pool.Namespace = "default"
+			pool.Status.ImageWorkingDir = "/work"
+			slot := readySlot("p-slot-aaaaa", poolSlotProfile(pool))
+			slot.Namespace = "default"
+			sb := matchingSandbox()
+			sb.Namespace = "default"
+			sb.Spec.WorkingDir = tc.specDir
+			r, c := sandboxReconciler(pool, slot, sb)
+			reconcileSB(t, r, "sb")
+			var p corev1.Pod
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(slot), &p); err != nil {
+				t.Fatal(err)
+			}
+			var args struct {
+				Cwd string `json:"cwd"`
+			}
+			if err := json.Unmarshal([]byte(p.Annotations[annSandboxExecActionArgs]), &args); err != nil {
+				t.Fatalf("no checkout dispatched: %v", err)
+			}
+			if args.Cwd != tc.want {
+				t.Errorf("cwd = %q, want %q", args.Cwd, tc.want)
+			}
+		})
 	}
 }

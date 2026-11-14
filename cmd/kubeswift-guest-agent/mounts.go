@@ -80,8 +80,8 @@ func mountExecMounts(root, stageDir string, mounts []ExecMount) error {
 		}
 	}
 	for _, m := range mounts {
-		target := filepath.Join(root, m.Path)
-		if err := os.MkdirAll(target, 0o755); err != nil {
+		target, err := mkdirInRoot(root, m.Path, 0o755)
+		if err != nil {
 			return fmt.Errorf("exec: mount %s at %s: %w", m.Name, m.Path, err)
 		}
 		if err := bindReadOnly(filepath.Join(stageDir, m.Name), target); err != nil {

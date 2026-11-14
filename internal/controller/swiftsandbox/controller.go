@@ -394,6 +394,14 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 			}
 		}
 	}
+	if msg, bad := runAsNonRootViolation(ri.Exec.User); bad {
+		apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
+			Type: sandboxv1alpha1.SwiftSandboxConditionResolved, Status: metav1.ConditionFalse,
+			Reason: reasonRunAsNonRootViolation, Message: msg, ObservedGeneration: sb.Generation,
+		})
+		return r.fail(ctx, sb, reasonRunAsNonRootViolation, msg)
+	}
+	sb.Status.User = userString(ri.Exec.User)
 	var modelPath string
 	if sb.Spec.Model != nil {
 		modelPath = rm.TreePath
@@ -561,6 +569,16 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 		}
 		if err := r.syncWorkloadReady(ctx, sb, pod); err != nil {
 			return ctrl.Result{}, err
+		}
+		// The launcher's bridge dropped the image USER: the workload runs as
+		// root, so status.user says so, and clearing it makes this fire once.
+		// Not tied to the Running transition: swiftletd advertises the bridge
+		// after its container is already running.
+		if msg := imageUserIgnored(statusWorkloadUser(sb), pod); msg != "" {
+			sb.Status.User = ""
+			if r.Recorder != nil {
+				r.Recorder.Event(sb, corev1.EventTypeWarning, reasonImageUserIgnored, msg)
+			}
 		}
 		return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "guest running")
 	}

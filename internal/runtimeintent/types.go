@@ -297,6 +297,9 @@ type SandboxExecSpec struct {
 	Argv []string `json:"argv,omitempty"`
 	Env  []string `json:"env,omitempty"`
 	Cwd  string   `json:"cwd,omitempty"`
+	// User is who the workload runs as (config-disk USER / NNP / NONROOT
+	// lines, bridge feature run-as-user). Nil: root.
+	User *WorkloadUser `json:"user,omitempty"`
 	// SecretEnv are the variables whose values come from Secrets. Only the
 	// references travel: swiftletd reads the values with the launcher's own
 	// account and puts them on the config disk, which then lives in memory.
@@ -450,4 +453,17 @@ type NUMANodeIntent struct {
 type VCPUPin struct {
 	VCPU    int `json:"vcpu"`
 	HostCPU int `json:"hostCpu"`
+}
+
+// WorkloadUser is who a sandbox workload runs as: User is "user", "uid",
+// "user:group" or "uid:gid" (empty: root), resolved in the guest against the
+// image's /etc/passwd and /etc/group. Explicit says the sandbox asked for it
+// (spec.securityContext): a kernel whose bridge cannot honour it is then
+// refused; an identity that only came from the image USER is dropped there
+// instead, and the workload runs as root, as it did before.
+type WorkloadUser struct {
+	User       string `json:"user,omitempty"`
+	Explicit   bool   `json:"explicit,omitempty"`
+	NoNewPrivs bool   `json:"noNewPrivs,omitempty"`
+	NonRoot    bool   `json:"nonRoot,omitempty"`
 }

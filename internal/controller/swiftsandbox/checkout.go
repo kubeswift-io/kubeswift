@@ -23,6 +23,7 @@ import (
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/artifactpolicy"
 	sandboxwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsandbox"
 )
@@ -73,6 +74,7 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	// The pool resolved the image env once (status.imageEnv); merge spec.env over it so
 	// the injected workload sees the image env too — parity with a cold sandbox, no pull.
 	var imageEnv []string
+	var imageCwd string
 	var pool sandboxv1alpha1.SwiftSandboxPool
 	poolFound := true
 	if err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: sb.Spec.PoolRef.Name}, &pool); err != nil {
@@ -82,10 +84,17 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		poolFound = false
 	} else {
 		imageEnv = pool.Status.ImageEnv
+		imageCwd = pool.Status.ImageWorkingDir
 	}
-	argv, env, cwd := poolExecArgs(sb, imageEnv)
+	argv, env, cwd := poolExecArgs(sb, imageEnv, imageCwd)
 	if len(argv) == 0 {
 		return r.coldFallback(ctx, sb, kernelName, "no command to inject (needs image entrypoint)")
+	}
+	// Who the workload runs as: the pool image's USER under this sandbox's
+	// securityContext, decided before any slot is claimed.
+	user := workloadUser(sb.Spec.SecurityContext, pool.Status.ImageUser)
+	if msg, bad := runAsNonRootViolation(user); bad {
+		return r.fail(ctx, sb, reasonRunAsNonRootViolation, msg)
 	}
 
 	// Artifacts are resolved and authorized with this sandbox's credentials
@@ -177,7 +186,7 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 			if err != nil {
 				return r.fail(ctx, sb, artifactArgsFailure(err), err.Error())
 			}
-			inject = &execInject{argv: argv, env: env, cwd: cwd, arts: arts}
+			inject = &execInject{argv: argv, env: env, cwd: cwd, arts: arts, user: user}
 		}
 		if slot, err = r.tryClaimWarmSlot(ctx, sb, poolSlotProfile(&pool), inject); err != nil {
 			return ctrl.Result{}, err
@@ -232,7 +241,7 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 			_ = r.Delete(ctx, slot)
 			return r.fail(ctx, sb, artifactArgsFailure(err), err.Error())
 		}
-		if err := r.stampExecAction(ctx, slot, sb, string(sb.UID), execInject{argv: argv, env: env, cwd: cwd, arts: arts}); err != nil {
+		if err := r.stampExecAction(ctx, slot, sb, string(sb.UID), execInject{argv: argv, env: env, cwd: cwd, arts: arts, user: user}); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -265,6 +274,13 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	}
 	// The slot's network-init enforces the allowlist it was booted with.
 	setEgressAllowed(sb, parseEgressAllowed(slot.Annotations[EgressAllowedAnnotation]))
+	sb.Status.User = userString(user)
+	if msg := imageUserIgnored(user, slot); msg != "" {
+		sb.Status.User = "" // the slot's bridge runs it as root
+		if r.Recorder != nil {
+			r.Recorder.Event(sb, corev1.EventTypeWarning, reasonImageUserIgnored, msg)
+		}
+	}
 	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
 		Type: sandboxv1alpha1.SwiftSandboxConditionGuestRunning, Status: metav1.ConditionTrue,
 		Reason:             "CheckedOut",
@@ -292,15 +308,20 @@ func (r *SwiftSandboxReconciler) coldFallback(ctx context.Context, sb *sandboxv1
 // registry pull. argv = command + args (nil when no command — the caller cold-falls-back
 // to resolve the image entrypoint). env is the pool's resolved image env with spec.env
 // overlaid by key (parity with the cold path's mergeEnv), so the injected workload sees
-// the image env too; the pool supplied imageEnv from its one-time resolve.
-func poolExecArgs(sb *sandboxv1alpha1.SwiftSandbox, imageEnv []string) (argv, env []string, cwd string) {
+// the image env too; the pool supplied imageEnv from its one-time resolve. cwd is
+// spec.workingDir, else the pool image's WORKDIR (imageCwd), as on the cold path.
+func poolExecArgs(sb *sandboxv1alpha1.SwiftSandbox, imageEnv []string, imageCwd string) (argv, env []string, cwd string) {
 	if len(sb.Spec.Command) == 0 {
 		return nil, nil, ""
 	}
 	argv = append(argv, sb.Spec.Command...)
 	argv = append(argv, sb.Spec.Args...)
 	env = mergeEnv(imageEnv, sb.Spec.Env)
-	return argv, env, sb.Spec.WorkingDir
+	cwd = sb.Spec.WorkingDir
+	if cwd == "" {
+		cwd = imageCwd
+	}
+	return argv, env, cwd
 }
 
 // findClaimedSlot returns this sandbox's already-claimed slot pod, if any (labeled
@@ -476,6 +497,7 @@ type execInject struct {
 	argv, env []string
 	cwd       string
 	arts      []warmArtifactArg
+	user      *runtimeintent.WorkloadUser
 }
 
 // execActionAnnotations are the sandbox-exec action annotations that make
@@ -492,6 +514,9 @@ func execActionAnnotations(slot *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox, a
 	}
 	if w.cwd != "" {
 		args["cwd"] = w.cwd
+	}
+	if w.user != nil {
+		args["user"] = w.user
 	}
 	if sb.Spec.Timeout != nil {
 		args["timeoutSeconds"] = int64(sb.Spec.Timeout.Duration.Seconds())

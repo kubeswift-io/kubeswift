@@ -1404,6 +1404,43 @@ spec:
                 maxItems: 16
                 type: array
                 x-kubernetes-list-type: atomic
+              securityContext:
+                description: |-
+                  SecurityContext sets who the workload runs as inside the microVM, with
+                  the Pod field names. Unset fields follow the image: its USER, else root.
+                  Needs kernels/sandbox 6.6.22 or kernels/gpu-sandbox 6.6.12 or newer
+                  (bridge feature run-as-user); on an older kernel a sandbox that sets it
+                  fails with KernelUnsupported, and one that does not runs as root with
+                  an ImageUserIgnored Warning Event when its image names a USER.
+                properties:
+                  allowPrivilegeEscalation:
+                    description: |-
+                      AllowPrivilegeEscalation false runs the workload with no_new_privs:
+                      setuid binaries and file capabilities grant nothing. Unset or true:
+                      allowed, as in a Pod.
+                    type: boolean
+                  runAsGroup:
+                    description: |-
+                      RunAsGroup is the primary gid. Unset: the group the image USER names,
+                      else the user's group in the image's /etc/passwd, else 0.
+                    format: int64
+                    maximum: 2147483647
+                    minimum: 0
+                    type: integer
+                  runAsNonRoot:
+                    description: |-
+                      RunAsNonRoot refuses to run the workload as uid 0. Checked by the
+                      controller when the user is numeric (Failed, RunAsNonRootViolation, no
+                      launcher), and in the guest when it is a name.
+                    type: boolean
+                  runAsUser:
+                    description: RunAsUser is the uid the workload runs as. Overrides
+                      the image USER.
+                    format: int64
+                    maximum: 2147483647
+                    minimum: 0
+                    type: integer
+                type: object
               termination:
                 description: |-
                   Termination controls how a running workload ends when the sandbox is
@@ -1845,6 +1882,14 @@ spec:
                   TerminalAt is when the sandbox first reached a terminal phase
                   (Completed/Failed); the anchor for spec.ttl-driven deletion.
                 format: date-time
+                type: string
+              user:
+                description: |-
+                  User is who the workload runs as, as the controller resolved it from
+                  spec.securityContext and the image USER ("user", "uid", "user:group",
+                  "uid:gid"); names are looked up in the image's /etc/passwd and
+                  /etc/group inside the guest. Empty: root, which includes an image USER
+                  that the kernel's bridge could not honour (ImageUserIgnored Event).
                 type: string
             type: object
         type: object

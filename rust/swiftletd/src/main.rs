@@ -336,6 +336,20 @@ fn main() {
                     }
                 }
             }
+            // Who the workload runs as: a bridge without run-as-user would run
+            // it as root (intent::WorkloadUser::gate).
+            if let Some(exec) = intent.sandbox_exec.as_mut() {
+                match intent::WorkloadUser::gate(exec.user.take(), bridge::has("run-as-user")) {
+                    Ok(u) => exec.user = u,
+                    Err(msg) => {
+                        log::error!("{}", msg);
+                        if let (Some(ns), Some(n)) = (&namespace, &name) {
+                            let _ = rt.block_on(report::report_kernel_error(ns, n, &msg));
+                        }
+                        std::process::exit(1);
+                    }
+                }
+            }
             // Secret files: the bridge writes them (feature "files"); an older
             // bridge would boot without them, so refuse before the VM starts.
             if let Some(exec) = intent.sandbox_exec.as_mut() {
