@@ -34,7 +34,7 @@ For bursts of same-image sandboxes where the ~15s cold boot dominates, a
 
 - A node labeled `kubeswift.io/kernel-node=true`
 - A `Ready` `SwiftKernel` named `sandbox` (OCI artifact
-  `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.21`, pulled per node)
+  `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.22`, pulled per node)
 
 The sandbox kernel is not a plain `kernelRef` SwiftGuest kernel — its
 bridge-initramfs needs the OCI rootfs disk that the SwiftSandbox controller
@@ -354,7 +354,7 @@ sandbox such as nono applies Landlock.
   resolves to uid 0 is refused in the guest: the workload exits 126.
 - A scratch disk is a raw block device that the workload formats and mounts,
   which needs root. Run such a workload as root (`runAsUser: 0`).
-- Needs kernels `sandbox:6.6.21` / `gpu-sandbox:6.6.11` or newer (bridge
+- Needs kernels `sandbox:6.6.22` / `gpu-sandbox:6.6.12` or newer (bridge
   feature `run-as-user`). On an older kernel a sandbox that sets
   `securityContext` fails with `KernelUnsupported`; one that does not runs as
   root, as before, with an `ImageUserIgnored` Warning Event when its image

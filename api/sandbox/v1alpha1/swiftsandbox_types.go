@@ -83,7 +83,7 @@ type SwiftSandboxSpec struct {
 
 	// SecurityContext sets who the workload runs as inside the microVM, with
 	// the Pod field names. Unset fields follow the image: its USER, else root.
-	// Needs kernels/sandbox 6.6.21 or kernels/gpu-sandbox 6.6.11 or newer
+	// Needs kernels/sandbox 6.6.22 or kernels/gpu-sandbox 6.6.12 or newer
 	// (bridge feature run-as-user); on an older kernel a sandbox that sets it
 	// fails with KernelUnsupported, and one that does not runs as root with
 	// an ImageUserIgnored Warning Event when its image names a USER.

@@ -72,11 +72,11 @@ loadable modules must be built for (see [Module ABI](#module-abi-gpu-sandbox)).
 
 ```
 cd output/images                # or output-gpu-sandbox/images for the gpu profile
-oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.21 \
+oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.22 \
   bzImage:application/vnd.kubeswift.kernel.binary \
   rootfs.cpio.gz:application/vnd.kubeswift.initramfs.binary \
   bridge-features:text/plain
-# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.11 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain \
+# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.12 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain \
 #   module-abi:text/plain
 ```
 

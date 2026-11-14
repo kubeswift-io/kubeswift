@@ -28,10 +28,10 @@ as-is:
 | Artifact | Linux | Use |
 |---|---|---|
 | `ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.4` | 6.6.158 | kernel-boot guests (the `faas-minimal` profile) |
-| `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.21` | 6.6.158 | SwiftSandbox |
-| `ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.11` | 6.6.158 | SwiftSandbox with a GPU (adds `CONFIG_MODULES=y` and the module ABI guard; `uname -r` is `6.6.158-ksabi1`) |
+| `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.22` | 6.6.158 | SwiftSandbox |
+| `ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.12` | 6.6.158 | SwiftSandbox with a GPU (adds `CONFIG_MODULES=y` and the module ABI guard; `uname -r` is `6.6.158-ksabi1`) |
 
-The tag is the version of the KubeSwift artifact, not of Linux: `kernels/sandbox:6.6.21`
+The tag is the version of the KubeSwift artifact, not of Linux: `kernels/sandbox:6.6.22`
 carries Linux 6.6.158, which is what `uname -r` reports in the guest. Earlier artifacts (`faas` up to 6.6.3, `sandbox` up to
 6.6.15, `gpu-sandbox` up to 6.6.4) carry Linux 6.6.44, whose virtio-net driver
 drops valid packets and stalls TCP into the guest (#766). Use these artifacts or

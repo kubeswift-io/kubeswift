@@ -1267,7 +1267,7 @@ mod tests {
         // ... what the sandbox asked for is refused, naming the kernels.
         let err = WorkloadUser::gate(Some(asked), false).unwrap_err();
         assert!(
-            err.contains("run-as-user") && err.contains("6.6.21"),
+            err.contains("run-as-user") && err.contains("6.6.22"),
             "{err}"
         );
         // runAsNonRoot alone is an identity too.
