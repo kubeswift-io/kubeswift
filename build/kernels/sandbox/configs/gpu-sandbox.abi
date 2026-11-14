@@ -1,0 +1,3 @@
+# gpu-sandbox module ABI epochs (see verify-module-abi.sh). One line per epoch:
+# <epoch> <sha256 of the normalised kernel config inputs>. Append, never edit.
+ksabi1 fa8b44521233220ecb4dc472d3c47a38d724662d5a275d8df14878ebce298006

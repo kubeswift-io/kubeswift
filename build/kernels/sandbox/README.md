@@ -67,6 +67,8 @@ The artifact carries the blobs a SwiftKernel expects, pulled per node via the
 ORAS Job to `/var/lib/kubeswift/kernels/<ns>-<name>/`: `bzImage`,
 `rootfs.cpio.gz`, and `bridge-features`, the list of what this bridge
 understands beyond argv/env/cwd (`make build` writes it from `BRIDGE_FEATURES`).
+The gpu-sandbox artifact also carries `module-abi`, the kernel release its
+loadable modules must be built for (see [Module ABI](#module-abi-gpu-sandbox)).
 
 ```
 cd output/images                # or output-gpu-sandbox/images for the gpu profile
@@ -74,12 +76,37 @@ oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.19 \
   bzImage:application/vnd.kubeswift.kernel.binary \
   rootfs.cpio.gz:application/vnd.kubeswift.initramfs.binary \
   bridge-features:text/plain
-# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.8 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain
+# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.9 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain \
+#   module-abi:text/plain
 ```
 
 Then `kubectl apply -f config/samples/sandbox/swiftkernel-sandbox.yaml` (or
 `swiftkernel-gpu-sandbox.yaml`) on a cluster with a `kubeswift.io/kernel-node=true`
 node.
+
+## Module ABI (gpu-sandbox)
+
+The gpu-sandbox kernel loads out-of-tree modules (the NVIDIA driver from the
+guest image), and a module works only with the kernel it was built against. A
+config change can change core struct layouts without changing the Linux version:
+`CONFIG_SECURITY` in gpu-sandbox 6.6.8 did, and a module built for 6.6.7 loaded
+and then crashed the guest. Since 6.6.9 a stale module is refused instead:
+
+- `configs/gpu-sandbox.fragment` sets `CONFIG_LOCALVERSION="-ksabi<N>"`, so
+  `uname -r` and every module's vermagic name the module ABI epoch
+  (`6.6.158-ksabi1`); `insmod` refuses a module from another epoch.
+- `CONFIG_MODVERSIONS=y` checks a CRC per exported symbol, which catches a
+  layout change even if the epoch was not bumped.
+- `make build` writes the epoch's release to `images/module-abi`, published with
+  the artifact. The controller compares it with the GPU image's
+  `io.kubeswift.gpu-sandbox.module-abi` label before any launcher starts
+  (`make module-abi-label PROFILE=gpu-sandbox` prints the label).
+
+**Any change to `sandbox-linux.config`, `gpu-sandbox.fragment` or the pinned
+Linux version needs a new epoch**: bump `CONFIG_LOCALVERSION`, then append
+`./verify-module-abi.sh --print` to `configs/gpu-sandbox.abi`.
+`make verify-sandbox-config` (CI) fails if the config changed and the epoch did
+not.
 
 ## Boot contract
 

@@ -9,11 +9,12 @@ All notable changes to KubeSwift are documented here.
 ### Added
 
 - **Sandbox kernels with Landlock and VM Generation ID: `kernels/sandbox:6.6.19`, `kernels/gpu-sandbox:6.6.8`** (Linux 6.6.158, unchanged). The guest kernel now enables `CONFIG_SECURITY_LANDLOCK` (ABI v3), `CONFIG_SECURITYFS` and `CONFIG_VMGENID`. Landlock-based tools such as nono run inside a sandbox (read-only workspace, blocked write and `--block-net` verified); a guest restored from a Cloud Hypervisor snapshot reseeds its RNG, where two restores of one snapshot used to produce the same `/dev/urandom` bytes. Bridge and guest agent are unchanged (`bridge-features` is the same).
+- **GPU module ABI guard: `kernels/gpu-sandbox:6.6.9`.** A module built for another gpu-sandbox kernel is now refused instead of loading. The kernel release names a module ABI epoch (`uname -r` is `6.6.158-ksabi1`), `CONFIG_MODVERSIONS` checks symbol versions, and the artifact carries a `module-abi` file. A GPU image declares the ABI it was built for with the label `io.kubeswift.gpu-sandbox.module-abi`; the controller compares the two before any launcher starts and fails a GPU sandbox, or degrades a warm GPU pool before it allocates a GPU, with `KernelModuleABIMismatch`. An image without the label boots with a `ModuleABIUndeclared` Warning Event. `make verify-sandbox-config` fails when the kernel config changes without a new epoch.
 
 ### Upgrade
 
-- **GPU images must rebuild their NVIDIA modules for `gpu-sandbox:6.6.8`.** `CONFIG_SECURITY` changes the layout of core kernel structures; a module built for 6.6.7 or earlier loads (same vermagic) and then crashes the guest kernel. Rebuild against the 6.6.8 tree; see [GPU sandboxes](docs/sandbox/gpu-sandboxes.md). Stay on `gpu-sandbox:6.6.7` until your image is rebuilt.
-- Samples, examples and docs pin `kernels/sandbox:6.6.19` and `kernels/gpu-sandbox:6.6.8`. A SwiftKernel's tag change pulls nothing by itself, see [SwiftKernel](docs/swiftkernel.md).
+- **GPU images must rebuild their NVIDIA modules for `gpu-sandbox:6.6.9`** and should add the label `io.kubeswift.gpu-sandbox.module-abi=6.6.158-ksabi1`. 6.6.8 enabled `CONFIG_SECURITY`, which changes the layout of core kernel structures: a module built for 6.6.7 or earlier loaded on 6.6.8 (same vermagic) and then crashed the guest kernel. On 6.6.9 a stale module is refused at `insmod`, and a labelled image for another kernel fails before boot. Skip 6.6.8 for GPU sandboxes; stay on `gpu-sandbox:6.6.7` until your image is rebuilt for 6.6.9. See [GPU sandboxes](docs/sandbox/gpu-sandboxes.md).
+- Samples, examples and docs pin `kernels/sandbox:6.6.19` and `kernels/gpu-sandbox:6.6.9`. A SwiftKernel's tag change pulls nothing by itself, see [SwiftKernel](docs/swiftkernel.md).
 
 ## [v0.24.1] — 2026-11-13
 

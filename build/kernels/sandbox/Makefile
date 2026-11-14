@@ -29,6 +29,11 @@ BRIDGE_FEATURES   := files mounts warm-mounts outputs workload-stream
 BUILDROOT_DIR     := $(CURDIR)/buildroot
 OUTPUT_DIR        ?= $(CURDIR)/output$(if $(filter-out sandbox,$(PROFILE)),-$(PROFILE))
 EXTERNAL          := $(CURDIR)
+# The Linux version the profile's defconfig pins, and the kernel tree it builds
+# into. An output dir can still hold the tree of an earlier pin (linux-6.6.44),
+# so never glob build/linux-*.
+LINUX_VERSION     := $(shell sed -n 's/^BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="\(.*\)"$$/\1/p' $(CURDIR)/configs/$(PROFILE)_defconfig)
+LINUX_DIR         := $(OUTPUT_DIR)/build/linux-$(LINUX_VERSION)
 
 .PHONY: setup build verify clean distclean
 
@@ -90,16 +95,30 @@ build: setup agent
 	@# the kernel; swiftletd reads it before asking for files or mounts. Keep in
 	@# step with BRIDGE_FEATURES in rootfs-overlay/init.
 	@echo "$(BRIDGE_FEATURES)" > $(OUTPUT_DIR)/images/bridge-features
+	@# A module-capable kernel ships its module ABI (the kernel release a module
+	@# must be built for) as module-abi; the controller compares it with a GPU
+	@# image's io.kubeswift.gpu-sandbox.module-abi label before boot (WS1.5).
+	@# Empty for a kernel without module support (published only for gpu-sandbox).
+	@if grep -q '^CONFIG_MODULES=y' $(LINUX_DIR)/.config; then \
+		cat $(LINUX_DIR)/include/config/kernel.release > $(OUTPUT_DIR)/images/module-abi; \
+	else : > $(OUTPUT_DIR)/images/module-abi; fi
 	@echo ""
 	@echo "Build complete ($(PROFILE)):"
 	@echo "  bzImage:           $(OUTPUT_DIR)/images/bzImage"
 	@echo "  rootfs.cpio.gz:    $(OUTPUT_DIR)/images/rootfs.cpio.gz  (bridge-initramfs)"
 	@echo "  bridge-features:   $(OUTPUT_DIR)/images/bridge-features  ($(BRIDGE_FEATURES))"
+	@echo "  module-abi:        $(OUTPUT_DIR)/images/module-abi  ($$(cat $(OUTPUT_DIR)/images/module-abi))"
 	@echo "  CONFIG_MODULES:    $$(grep -E '^CONFIG_MODULES=|^# CONFIG_MODULES is not set' \
 		$(OUTPUT_DIR)/build/linux-*/.config 2>/dev/null | head -1)"
 
 verify:
 	./verify-boot.sh
+
+# The image label a GPU sandbox image sets for the modules it builds against this
+# kernel: make module-abi-label PROFILE=gpu-sandbox
+module-abi-label:
+	@test -s $(OUTPUT_DIR)/images/module-abi || { echo "no module-abi for PROFILE=$(PROFILE): build a module-capable profile first" >&2; exit 1; }
+	@echo "io.kubeswift.gpu-sandbox.module-abi=$$(cat $(OUTPUT_DIR)/images/module-abi)"
 
 clean:
 	$(MAKE) -C $(BUILDROOT_DIR) O=$(OUTPUT_DIR) clean

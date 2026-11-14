@@ -446,6 +446,7 @@ verify-dashboards:
 verify-sandbox-config:
 	@./build/kernels/sandbox/verify-config.sh
 	@./build/kernels/sandbox/verify-kernel-version.sh
+	@./build/kernels/sandbox/verify-module-abi.sh
 
 # Every Containerfile base image pinned as <image>:<tag>@sha256:<digest>, so a
 # build uses the base that was reviewed; Dependabot proposes new digests. Run

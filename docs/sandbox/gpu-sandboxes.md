@@ -77,13 +77,27 @@ A GPU sandbox image must ship the NVIDIA driver built for the `gpu-sandbox` kern
   is current) carry Linux 6.6.158; earlier artifacts carried 6.6.44. A driver
   built for 6.6.44 does not load on 6.6.5 or later: rebuild it against the
   6.6.158 tree before moving to it.
-- **Rebuild for `gpu-sandbox:6.6.8`.** 6.6.8 enables `CONFIG_SECURITY` (for
-  Landlock), which changes the layout of core kernel structures. A module built
-  for 6.6.7 or earlier still loads (same vermagic, no modversions) and then
-  crashes the guest kernel on first use: on a GTX 1080, `nvidia-smi` hit a NULL
-  pointer dereference. Rebuild `nvidia.ko` and `nvidia-uvm.ko` against the
-  6.6.8 tree before pointing a GPU sandbox at it. Driver 580.95.05 rebuilt this
-  way ran CUDA 12.8 (`sm_61`) on a GTX 1080.
+- **Module ABI (since `gpu-sandbox:6.6.9`).** The kernel release names a
+  module ABI epoch (`uname -r` = `6.6.158-ksabi1`), and the kernel checks
+  symbol versions, so a module built for another gpu-sandbox kernel is refused
+  at `insmod` instead of loading. Build the modules against the tree of the
+  exact artifact you run (`make build PROFILE=gpu-sandbox` in
+  `build/kernels/sandbox`, then `make modules SYSSRC=<that tree>` in the driver),
+  and label the image with what `make module-abi-label PROFILE=gpu-sandbox`
+  prints:
+  `LABEL io.kubeswift.gpu-sandbox.module-abi=6.6.158-ksabi1`.
+  The controller compares that label with the kernel artifact's `module-abi`
+  before any launcher starts: a different value fails the sandbox (or degrades
+  a warm GPU pool, which then holds no GPU) with `KernelModuleABIMismatch`,
+  naming both values. An image without the label still boots, with a
+  `ModuleABIUndeclared` Warning Event, and a stale module is then refused at
+  `insmod` in the guest.
+- **Upgrading from 6.6.8 or earlier.** 6.6.8 enabled `CONFIG_SECURITY` (for
+  Landlock), which changed core struct layouts without changing the module
+  vermagic: a module built for 6.6.7 loaded on 6.6.8 and crashed the guest on
+  the first `nvidia-smi` (NULL pointer dereference on a GTX 1080). 6.6.9 adds
+  the guard above; rebuild your modules for 6.6.9. Driver 580.95.05 rebuilt
+  this way ran CUDA 12.8 (`sm_61`) on a GTX 1080.
 - **Userspace** — `nvidia-smi` + `libnvidia-ml`, plus your framework (vLLM / TGI /
   PyTorch).
 - **Entrypoint** — `insmod` the modules, create the `/dev/nvidia*` nodes (read the

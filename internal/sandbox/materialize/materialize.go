@@ -59,6 +59,12 @@ type ImageConfig struct {
 	Env        []string `json:"env,omitempty"`
 	WorkingDir string   `json:"workingDir,omitempty"`
 	User       string   `json:"user,omitempty"`
+	// Labels are the image config labels, for the controller's in-process
+	// checks only (a GPU image declares its module ABI here, ModuleABILabel).
+	// Never serialized: Result.Config goes to the materialize container's
+	// termination message, which Kubernetes caps at 4 KiB, and images carry
+	// arbitrarily many labels.
+	Labels map[string]string `json:"-"`
 }
 
 // Result is what the materialize step reports. The binary writes it to
@@ -298,6 +304,7 @@ func configFromImage(img v1.Image) (ImageConfig, error) {
 		Env:        c.Env,
 		WorkingDir: c.WorkingDir,
 		User:       c.User,
+		Labels:     c.Labels,
 	}, nil
 }
 
