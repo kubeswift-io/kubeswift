@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 var httpApp = sandboxv1alpha1.SandboxPort{Name: "http-app", Port: 3000}
@@ -152,7 +153,10 @@ func TestSlotShape_PortsAndIngress(t *testing.T) {
 		t.Errorf("the same ports and ingress must match, got %q", got)
 	}
 
+	// Set to Enabled: what every slot booted before nestedVirtualization
+	// existed ran with. (The default, Disabled, changes the profile on purpose.)
 	plain := shapedPool()
+	plain.Spec.NestedVirtualization = swiftv1alpha1.NestedVirtualizationEnabled
 	const before = `{"image":"busybox:1","network":"restricted","verifyKey":"cosign-pub","rootfsMode":"block","kernel":"sandbox","cpu":1,"memory":"512Mi","nodeSelector":{"tier":"trusted","zone":"a"}}`
 	if got := poolSlotProfile(plain); got != before {
 		t.Errorf("a pool without ports, ingress or egress changed profile:\n got %s\nwant %s", got, before)

@@ -32,14 +32,20 @@ const SlotProfileAnnotation = "sandbox.kubeswift.io/slot-profile"
 // and 1Gi ran in a 1 vCPU, 512Mi slot, and one with a nodeSelector ran on
 // whatever node the slot had, with nothing saying so.
 type slotShape struct {
-	Image        string            `json:"image"`
-	Network      string            `json:"network"`
-	Egress       []string          `json:"egress,omitempty"`
-	Ports        []string          `json:"ports,omitempty"`
-	Ingress      string            `json:"ingress,omitempty"`
-	VerifyKey    string            `json:"verifyKey,omitempty"`
-	RootfsMode   string            `json:"rootfsMode"`
-	Kernel       string            `json:"kernel"`
+	Image      string   `json:"image"`
+	Network    string   `json:"network"`
+	Egress     []string `json:"egress,omitempty"`
+	Ports      []string `json:"ports,omitempty"`
+	Ingress    string   `json:"ingress,omitempty"`
+	VerifyKey  string   `json:"verifyKey,omitempty"`
+	RootfsMode string   `json:"rootfsMode"`
+	Kernel     string   `json:"kernel"`
+	// "Disabled", or empty for Enabled. Slots booted before the field
+	// existed ran with nested virtualization on, which is what an empty value
+	// says: a pool set to Enabled keeps them, and one on the default
+	// (Disabled) recycles them instead of handing a nested-capable slot to a
+	// sandbox that runs without it.
+	Nested       string            `json:"nested,omitempty"`
 	CPU          int32             `json:"cpu"`
 	Memory       string            `json:"memory"`
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
@@ -63,6 +69,7 @@ func poolShape(pool *sandboxv1alpha1.SwiftSandboxPool) slotShape {
 			KernelProfileRef: pool.Spec.KernelProfileRef,
 			GPUProfileRef:    pool.Spec.GPUProfileRef,
 		}}),
+		Nested:       nestedShape(pool.Spec.NestedVirtualization),
 		CPU:          cpuCount(pool.Spec.CPU),
 		Memory:       pool.Spec.Memory.String(),
 		NodeSelector: pool.Spec.NodeSelector,
@@ -113,6 +120,7 @@ func slotMismatches(pool *sandboxv1alpha1.SwiftSandboxPool, sb *sandboxv1alpha1.
 	differ("verifyKeySecretRef", p.VerifyKey, secretName(sb.Spec.VerifyKeySecretRef))
 	differ("rootfsMode", p.RootfsMode, rootfsMode(sb.Spec.RootfsMode))
 	differ("kernel", p.Kernel, checkoutKernel(pool, sb))
+	differ("nestedVirtualization", nestedKey(pool.Spec.NestedVirtualization), nestedKey(sb.Spec.NestedVirtualization))
 	differ("cpu", strconv.Itoa(int(p.CPU)), strconv.Itoa(int(cpuCount(sb.Spec.CPU))))
 	if pool.Spec.Memory.Cmp(sb.Spec.Memory) != 0 {
 		out = append(out, fmt.Sprintf("memory (pool %s, sandbox %s)", p.Memory, sb.Spec.Memory.String()))
