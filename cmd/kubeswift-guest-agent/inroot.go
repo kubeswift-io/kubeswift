@@ -98,12 +98,10 @@ func writeFileInRoot(root, p string, data io.Reader, mode os.FileMode) error {
 		return err
 	}
 	if _, err := io.Copy(f, data); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	if err := f.Chmod(mode); err != nil { // the open's perm is masked by the umask
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	return f.Close()
 }
