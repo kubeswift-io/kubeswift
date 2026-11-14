@@ -74,6 +74,7 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	// The pool resolved the image env once (status.imageEnv); merge spec.env over it so
 	// the injected workload sees the image env too — parity with a cold sandbox, no pull.
 	var imageEnv []string
+	var imageCwd string
 	var pool sandboxv1alpha1.SwiftSandboxPool
 	poolFound := true
 	if err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: sb.Spec.PoolRef.Name}, &pool); err != nil {
@@ -83,8 +84,9 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		poolFound = false
 	} else {
 		imageEnv = pool.Status.ImageEnv
+		imageCwd = pool.Status.ImageWorkingDir
 	}
-	argv, env, cwd := poolExecArgs(sb, imageEnv)
+	argv, env, cwd := poolExecArgs(sb, imageEnv, imageCwd)
 	if len(argv) == 0 {
 		return r.coldFallback(ctx, sb, kernelName, "no command to inject (needs image entrypoint)")
 	}
@@ -306,15 +308,20 @@ func (r *SwiftSandboxReconciler) coldFallback(ctx context.Context, sb *sandboxv1
 // registry pull. argv = command + args (nil when no command — the caller cold-falls-back
 // to resolve the image entrypoint). env is the pool's resolved image env with spec.env
 // overlaid by key (parity with the cold path's mergeEnv), so the injected workload sees
-// the image env too; the pool supplied imageEnv from its one-time resolve.
-func poolExecArgs(sb *sandboxv1alpha1.SwiftSandbox, imageEnv []string) (argv, env []string, cwd string) {
+// the image env too; the pool supplied imageEnv from its one-time resolve. cwd is
+// spec.workingDir, else the pool image's WORKDIR (imageCwd), as on the cold path.
+func poolExecArgs(sb *sandboxv1alpha1.SwiftSandbox, imageEnv []string, imageCwd string) (argv, env []string, cwd string) {
 	if len(sb.Spec.Command) == 0 {
 		return nil, nil, ""
 	}
 	argv = append(argv, sb.Spec.Command...)
 	argv = append(argv, sb.Spec.Args...)
 	env = mergeEnv(imageEnv, sb.Spec.Env)
-	return argv, env, sb.Spec.WorkingDir
+	cwd = sb.Spec.WorkingDir
+	if cwd == "" {
+		cwd = imageCwd
+	}
+	return argv, env, cwd
 }
 
 // findClaimedSlot returns this sandbox's already-claimed slot pod, if any (labeled

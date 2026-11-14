@@ -171,6 +171,8 @@ spec:
   injected over the vsock exec channel. The pool image's own config env is
   merged in too (resolved once at materialize, no per-checkout pull), so the
   workload sees **image env + your `spec.env`**, same as a cold sandbox.
+  Without `spec.workingDir` the workload starts in the pool image's `WORKDIR`
+  (stamped on the pool as `status.imageWorkingDir`), also like a cold sandbox.
 - The workload runs as the pool image's `USER` (stamped on the pool as
   `status.imageUser`) under the checkout's own `spec.securityContext`, and
   later execs run as that user too. See

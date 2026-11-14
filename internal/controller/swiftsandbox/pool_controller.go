@@ -672,6 +672,7 @@ func (r *SwiftSandboxPoolReconciler) updateStatus(ctx context.Context, pool *san
 		// own config env — stamp it so a checkout can merge without re-pulling.
 		pool.Status.ImageEnv = ri.Exec.Env
 		pool.Status.ImageUser = ri.ImageUser
+		pool.Status.ImageWorkingDir = ri.ImageCwd
 		apimeta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{
 			Type: sandboxv1alpha1.SwiftSandboxPoolConditionResolved, Status: metav1.ConditionTrue,
 			Reason: "Resolved", Message: "image digest " + ri.Digest, ObservedGeneration: pool.Generation,

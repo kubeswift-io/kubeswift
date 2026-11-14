@@ -63,6 +63,7 @@ type resolvedImage struct {
 	Exec       execSpec
 	Labels     map[string]string // image config labels (ModuleABILabel)
 	ImageUser  string            // image config USER (a pool stamps it for its checkouts)
+	ImageCwd   string            // image config WORKDIR (likewise)
 }
 
 // execSpec is the full workload exec (argv + env + cwd), delivered to the guest
@@ -129,6 +130,7 @@ func resolveImage(sb *sandboxv1alpha1.SwiftSandbox, auth authn.Authenticator, lo
 		Exec:       resolveExec(sb, res.config),
 		Labels:     res.config.Labels,
 		ImageUser:  res.config.User,
+		ImageCwd:   res.config.WorkingDir,
 	}, true, nil
 }
 

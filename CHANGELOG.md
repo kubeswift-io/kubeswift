@@ -16,9 +16,13 @@ All notable changes to KubeSwift are documented here.
 ### Upgrade
 
 - **A sandbox whose image names a `USER` runs as that user once its SwiftKernel is on `sandbox:6.6.20` / `gpu-sandbox:6.6.10`.** It ran as root before. A workload that needs root (for example to format and mount a scratch disk, or to write outside its home) should set `securityContext.runAsUser: 0`. On an older kernel nothing changes: the workload runs as root and the sandbox gets an `ImageUserIgnored` Warning Event; a sandbox that sets `securityContext` there fails with `KernelUnsupported`.
-- **CRD change:** `swiftsandboxes` (`spec.securityContext`, `status.user`) and `swiftsandboxpools` (`status.imageUser`). Apply `crds/` before upgrading the chart.
+- **CRD change:** `swiftsandboxes` (`spec.securityContext`, `status.user`) and `swiftsandboxpools` (`status.imageUser`, `status.imageWorkingDir`). Apply `crds/` before upgrading the chart.
 - **GPU images must rebuild their NVIDIA modules for `gpu-sandbox:6.6.9`** and should add the label `io.kubeswift.gpu-sandbox.module-abi=6.6.158-ksabi1`. 6.6.8 enabled `CONFIG_SECURITY`, which changes the layout of core kernel structures: a module built for 6.6.7 or earlier loaded on 6.6.8 (same vermagic) and then crashed the guest kernel. On 6.6.9 a stale module is refused at `insmod`, and a labelled image for another kernel fails before boot. Skip 6.6.8 for GPU sandboxes; stay on `gpu-sandbox:6.6.7` until your image is rebuilt for 6.6.9. See [GPU sandboxes](docs/sandbox/gpu-sandboxes.md).
 - Samples, examples and docs pin `kernels/sandbox:6.6.20` and `kernels/gpu-sandbox:6.6.10`. A SwiftKernel's tag change pulls nothing by itself, see [SwiftKernel](docs/swiftkernel.md).
+
+### Fixed
+
+- **A warm checkout starts in the pool image's `WORKDIR`** when it sets no `spec.workingDir`, as a cold sandbox does. It started in `/`. The pool records the image's `WORKDIR` as `status.imageWorkingDir`; a pool created before the upgrade picks it up on its next reconcile.
 
 ## [v0.24.1] — 2026-11-13
 
