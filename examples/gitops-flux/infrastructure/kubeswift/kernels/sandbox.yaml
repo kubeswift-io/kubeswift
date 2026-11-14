@@ -29,5 +29,5 @@ spec:
     # reason as the golden disk. Kept as a tag here because this artifact is
     # published by the KubeSwift project rather than by you.
     # Artifact 6.6.18 carries Linux 6.6.158.
-    image: ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.20
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.21
   profile: sandbox

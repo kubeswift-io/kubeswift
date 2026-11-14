@@ -99,7 +99,7 @@ func imageUserIgnored(w *runtimeintent.WorkloadUser, p *corev1.Pod) string {
 	if _, ok := p.Annotations[bridgeFeaturesAnnotation]; !ok || bridgeHas(p, runAsUserFeature) {
 		return ""
 	}
-	return fmt.Sprintf("the image runs as user %q but the sandbox kernel's bridge cannot run a workload as another user, so it runs as root; point the SwiftKernel at kernels/sandbox 6.6.20 or kernels/gpu-sandbox 6.6.10 or newer", w.User)
+	return fmt.Sprintf("the image runs as user %q but the sandbox kernel's bridge cannot run a workload as another user, so it runs as root; point the SwiftKernel at kernels/sandbox 6.6.21 or kernels/gpu-sandbox 6.6.11 or newer", w.User)
 }
 
 // statusWorkloadUser is the workload user a running sandbox recorded, with
