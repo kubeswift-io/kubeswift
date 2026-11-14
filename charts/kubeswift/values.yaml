@@ -103,6 +103,13 @@ sandboxMaterialize:
   # privileged launcher. Unprivileged, no token, the console files only.
   # Applies to pods created after the change.
   console: true
+  # IPv4 addresses and CIDRs a `restricted` sandbox may never reach, on top of
+  # what restricted always drops (169.254/16, the private ranges, 100.64/10)
+  # and the nodes' InternalIP/ExternalIP and the API server endpoints, which
+  # the controller adds itself. Dropped before spec.network.egress.allow, so a
+  # tenant cannot open them. Reaches running sandboxes within about two
+  # minutes. Example: ["203.0.113.0/24", "198.51.100.7"].
+  restrictedEgressDeny: []
 
 # snapshot-oras: the uploader/downloader image for the oci (OCI registry / ORAS)
 # snapshot backend. The controller passes this to the per-snapshot push Job (and

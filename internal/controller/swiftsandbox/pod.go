@@ -660,6 +660,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 			pod.Annotations[annReadinessReport] = readinessReportPodCondition
 		}
 	}
+	addEgressDeny(pod, sb)
 	applyPodMetadata(pod, sb.Spec.PodMetadata)
 	addOutputVolumes(pod, sb)
 	if usesSecrets(sb) {

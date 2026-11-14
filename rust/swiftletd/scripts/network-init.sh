@@ -38,7 +38,11 @@ guest_run_dir() {
 #   - 169.254.0.0/16 (cloud metadata -> node creds) and RFC1918 (pod + service
 #     CIDRs -> lateral movement) DROP;
 #   - everything else (public internet) falls through -> ACCEPT -> MASQUERADE.
-# Node public IPs are NOT blocked (same exposure as any pod); documented.
+#   - the platform deny list (node addresses, API server endpoints, admin
+#     CIDRs) DROP, in its own chain, before the allow rules;
+# Downward-API file of the pod's sandbox.kubeswift.io/egress-deny annotation.
+EGRESS_DENY_FILE="${EGRESS_DENY_FILE:-/etc/kubeswift/egress-deny/deny}"
+
 apply_restricted_egress() {
     src_net="$1"
     guest_if="${2:-br0}"
@@ -66,6 +70,26 @@ apply_restricted_egress() {
         iptables -A "$chain" -d "$d" -p tcp --dport 53 -j RETURN
     done
     iptables -A "$chain" -d 169.254.0.0/16 -j DROP
+    # The platform deny list: every node's InternalIP/ExternalIP, the API
+    # server endpoints and the admin-set CIDRs (chart
+    # sandboxMaterialize.restrictedEgressDeny), resolved by the controller and
+    # read from a downward-API file of a pod annotation. Its own chain, so
+    # swiftletd can replace it when the list changes (a node joins). BEFORE the
+    # allow rules: a tenant cannot open these. AFTER the DNS RETURN: a resolver
+    # on a node address still answers. A malformed entry fails the pod.
+    deny_chain="KUBESWIFT_SBX_DENY"
+    iptables -N "$deny_chain" 2>/dev/null || iptables -F "$deny_chain"
+    denied=0
+    if [ -r "$EGRESS_DENY_FILE" ]; then
+        for cidr in $(cat "$EGRESS_DENY_FILE"); do
+            case "$cidr" in
+                ''|*[!0-9./]*) echo "ERROR: malformed egress deny entry '$cidr'" >&2; exit 1 ;;
+            esac
+            iptables -A "$deny_chain" -d "$cidr" -j DROP || exit 1
+            denied=$((denied + 1))
+        done
+    fi
+    iptables -A "$chain" -j "$deny_chain"
     # spec.network.egress.allow, resolved by the controller into
     # "<proto>,<cidr>,<port>" rules (proto tcp, udp or any). AFTER the metadata
     # DROP, so no rule can open 169.254/16, and BEFORE the cluster-range DROPs
@@ -109,7 +133,7 @@ apply_restricted_egress() {
     fi
 
     echo "Restricted egress: $guest_if ($src_net) -> DNS + internet + $allowed allowed rule(s);" \
-         "DROP spoofed sources + 169.254/16 + RFC1918 + 100.64/10 (chain $chain)"
+         "DROP spoofed sources + 169.254/16 + $denied platform address(es) + RFC1918 + 100.64/10 (chain $chain)"
 }
 
 setup_primary_nic() {

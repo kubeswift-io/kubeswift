@@ -3,6 +3,7 @@ mod agent_ready;
 mod bridge;
 mod console;
 mod cpuset;
+mod egress_deny;
 mod hotplug;
 mod intent;
 mod kube_client;
@@ -664,6 +665,11 @@ fn main() {
                     shutdown::Mode::Guest
                 },
             );
+            // Restricted sandboxes: keep the platform egress deny list current
+            // (no-op when the pod carries none).
+            if intent.is_sandbox() {
+                egress_deny::spawn_if_present();
+            }
             let result = launch::run(&intent, &runtime_dir, on_socket_ready);
             let abnormal_exit_detail: Option<String> = match &result {
                 Ok((exit_status, _, _)) if !exit_status.success() => {

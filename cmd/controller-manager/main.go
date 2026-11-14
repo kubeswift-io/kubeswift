@@ -137,6 +137,15 @@ func main() {
 	// Sandbox registries behind a private CA (#839): the controller's own
 	// requests (digest resolution, authorization) trust the bundle; the
 	// sandbox reconcilers pass it to every sandbox-materialize container.
+	// Restricted sandboxes: the admin-set part of the platform egress deny
+	// list (chart sandboxMaterialize.restrictedEgressDeny). A bad entry stops
+	// the controller rather than run sandboxes without it.
+	if deny, err := swiftsandbox.ParseEgressDeny(os.Getenv("KUBESWIFT_SANDBOX_EGRESS_DENY")); err != nil {
+		klog.ErrorS(err, "invalid KUBESWIFT_SANDBOX_EGRESS_DENY")
+		os.Exit(1)
+	} else {
+		swiftsandbox.ExtraEgressDeny = deny
+	}
 	if err := materialize.SetRegistryCA(os.Getenv(swiftsandbox.SandboxRegistryCAEnv)); err != nil {
 		klog.ErrorS(err, "invalid sandbox registry CA bundle", "env", swiftsandbox.SandboxRegistryCAEnv)
 		os.Exit(1)
@@ -405,6 +414,16 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftStorageLocation controller")
+		os.Exit(1)
+	}
+
+	// Node, API server and admin-set addresses dropped by restricted sandboxes,
+	// recomputed and pushed to running launcher pods.
+	if err = mgr.Add(&swiftsandbox.EgressDenyRefresher{
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+	}); err != nil {
+		klog.ErrorS(err, "unable to add the sandbox egress deny refresher")
 		os.Exit(1)
 	}
 

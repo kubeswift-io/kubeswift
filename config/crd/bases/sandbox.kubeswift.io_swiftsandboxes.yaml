@@ -680,7 +680,8 @@ spec:
                         description: |-
                           Allow lists destinations the guest may reach in addition to DNS and the
                           public internet. The link-local range 169.254.0.0/16 (the cloud metadata
-                          endpoint) stays blocked whatever is allowed, and IPv6 stays blocked.
+                          endpoint), node addresses, the API server endpoints and the administrator's
+                          deny list stay blocked whatever is allowed, and IPv6 stays blocked.
                         items:
                           description: |-
                             SandboxEgressRule allows one destination: a Service or an IPv4 CIDR,

@@ -69,7 +69,8 @@
           }
         },
         "registryCABundle": { "type": "string" },
-        "console": { "type": "boolean" }
+        "console": { "type": "boolean" },
+        "restrictedEgressDeny": { "type": "array", "items": { "type": "string" } }
       }
     },
     "snapshotORAS": {
