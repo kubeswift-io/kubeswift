@@ -273,8 +273,11 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	// The slot's network-init enforces the allowlist it was booted with.
 	setEgressAllowed(sb, parseEgressAllowed(slot.Annotations[EgressAllowedAnnotation]))
 	sb.Status.User = userString(user)
-	if msg := imageUserIgnored(user, slot); msg != "" && r.Recorder != nil {
-		r.Recorder.Event(sb, corev1.EventTypeWarning, reasonImageUserIgnored, msg)
+	if msg := imageUserIgnored(user, slot); msg != "" {
+		sb.Status.User = "" // the slot's bridge runs it as root
+		if r.Recorder != nil {
+			r.Recorder.Event(sb, corev1.EventTypeWarning, reasonImageUserIgnored, msg)
+		}
 	}
 	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
 		Type: sandboxv1alpha1.SwiftSandboxConditionGuestRunning, Status: metav1.ConditionTrue,

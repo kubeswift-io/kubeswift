@@ -219,3 +219,39 @@ func TestCreateLaunch_WorkloadUser(t *testing.T) {
 		})
 	}
 }
+
+// The bridge is advertised after the launcher container is already running, so
+// a sandbox can be Running before its launcher shows an old bridge. The
+// dropped image USER is still reported, once, and status.user says root.
+func TestImageUserIgnored_AfterRunning(t *testing.T) {
+	sb := plainSandbox("busybox:1")
+	sb.UID = "sb-uid"
+	sb.Status.Phase = sandboxv1alpha1.SwiftSandboxRunning
+	sb.Status.PodRef = "sb"
+	sb.Status.User = "app"
+	pod := ownLauncher(sb, buildPod(sb, "sandbox"))
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	pod.Annotations[bridgeFeaturesAnnotation] = "files mounts"
+	pod.Status = corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Name: launcherName, Ready: true}}}
+	r, c := sandboxReconciler(sb, pod, readyKernel("default", "sandbox"))
+	rec := record.NewFakeRecorder(20)
+	r.Recorder = rec
+	for i := 0; i < 3; i++ {
+		reconcileSB(t, r, "sb")
+	}
+	got := getSandbox(t, c, "sb")
+	if got.Status.Phase != sandboxv1alpha1.SwiftSandboxRunning || got.Status.User != "" {
+		t.Fatalf("phase=%s user=%q, want Running with no user (root)", got.Status.Phase, got.Status.User)
+	}
+	n := 0
+	for len(rec.Events) > 0 {
+		if e := <-rec.Events; strings.Contains(e, reasonImageUserIgnored) {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d %s events, want 1", n, reasonImageUserIgnored)
+	}
+}

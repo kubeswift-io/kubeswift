@@ -912,7 +912,8 @@ type SwiftSandboxStatus struct {
 	// User is who the workload runs as, as the controller resolved it from
 	// spec.securityContext and the image USER ("user", "uid", "user:group",
 	// "uid:gid"); names are looked up in the image's /etc/passwd and
-	// /etc/group inside the guest. Empty: root.
+	// /etc/group inside the guest. Empty: root, which includes an image USER
+	// that the kernel's bridge could not honour (ImageUserIgnored Event).
 	// +optional
 	User string `json:"user,omitempty"`
 	// Artifacts reports each spec.artifacts entry as resolved: the digest

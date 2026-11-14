@@ -570,9 +570,13 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 		if err := r.syncWorkloadReady(ctx, sb, pod); err != nil {
 			return ctrl.Result{}, err
 		}
-		// Once, as the sandbox starts running: its image USER was dropped.
-		if sb.Status.Phase != sandboxv1alpha1.SwiftSandboxRunning && r.Recorder != nil {
-			if msg := imageUserIgnored(statusWorkloadUser(sb), pod); msg != "" {
+		// The launcher's bridge dropped the image USER: the workload runs as
+		// root, so status.user says so, and clearing it makes this fire once.
+		// Not tied to the Running transition: swiftletd advertises the bridge
+		// after its container is already running.
+		if msg := imageUserIgnored(statusWorkloadUser(sb), pod); msg != "" {
+			sb.Status.User = ""
+			if r.Recorder != nil {
 				r.Recorder.Event(sb, corev1.EventTypeWarning, reasonImageUserIgnored, msg)
 			}
 		}
