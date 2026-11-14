@@ -346,8 +346,9 @@ type SandboxNetworkMode string
 const (
 	// SandboxNetworkRestricted (the default) attaches the pod network with a
 	// deny-ingress posture AND hardened egress: the guest reaches DNS + the public
-	// internet but CANNOT reach cluster-internal pods/services or the cloud metadata
-	// endpoint (169.254.169.254). The right posture for untrusted code.
+	// internet but CANNOT reach cluster-internal pods/services, the cloud metadata
+	// endpoint (169.254.169.254), node addresses or the API server. The right
+	// posture for untrusted code.
 	SandboxNetworkRestricted SandboxNetworkMode = "restricted"
 	// SandboxNetworkOpen attaches the pod network with deny-ingress but unrestricted
 	// egress (the guest can reach the whole cluster + internet). Opt-in for trusted
@@ -674,7 +675,8 @@ type SandboxPodMetadata struct {
 type SandboxEgress struct {
 	// Allow lists destinations the guest may reach in addition to DNS and the
 	// public internet. The link-local range 169.254.0.0/16 (the cloud metadata
-	// endpoint) stays blocked whatever is allowed, and IPv6 stays blocked.
+	// endpoint), node addresses, the API server endpoints and the administrator's
+	// deny list stay blocked whatever is allowed, and IPv6 stays blocked.
 	// +kubebuilder:validation:MaxItems=32
 	// +listType=atomic
 	// +optional

@@ -133,7 +133,7 @@ node only. The controller checks again every 10 seconds.
 
 | Mode | Ingress | Egress | Use for |
 |---|---|---|---|
-| `restricted` (default) | Denied — nothing reaches the sandbox | DNS and the public internet are allowed; `169.254.0.0/16` (cloud metadata) and RFC1918 cluster/pod/service CIDRs are blocked | Untrusted code |
+| `restricted` (default) | Denied — nothing reaches the sandbox | DNS and the public internet are allowed; `169.254.0.0/16` (cloud metadata), RFC1918 cluster/pod/service CIDRs, every node address and the API server are blocked | Untrusted code |
 | `open` | Denied | Unrestricted — the whole cluster and internet | Trusted workloads that must reach in-cluster services |
 | `none` | No network at all | No network at all | Pure compute / detonation |
 
@@ -143,6 +143,25 @@ iptables** on the VM's forwarded traffic, not a NetworkPolicy — a
 NetworkPolicy that blocked cluster egress would also cut swiftletd's own
 status reporting, since the VM's traffic and swiftletd's apiserver calls
 share the pod IP after MASQUERADE.
+
+### Node and API server addresses
+
+`restricted` also blocks every node's `InternalIP` and `ExternalIP` and the API
+server's endpoint addresses (the `default/kubernetes` EndpointSlice), so a guest
+cannot reach a kubelet or the API server on a cluster whose nodes have public
+addresses. An administrator adds more with the chart value
+`sandboxMaterialize.restrictedEgressDeny` (IPv4 addresses and CIDRs).
+
+- The controller recomputes the list every 30 seconds and updates running
+  sandboxes; a node that joins is blocked in them within about two minutes
+  (kubelet refreshes the file the launcher reads on its own sync period).
+  A connection opened before an address was added keeps working until it
+  closes.
+- These come before `network.egress.allow`: a tenant cannot allow a node or
+  the API server.
+- DNS to the cluster resolver is still allowed, even on a node address.
+- Sandboxes created before the upgrade, and warm slots booted before it, keep
+  their old rules until they are replaced.
 
 A networked sandbox resolves cluster service names and external names alike
 — the controller injects the namespace's search domains and `ndots:5`.
@@ -178,7 +197,8 @@ spec:
   ClusterIP, a running sandbox keeps the old one; recreate the sandbox.
 - A `cidr` with no ports allows any port and protocol in the range.
 - `169.254.0.0/16` stays blocked whatever is allowed: its rule comes first. A
-  CIDR inside it is refused outright. IPv6 stays blocked.
+  CIDR inside it is refused outright. IPv6 stays blocked. So do node and API
+  server addresses and the administrator's list (see above).
 - `egress` is valid with `restricted` only.
 - On a cluster whose CNI replaces kube-proxy, traffic from the guest to a
   ClusterIP may not be translated; allow the backing pods' range with a `cidr`
