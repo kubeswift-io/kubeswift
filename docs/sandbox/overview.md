@@ -62,8 +62,8 @@ Ready-to-edit manifests and notes:
 | `image` | string | — | OCI image to run as the root filesystem. Required. A digest reference (`repo@sha256:...`) is preferred for reproducibility; a tag is accepted. |
 | `imagePullSecret` | string | — | docker-registry Secret (same namespace) for pulling `image` from a private registry. |
 | `verifyKeySecretRef.name` | string | — | Secret (same namespace) holding a cosign public key at key `cosign.pub`. When set, the image is cosign-verified before it materializes; an unsigned or tampered image fails and never boots. See [Signed images](#signed-images-verify-before-boot). |
-| `cpu` | int32 | `1` | vCPU count. |
-| `memory` | Quantity | `512Mi` | Guest RAM. |
+| `cpu` | int32 | `1` | vCPU count. The launcher pod requests one CPU per vCPU (chart `sandboxMaterialize.launcherCPUPerVCPU`). |
+| `memory` | Quantity | `512Mi` | Guest RAM. The launcher pod requests this plus 64Mi, so the scheduler places the sandbox only on a node with room for it. |
 | `command` | []string | — | Overrides the image's ENTRYPOINT. Empty uses the image's own Entrypoint+Cmd. |
 | `args` | []string | — | Appended to `command` (or the image's CMD when `command` is empty). |
 | `env` | []EnvVar | — | Merged over the image's config env. |
@@ -710,8 +710,14 @@ the NetworkPolicy stays until the pod is gone.
   yet. The new sandbox creates its own launcher once it has.
   `LauncherPodConflict` means a running pod by that name is not this
   sandbox's: delete it, or use another name.
-- **Stuck `Materializing`** — check `kubectl describe pod <name>`. Unscheduled
-  usually means no node carries `kubeswift.io/kernel-node=true`. A failing
+- **`Pending` with "waiting for a node: ..."**: the scheduler cannot place
+  the launcher pod; the rest of the message is its reason, and the sandbox
+  has an `Unschedulable` Warning Event. `Insufficient memory` or
+  `Insufficient cpu` means no node has room for the guest (the launcher
+  requests `memory` plus 64Mi and a CPU per vCPU); a node selector or
+  affinity mismatch usually means no node carries
+  `kubeswift.io/kernel-node=true`. The sandbox starts once a node frees up.
+- **Stuck `Materializing`** — check `kubectl describe pod <name>`. A failing
   `sandbox-materialize` init container usually means the image pull failed —
   check `spec.image` and `spec.imagePullSecret` and inspect the init
   container's logs.

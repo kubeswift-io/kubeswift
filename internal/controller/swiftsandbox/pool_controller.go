@@ -236,7 +236,8 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if err := r.List(ctx, &pods, client.InNamespace(pool.Namespace), client.MatchingLabels{PoolLabelKey: pool.Name}); err != nil {
 		return ctrl.Result{}, err
 	}
-	var ready, warmLive, claimed, mountCapable int
+	var ready, warmLive, claimed, mountCapable, unsched int
+	var unschedMsg string
 	var warmPods []*corev1.Pod
 	profile := poolSlotProfile(&pool)
 	notReadyTimeout := r.slotReadyTimeout(req.NamespacedName)
@@ -316,6 +317,9 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 				if slotSupportsWarmMounts(p) {
 					mountCapable++
 				}
+			} else if msg, ok := unschedulable(p); ok {
+				unsched++
+				unschedMsg = msg
 			}
 		} else {
 			claimed++ // claimed slots (Phase 3) are tracked but not replenished here
@@ -476,7 +480,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// minWarm, not a pool-side idle timer; node-spread is applied per slot in
 	// createWarmSlot via warmSlotTopologySpread.)
 
-	return r.updateStatus(ctx, &pool, ready, claimed, ri)
+	return r.updateStatus(ctx, &pool, ready, claimed, ri, unsched, unschedMsg)
 }
 
 // slotsToCreate is the pure warm-slot arithmetic: how many new slots to bring up this
@@ -659,7 +663,9 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 	return nil
 }
 
-func (r *SwiftSandboxPoolReconciler) updateStatus(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, ready, claimed int, ri *resolvedImage) (ctrl.Result, error) {
+// unsched counts the warm slots no node can take; unschedMsg is the
+// scheduler's message for one of them.
+func (r *SwiftSandboxPoolReconciler) updateStatus(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, ready, claimed int, ri *resolvedImage, unsched int, unschedMsg string) (ctrl.Result, error) {
 	pool.Status.WarmReplicas = int32(ready)
 	pool.Status.ClaimedReplicas = int32(claimed)
 	pool.Status.ObservedGeneration = pool.Generation
@@ -683,15 +689,23 @@ func (r *SwiftSandboxPoolReconciler) updateStatus(ctx context.Context, pool *san
 		msg += fmt.Sprintf(", %d warming", w)
 	}
 	phase := sandboxv1alpha1.SwiftSandboxPoolWarming
-	warm := metav1.ConditionFalse
+	warm, reason := metav1.ConditionFalse, "Warm"
 	if int32(ready) >= pool.Spec.MinWarm {
 		phase, warm = sandboxv1alpha1.SwiftSandboxPoolReady, metav1.ConditionTrue
+	} else if unsched > 0 {
+		// The buffer cannot fill until a node has room for a slot (its
+		// launcher requests the slot's memory and CPU).
+		msg += fmt.Sprintf("; %d waiting for a node: %s", unsched, unschedMsg)
+		if pool.Status.Phase != sandboxv1alpha1.SwiftSandboxPoolDegraded && r.Recorder != nil {
+			r.Recorder.Event(pool, corev1.EventTypeWarning, reasonUnschedulable, msg)
+		}
+		phase, reason = sandboxv1alpha1.SwiftSandboxPoolDegraded, reasonUnschedulable
 	}
 	pool.Status.Phase = phase
 	pool.Status.Message = msg
 	apimeta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{
 		Type: sandboxv1alpha1.SwiftSandboxPoolConditionWarm, Status: warm,
-		Reason: "Warm", Message: msg, ObservedGeneration: pool.Generation,
+		Reason: reason, Message: msg, ObservedGeneration: pool.Generation,
 	})
 	if err := r.Status().Update(ctx, pool); err != nil {
 		return ctrl.Result{}, err

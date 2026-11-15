@@ -594,8 +594,39 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 		return ctrl.Result{RequeueAfter: pollInterval}, nil
 	}
 
+	// No node has room for the launcher (its requests are the guest's size)
+	// or matches its selector: say so instead of Materializing.
+	if msg, ok := unschedulable(pod); ok {
+		msg = "waiting for a node: " + msg
+		if sb.Status.Phase != sandboxv1alpha1.SwiftSandboxPending && r.Recorder != nil {
+			r.Recorder.Event(sb, corev1.EventTypeWarning, reasonUnschedulable, msg)
+		}
+		if sb.Status.Phase == sandboxv1alpha1.SwiftSandboxPending && sb.Status.Message == msg {
+			return ctrl.Result{RequeueAfter: pollInterval}, nil
+		}
+		return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxPending, msg)
+	}
+
 	// Still coming up (materializing / launcher not ready).
 	return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxMaterializing, "materializing rootfs")
+}
+
+// reasonUnschedulable is the Event a sandbox gets when no node can take its
+// launcher pod.
+const reasonUnschedulable = "Unschedulable"
+
+// unschedulable is the scheduler's message for a launcher pod it could not
+// place.
+func unschedulable(pod *corev1.Pod) (string, bool) {
+	if pod.Status.Phase != corev1.PodPending || pod.Spec.NodeName != "" {
+		return "", false
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse && c.Reason == corev1.PodReasonUnschedulable {
+			return firstNonEmpty(c.Message, "no node can run the launcher pod"), true
+		}
+	}
+	return "", false
 }
 
 // finishTerminal maps a terminated launcher pod to Completed/Failed. It prefers the

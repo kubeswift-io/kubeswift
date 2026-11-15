@@ -78,6 +78,10 @@ spec:
             - name: KUBESWIFT_SANDBOX_REGISTRY_CA_BUNDLE
               value: {{ . | quote }}
             {{- end }}
+            {{- if hasKey .Values.sandboxMaterialize "launcherCPUPerVCPU" }}
+            - name: KUBESWIFT_SANDBOX_LAUNCHER_CPU_PER_VCPU
+              value: {{ toString .Values.sandboxMaterialize.launcherCPUPerVCPU | quote }}
+            {{- end }}
             {{- with .Values.sandboxMaterialize.restrictedEgressDeny }}
             - name: KUBESWIFT_SANDBOX_EGRESS_DENY
               value: {{ join " " . | quote }}
