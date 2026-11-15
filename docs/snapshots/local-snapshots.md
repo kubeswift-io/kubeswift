@@ -137,6 +137,16 @@ The admission webhook **rejects** SwiftSnapshots with:
 - `kubeswift.io/hypervisor-override=qemu` on the source guest.
   Phase 2 ships memory snapshots on Cloud Hypervisor only.
 
+The launcher refuses the capture as well, whether or not the webhook is
+enabled: before pausing, swiftletd reads the VM's devices from Cloud
+Hypervisor and fails the capture if any passed-through (VFIO) device is
+attached, however it got there (`gpuProfileRef`, a DRA GPU claim, an SR-IOV
+interface). Cloud Hypervisor would save such a device without its internal
+state, and a guest restored from that snapshot can hang in its driver (a GPU
+whose driver held state hung CUDA). The guest keeps running and the
+SwiftSnapshot fails with `capture failed: memory snapshot refused: the VM has
+passed-through device(s) 0000:01:00.0 (vfio-pci); ...`.
+
 A kernel-boot guest (`spec.kernelRef`) can be captured, but not restored: the
 restore launcher serves disk-boot guests only. A SwiftRestore of one fails with
 `KernelBootUnsupported` before anything is stopped, and a `cloneFromSnapshot`

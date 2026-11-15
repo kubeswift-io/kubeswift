@@ -19,6 +19,7 @@ mod report;
 mod secrets;
 mod shutdown;
 mod use_locks;
+mod vfio_guard;
 mod warm_artifacts;
 
 use std::env;
