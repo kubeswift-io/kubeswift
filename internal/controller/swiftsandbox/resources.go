@@ -18,15 +18,18 @@ import (
 const LauncherMemoryOverheadMiB = 64
 
 // LauncherCPUPerVCPU is the launcher's CPU request per guest vCPU (chart
-// sandboxMaterialize.launcherCPUPerVCPU). One full CPU by default: a vCPU is a
-// host thread that can use a whole core. Lower it to overcommit CPU on nodes
-// that run mostly idle sandboxes; zero requests no CPU.
-var LauncherCPUPerVCPU = resource.MustParse("1")
+// sandboxMaterialize.launcherCPUPerVCPU). A quarter CPU by default: sandboxes
+// spend most of their time idle (waiting on a model or a tool, or warm in a
+// pool), and with no CPU limit a vCPU still uses a whole core when the node has
+// one free. The request only sets the scheduler's packing and the launcher's
+// share when the node's CPU is contended. One reserves a core per vCPU; zero
+// requests no CPU.
+var LauncherCPUPerVCPU = resource.MustParse("250m")
 
 // ParseLauncherCPUPerVCPU parses the chart value. Empty keeps the default.
 func ParseLauncherCPUPerVCPU(s string) (resource.Quantity, error) {
 	if s == "" {
-		return resource.MustParse("1"), nil
+		return resource.MustParse("250m"), nil
 	}
 	q, err := resource.ParseQuantity(s)
 	if err != nil {
