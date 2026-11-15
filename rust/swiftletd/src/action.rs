@@ -2323,16 +2323,29 @@ async fn dispatch_capture(
     // destination of the root itself (or one reaching outside it) would wipe
     // every namespace's snapshots on the node.
     let local_path = capture_dest_dir(&args.destination_url)?;
+
+    let timeout =
+        std::time::Duration::from_secs(args.timeout_seconds.unwrap_or(DEFAULT_ACTION_TIMEOUT_SECS));
+    let client = swift_ch_client::ApiClient::new(api_socket).with_timeout(timeout);
+
+    // Refuse before touching the destination or pausing the guest: Cloud
+    // Hypervisor would snapshot a passed-through device without its state.
+    let info = client
+        .vm_info_value()
+        .map_err(|e| format!("vm.info before capture: {}", e))?;
+    if let Some(reason) =
+        crate::vfio_guard::snapshot_refusal(&info, crate::vfio_guard::sysfs_driver)
+    {
+        log::warn!("snapshot_refused_vfio id={}: {}", action.id, reason);
+        return Err(reason);
+    }
+
     // remove_dir_all on a missing path returns an error we ignore;
     // the create_dir_all below is the only authoritative step.
     let _ = std::fs::remove_dir_all(local_path);
     if let Err(e) = std::fs::create_dir_all(local_path) {
         return Err(format!("create destination dir {}: {}", local_path, e));
     }
-
-    let timeout =
-        std::time::Duration::from_secs(args.timeout_seconds.unwrap_or(DEFAULT_ACTION_TIMEOUT_SECS));
-    let client = swift_ch_client::ApiClient::new(api_socket).with_timeout(timeout);
 
     // Pause and stamp the start of the pause window.
     client.pause().map_err(|e| format!("pause: {}", e))?;
@@ -4163,6 +4176,40 @@ mod tests {
         full
     }
 
+    /// `vm.info` for a VM with no passed-through device: capture's first call.
+    fn vm_info_no_devices() -> Vec<u8> {
+        json_200(r#"{"state":"Running","config":{"devices":null}}"#)
+    }
+
+    fn json_200(body: &str) -> Vec<u8> {
+        let mut full =
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+        full.extend_from_slice(body.as_bytes());
+        full
+    }
+
+    #[tokio::test]
+    async fn capture_refuses_vm_with_vfio_device_before_pausing() {
+        // Only vm.info is answered: a pause or snapshot would hang the test.
+        let server = MultiMockServer::spawn(vec![json_200(
+            r#"{"state":"Running","config":{"devices":[{"id":"_vfio4","path":"/sys/bus/pci/devices/0000:01:00.0/"}]}}"#,
+        )]);
+        let dest_tmp = tempfile::tempdir().unwrap();
+        let dest_url = tmp_dest_url(&dest_tmp, "gpu-snap");
+        let stale = dest_tmp.path().join("gpu-snap");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("keep"), b"x").unwrap();
+        let action = capture_action(serde_json::json!({"destination_url": dest_url}));
+        let err = dispatch(&action, &server.path).await.unwrap_err();
+        assert!(err.contains("memory snapshot refused"), "got {}", err);
+        assert!(err.contains("0000:01:00.0"), "got {}", err);
+        let reqs = server.collect();
+        assert_eq!(reqs.len(), 1);
+        assert!(String::from_utf8_lossy(&reqs[0]).starts_with("GET /api/v1/vm.info "));
+        // Refused before the destination was wiped.
+        assert!(stale.join("keep").exists());
+    }
+
     fn capture_action(args: serde_json::Value) -> PendingAction {
         PendingAction {
             kind: ActionKind::SnapshotCapture,
@@ -4189,7 +4236,12 @@ mod tests {
     #[tokio::test]
     async fn capture_drives_pause_then_snapshot_then_resume() {
         // Three responses for three sequential calls.
-        let server = MultiMockServer::spawn(vec![no_content(), no_content(), no_content()]);
+        let server = MultiMockServer::spawn(vec![
+            vm_info_no_devices(),
+            no_content(),
+            no_content(),
+            no_content(),
+        ]);
         let dest_tmp = tempfile::tempdir().unwrap();
         let dest_url = tmp_dest_url(&dest_tmp, "default-snap1");
         let action = capture_action(serde_json::json!({
@@ -4197,10 +4249,11 @@ mod tests {
         }));
         let outcome = dispatch(&action, &server.path).await.unwrap();
         let reqs = server.collect();
-        assert_eq!(reqs.len(), 3);
-        let r0 = String::from_utf8_lossy(&reqs[0]);
-        let r1 = String::from_utf8_lossy(&reqs[1]);
-        let r2 = String::from_utf8_lossy(&reqs[2]);
+        assert_eq!(reqs.len(), 4);
+        assert!(String::from_utf8_lossy(&reqs[0]).starts_with("GET /api/v1/vm.info "));
+        let r0 = String::from_utf8_lossy(&reqs[1]);
+        let r1 = String::from_utf8_lossy(&reqs[2]);
+        let r2 = String::from_utf8_lossy(&reqs[3]);
         assert!(r0.starts_with("PUT /api/v1/vm.pause "), "got {}", r0);
         assert!(r1.starts_with("PUT /api/v1/vm.snapshot "), "got {}", r1);
         // Snapshot body must carry the destination_url.
@@ -4224,7 +4277,7 @@ mod tests {
         // Only two responses — pause and snapshot. If dispatch tried a
         // third call (resume) the test would hang on accept; we cap
         // the test runtime via the action-handler's own timeout.
-        let server = MultiMockServer::spawn(vec![no_content(), no_content()]);
+        let server = MultiMockServer::spawn(vec![vm_info_no_devices(), no_content(), no_content()]);
         let dest_tmp = tempfile::tempdir().unwrap();
         let action = capture_action(serde_json::json!({
             "destination_url": tmp_dest_url(&dest_tmp, "snap1"),
@@ -4232,9 +4285,9 @@ mod tests {
         }));
         let outcome = dispatch(&action, &server.path).await.unwrap();
         let reqs = server.collect();
-        assert_eq!(reqs.len(), 2);
-        assert!(String::from_utf8_lossy(&reqs[0]).starts_with("PUT /api/v1/vm.pause "));
-        assert!(String::from_utf8_lossy(&reqs[1]).starts_with("PUT /api/v1/vm.snapshot "));
+        assert_eq!(reqs.len(), 3);
+        assert!(String::from_utf8_lossy(&reqs[1]).starts_with("PUT /api/v1/vm.pause "));
+        assert!(String::from_utf8_lossy(&reqs[2]).starts_with("PUT /api/v1/vm.snapshot "));
         assert!(outcome.pause_window_ms.is_some());
         assert!(outcome
             .detail
@@ -4248,6 +4301,7 @@ mod tests {
         // Pause ok, snapshot fails (4xx), then capture must still try
         // to resume so the VM doesn't sit Paused forever.
         let server = MultiMockServer::spawn(vec![
+            vm_info_no_devices(),
             no_content(),
             b"HTTP/1.1 400 Bad Request\r\nContent-Length: 21\r\n\r\nVM not in Paused state"
                 .to_vec(),
@@ -4260,8 +4314,8 @@ mod tests {
         let err = dispatch(&action, &server.path).await.unwrap_err();
         assert!(err.contains("snapshot:"), "got {}", err);
         let reqs = server.collect();
-        assert_eq!(reqs.len(), 3, "must have attempted recovery resume");
-        assert!(String::from_utf8_lossy(&reqs[2]).starts_with("PUT /api/v1/vm.resume "));
+        assert_eq!(reqs.len(), 4, "must have attempted recovery resume");
+        assert!(String::from_utf8_lossy(&reqs[3]).starts_with("PUT /api/v1/vm.resume "));
     }
 
     #[tokio::test]
@@ -4270,6 +4324,7 @@ mod tests {
         // NOT call resume — calling resume on a Running VM is a no-op
         // at CH but burns an API call we shouldn't make.
         let server = MultiMockServer::spawn(vec![
+            vm_info_no_devices(),
             b"HTTP/1.1 500 Internal\r\nContent-Length: 0\r\n\r\n".to_vec(),
         ]);
         let dest_tmp = tempfile::tempdir().unwrap();
@@ -4279,8 +4334,8 @@ mod tests {
         let err = dispatch(&action, &server.path).await.unwrap_err();
         assert!(err.contains("pause:"), "got {}", err);
         let reqs = server.collect();
-        assert_eq!(reqs.len(), 1);
-        assert!(String::from_utf8_lossy(&reqs[0]).starts_with("PUT /api/v1/vm.pause "));
+        assert_eq!(reqs.len(), 2);
+        assert!(String::from_utf8_lossy(&reqs[1]).starts_with("PUT /api/v1/vm.pause "));
     }
 
     #[tokio::test]
@@ -4288,7 +4343,12 @@ mod tests {
         // Re-running the action handler with the same destination must
         // be a no-op on the directory (mkdir -p semantics): the dir
         // already exists, no error, snapshot proceeds.
-        let server = MultiMockServer::spawn(vec![no_content(), no_content(), no_content()]);
+        let server = MultiMockServer::spawn(vec![
+            vm_info_no_devices(),
+            no_content(),
+            no_content(),
+            no_content(),
+        ]);
         let dest_tmp = tempfile::tempdir().unwrap();
         use_snapshot_root(&dest_tmp);
         let pre_existing = dest_tmp.path().join("preexisting");
@@ -4305,7 +4365,12 @@ mod tests {
         // before snapshotting so a stale prior attempt (cleanup
         // finalizer didn't fire, controller-driven retry, etc.)
         // doesn't block the new capture.
-        let server = MultiMockServer::spawn(vec![no_content(), no_content(), no_content()]);
+        let server = MultiMockServer::spawn(vec![
+            vm_info_no_devices(),
+            no_content(),
+            no_content(),
+            no_content(),
+        ]);
         let dest_tmp = tempfile::tempdir().unwrap();
         use_snapshot_root(&dest_tmp);
         let snap_dir = dest_tmp.path().join("stale-snap");
