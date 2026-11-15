@@ -111,10 +111,12 @@ sandboxMaterialize:
   # minutes. Example: ["203.0.113.0/24", "198.51.100.7"].
   restrictedEgressDeny: []
   # CPU each sandbox launcher pod requests per guest vCPU. Its memory request
-  # is always the guest memory plus 64Mi. "1" reserves a core per vCPU; lower
-  # it (e.g. "250m") to pack mostly idle sandboxes onto fewer cores, "0" to
-  # request no CPU. Applies to launcher pods created after the change.
-  launcherCPUPerVCPU: "1"
+  # is always the guest memory plus 64Mi. "250m" fits four vCPUs per
+  # requested core: there is no CPU limit, so a vCPU still uses a whole core
+  # when the node has one free. Set "1" to reserve a core per vCPU (CPU-heavy
+  # builds, tenants owed dedicated CPU), "0" to request no CPU. Applies to
+  # launcher pods created after the change.
+  launcherCPUPerVCPU: "250m"
 
 # snapshot-oras: the uploader/downloader image for the oci (OCI registry / ORAS)
 # snapshot backend. The controller passes this to the per-snapshot push Job (and

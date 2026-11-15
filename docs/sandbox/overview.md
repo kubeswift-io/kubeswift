@@ -62,7 +62,7 @@ Ready-to-edit manifests and notes:
 | `image` | string | — | OCI image to run as the root filesystem. Required. A digest reference (`repo@sha256:...`) is preferred for reproducibility; a tag is accepted. |
 | `imagePullSecret` | string | — | docker-registry Secret (same namespace) for pulling `image` from a private registry. |
 | `verifyKeySecretRef.name` | string | — | Secret (same namespace) holding a cosign public key at key `cosign.pub`. When set, the image is cosign-verified before it materializes; an unsigned or tampered image fails and never boots. See [Signed images](#signed-images-verify-before-boot). |
-| `cpu` | int32 | `1` | vCPU count. The launcher pod requests one CPU per vCPU (chart `sandboxMaterialize.launcherCPUPerVCPU`). |
+| `cpu` | int32 | `1` | vCPU count. The launcher pod requests 250m CPU per vCPU, with no limit (chart `sandboxMaterialize.launcherCPUPerVCPU`). |
 | `memory` | Quantity | `512Mi` | Guest RAM. The launcher pod requests this plus 64Mi, so the scheduler places the sandbox only on a node with room for it. |
 | `command` | []string | — | Overrides the image's ENTRYPOINT. Empty uses the image's own Entrypoint+Cmd. |
 | `args` | []string | — | Appended to `command` (or the image's CMD when `command` is empty). |
@@ -715,7 +715,7 @@ the NetworkPolicy stays until the pod is gone.
   the launcher pod; the rest of the message is its reason, and the sandbox
   has an `Unschedulable` Warning Event. `Insufficient memory` or
   `Insufficient cpu` means no node has room for the guest (the launcher
-  requests `memory` plus 64Mi and a CPU per vCPU); a node selector or
+  requests `memory` plus 64Mi and 250m CPU per vCPU); a node selector or
   affinity mismatch usually means no node carries
   `kubeswift.io/kernel-node=true`. The sandbox starts once a node frees up.
 - **Stuck `Materializing`** — check `kubectl describe pod <name>`. A failing

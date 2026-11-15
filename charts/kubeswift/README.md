@@ -90,7 +90,7 @@ key named instead of being silently ignored. Delete the key.
 | `sandboxMaterialize.artifactCache.minAge` | An entry used more recently is never evicted | `10m` |
 | `sandboxMaterialize.registryCABundle` | PEM CA certificates every SwiftSandbox registry connection trusts on top of the system roots (images, models, artifacts, placements, output exports, cosign); for registries behind a private CA | `""` (system roots) |
 | `sandboxMaterialize.restrictedEgressDeny` | IPv4 addresses and CIDRs a `restricted` sandbox can never reach, on top of the private ranges, metadata, node addresses and API server endpoints it always blocks. Dropped before `network.egress.allow`; reaches running sandboxes within about two minutes | `[]` |
-| `sandboxMaterialize.launcherCPUPerVCPU` | CPU each sandbox launcher pod requests per guest vCPU (its memory request is always guest memory plus 64Mi). Lower it, e.g. `250m`, to overcommit CPU on nodes of mostly idle sandboxes; `0` requests no CPU | `1` |
+| `sandboxMaterialize.launcherCPUPerVCPU` | CPU each sandbox launcher pod requests per guest vCPU (its memory request is always guest memory plus 64Mi). The default fits four vCPUs per requested core (no CPU limit is set); `1` reserves a core per vCPU, `0` requests no CPU | `250m` |
 | `sandboxMaterialize.console` | Give sandbox launcher pods an unprivileged `console` container, read with `kubectl logs <pod> -c console` (`get pods/log`, no exec) | `true` |
 | `sandboxMaterialize.artifactCache.evictLegacy` | Also evict entries written before v0.17 (counted, otherwise never evicted). Set once no pre-v0.17 launcher runs | `false` |
 

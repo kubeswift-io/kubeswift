@@ -27,7 +27,7 @@ func launcherOf(t *testing.T, pod *corev1.Pod) corev1.Container {
 	return corev1.Container{}
 }
 
-// The launcher requests the guest's memory plus overhead and a CPU per vCPU,
+// The launcher requests the guest's memory plus overhead and 250m CPU per vCPU,
 // and sets no limits.
 func TestBuildPod_LauncherRequests(t *testing.T) {
 	sb := egSandbox("")
@@ -37,8 +37,8 @@ func TestBuildPod_LauncherRequests(t *testing.T) {
 	if got, want := c.Resources.Requests[corev1.ResourceMemory], resource.MustParse("1088Mi"); got.Cmp(want) != 0 {
 		t.Errorf("memory request = %s, want %s", got.String(), want.String())
 	}
-	if got := c.Resources.Requests[corev1.ResourceCPU]; got.Cmp(resource.MustParse("2")) != 0 {
-		t.Errorf("cpu request = %s, want 2", got.String())
+	if got := c.Resources.Requests[corev1.ResourceCPU]; got.Cmp(resource.MustParse("500m")) != 0 {
+		t.Errorf("cpu request = %s, want 500m", got.String())
 	}
 	if len(c.Resources.Limits) != 0 {
 		t.Errorf("limits = %v, want none", c.Resources.Limits)
@@ -49,8 +49,8 @@ func TestBuildPod_LauncherRequests(t *testing.T) {
 	if got := c.Resources.Requests[corev1.ResourceMemory]; got.Cmp(resource.MustParse("192Mi")) != 0 {
 		t.Errorf("floor memory request = %s, want 192Mi", got.String())
 	}
-	if got := c.Resources.Requests[corev1.ResourceCPU]; got.Cmp(resource.MustParse("1")) != 0 {
-		t.Errorf("floor cpu request = %s, want 1", got.String())
+	if got := c.Resources.Requests[corev1.ResourceCPU]; got.Cmp(resource.MustParse("250m")) != 0 {
+		t.Errorf("floor cpu request = %s, want 250m", got.String())
 	}
 }
 
@@ -60,9 +60,9 @@ func TestBuildPod_LauncherCPUPerVCPU(t *testing.T) {
 	sb := egSandbox("")
 	sb.Spec.CPU = 4
 
-	LauncherCPUPerVCPU = resource.MustParse("250m")
-	if got := launcherOf(t, buildPod(sb, "sandbox")).Resources.Requests[corev1.ResourceCPU]; got.Cmp(resource.MustParse("1")) != 0 {
-		t.Errorf("250m x 4 = %s, want 1", got.String())
+	LauncherCPUPerVCPU = resource.MustParse("1")
+	if got := launcherOf(t, buildPod(sb, "sandbox")).Resources.Requests[corev1.ResourceCPU]; got.Cmp(resource.MustParse("4")) != 0 {
+		t.Errorf("1 x 4 = %s, want 4", got.String())
 	}
 	LauncherCPUPerVCPU = resource.MustParse("0")
 	if _, ok := launcherOf(t, buildPod(sb, "sandbox")).Resources.Requests[corev1.ResourceCPU]; ok {
@@ -71,7 +71,7 @@ func TestBuildPod_LauncherCPUPerVCPU(t *testing.T) {
 }
 
 func TestParseLauncherCPUPerVCPU(t *testing.T) {
-	for in, want := range map[string]string{"": "1", "1": "1", "250m": "250m", "0": "0", "1.5": "1500m"} {
+	for in, want := range map[string]string{"": "250m", "1": "1", "250m": "250m", "0": "0", "1.5": "1500m"} {
 		q, err := ParseLauncherCPUPerVCPU(in)
 		if err != nil || q.Cmp(resource.MustParse(want)) != 0 {
 			t.Errorf("%q -> %s, %v; want %s", in, q.String(), err, want)

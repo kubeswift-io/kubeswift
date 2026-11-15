@@ -18,7 +18,7 @@ you've read
   pool image with no workload, waiting. The slot idles in the boot bridge (not
   the image), so **distroless / shell-less images can be pooled**.
   An idle slot reserves node capacity like a running sandbox: its launcher
-  pod requests the pool's `memory` plus 64Mi and a CPU per vCPU.
+  pod requests the pool's `memory` plus 64Mi and 250m CPU per vCPU.
 - A `SwiftSandbox` with `spec.poolRef` **claims** one warm slot and injects its
   `command`/`args`/`env` into the already-booted VM over vsock. The VM is
   running, so the workload starts immediately.
