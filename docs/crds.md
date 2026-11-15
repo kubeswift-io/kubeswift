@@ -598,6 +598,7 @@ and PVC-free.
 | `podMetadata` | object | `labels` and `annotations` for the launcher pod; `*kubeswift.io` keys and pod-network annotations (`k8s.v1.cni.cncf.io/`, `v1.multus-cni.io/`, `k8s.ovn.org/`) refused. Applied to the claimed slot on a warm-pool checkout. |
 | `network.egress.allow[]` | list | `restricted` only: destinations allowed past the cluster-range block, each `service: {name, namespace}` or `cidr`, with optional `ports: [{port, protocol}]`. `169.254.0.0/16` is never allowed. See [docs/sandbox/overview.md](sandbox/overview.md#allowing-specific-destinations-under-restricted). |
 | `kernelProfileRef` | LocalObjectReference | SwiftKernel to boot; defaults to the well-known `sandbox` profile (or `gpu-sandbox` when a GPU is requested). |
+| `nestedVirtualization` | enum | `Disabled` (default) or `Enabled`: whether the guest sees the host CPU's VMX/SVM. The opposite default to SwiftGuest: a sandbox runs untrusted code. |
 | `nodeSelector` | map[string]string | Extra node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
 | `poolRef` | LocalObjectReference | Check out a pre-booted slot from a `SwiftSandboxPool` instead of the cold path; falls back to cold on a miss. Mutually exclusive with either GPU field. |
 | `gpuResourceClaim` | GPUResourceClaimSpec | Pass a GPU through via Kubernetes DRA (scheduler-time allocation). Mutually exclusive with `gpuProfileRef`. |
@@ -634,6 +635,7 @@ subresource (`.spec.minWarm`) is the seam for `kubectl scale` and an HPA.
 | `network.egress.allow[]` | list | As on SwiftSandbox; every slot enforces it, and a claiming sandbox must list the same destinations. |
 | `network.ports[]` / `network.ingress` | list / object | As on SwiftSandbox; every slot exposes them, and a claiming sandbox must declare the same. |
 | `kernelProfileRef` / `nodeSelector` | LocalObjectReference / map[string]string | SwiftKernel to boot (default `sandbox`, or `gpu-sandbox` when `gpuProfileRef` is set) and extra node constraints. |
+| `nestedVirtualization` | enum | As on `SwiftSandbox`, for every slot (default `Disabled`); a claiming sandbox must resolve to the same value. |
 | `gpuProfileRef` | LocalObjectReference | Makes this a **warm GPU pool**: every slot holds a native SwiftGPU allocation, pre-booted. `tier: pcie` only. |
 | `model` | SandboxModel | Preloads a read-only model artifact into every slot. |
 | `minWarm` | int32 | Desired Ready (unclaimed) warm slots. Default `1`. The scale-subresource target. |
