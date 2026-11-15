@@ -73,7 +73,7 @@ A GPU sandbox image must ship the NVIDIA driver built for the `gpu-sandbox` kern
   6.6.x. **Pascal (GTX 10-series) and older need the proprietary driver**; Turing
   and newer can use `nvidia-open`. Build it against the kernel source tree with the
   buildroot toolchain (see `build/kernels/sandbox` — the module vermagic must match
-  the shipped `gpu-sandbox` kernel). `kernels/gpu-sandbox:6.6.5` and later (6.6.8
+  the shipped `gpu-sandbox` kernel). `kernels/gpu-sandbox:6.6.5` and later (6.6.12
   is current) carry Linux 6.6.158; earlier artifacts carried 6.6.44. A driver
   built for 6.6.44 does not load on 6.6.5 or later: rebuild it against the
   6.6.158 tree before moving to it.
@@ -106,6 +106,90 @@ A GPU sandbox image must ship the NVIDIA driver built for the `gpu-sandbox` kern
 Building the driver into the kernel is not an option (the NVIDIA modules are
 out-of-tree); it rides the image. This composes with the "build your own base
 layers" story ([#395](https://github.com/kubeswift-io/kubeswift/issues/395)).
+
+### Example: a Pascal (GTX 10-series) image
+
+This is the image that ran CUDA on a GTX 1080 in a GPU sandbox. Pascal pins
+two versions: driver branch 580 is the last one that supports it (use the
+proprietary modules, not `kernel-open`), and CUDA 12.x is the last toolkit
+that compiles for compute capability 6.1 (CUDA 13 dropped it).
+
+1. Build the kernel you will run, then the driver's modules against its tree
+   with the buildroot toolchain. Kernel modules do not link libc, so the musl
+   cross compiler is fine.
+
+   ```bash
+   cd build/kernels/sandbox
+   make build PROFILE=gpu-sandbox
+   make module-abi-label PROFILE=gpu-sandbox   # the image label, see below
+   KT=$PWD/output-gpu-sandbox/build/linux-6.6.158
+   HB=$PWD/output-gpu-sandbox/host/bin
+
+   sh NVIDIA-Linux-x86_64-580.95.05.run --extract-only --target nv580
+   cd nv580/kernel
+   make -j"$(nproc)" modules SYSSRC=$KT SYSOUT=$KT \
+     CC=$HB/x86_64-buildroot-linux-musl-gcc LD=$HB/x86_64-buildroot-linux-musl-ld
+   modinfo -F vermagic nvidia.ko   # 6.6.158-ksabi1 SMP preempt mod_unload modversions
+   ```
+
+   Copy `nvidia.ko` and `nvidia-uvm.ko` from `nv580/kernel`, and `nvidia-smi`
+   and the `lib*.so.580.95.05` libraries from `nv580`, into a `drv/`
+   directory next to the Dockerfile.
+
+2. Build the image. CUDA code is compiled for `sm_61` with the 12.x toolkit;
+   linking the runtime statically keeps the toolkit out of the final image.
+
+   ```dockerfile
+   FROM docker.io/nvidia/cuda:12.8.1-devel-ubuntu22.04 AS build
+   COPY app.cu /src/
+   RUN nvcc -arch=sm_61 -cudart static -o /src/app /src/app.cu
+
+   FROM docker.io/library/ubuntu:22.04
+   LABEL io.kubeswift.gpu-sandbox.module-abi=6.6.158-ksabi1
+   RUN apt-get update && apt-get install -y --no-install-recommends kmod \
+    && rm -rf /var/lib/apt/lists/*
+   COPY drv/nvidia.ko drv/nvidia-uvm.ko /opt/nvidia/
+   COPY drv/nvidia-smi /usr/bin/
+   COPY drv/lib*.so.580.95.05 /usr/lib/x86_64-linux-gnu/
+   RUN cd /usr/lib/x86_64-linux-gnu \
+    && ln -s libcuda.so.580.95.05 libcuda.so.1 && ln -s libcuda.so.1 libcuda.so \
+    && ln -s libnvidia-ml.so.580.95.05 libnvidia-ml.so.1 \
+    && ln -s libnvidia-ptxjitcompiler.so.580.95.05 libnvidia-ptxjitcompiler.so.1 \
+    && ldconfig
+   COPY --from=build /src/app /usr/local/bin/
+   COPY entrypoint.sh /entrypoint.sh
+   CMD ["/entrypoint.sh"]
+   ```
+
+   The label value is what `make module-abi-label` printed in step 1.
+
+3. The entrypoint loads the modules and creates the device nodes. `nvidia`
+   always has char-major 195; `nvidia-uvm` gets a dynamic one.
+
+   ```sh
+   #!/bin/sh
+   set -e
+   insmod /opt/nvidia/nvidia.ko NVreg_EnableGpuFirmware=0
+   insmod /opt/nvidia/nvidia-uvm.ko
+   mknod -m 666 /dev/nvidiactl c 195 255
+   mknod -m 666 /dev/nvidia0 c 195 0
+   U=$(awk '$2=="nvidia-uvm"{print $1}' /proc/devices)
+   mknod -m 666 /dev/nvidia-uvm c "$U" 0
+   mknod -m 666 /dev/nvidia-uvm-tools c "$U" 1
+   nvidia-smi
+   exec /usr/local/bin/app
+   ```
+
+### Pushing the image
+
+`sandbox-materialize` pulls over TLS only (there is no insecure mode). A
+registry with a private CA needs `sandboxMaterialize.registryCABundle` in the
+chart values. Some registries (Zot, for one) accept OCI media types only and
+refuse a Docker-built image's Docker media types; convert it on the way:
+
+```bash
+skopeo copy --format oci docker-daemon:gpu-app:1 docker://<registry>/gpu-app:1
+```
 
 ## Quickstart
 

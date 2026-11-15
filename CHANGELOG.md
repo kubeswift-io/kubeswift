@@ -41,6 +41,14 @@ All notable changes to KubeSwift are documented here.
 - **The launcher refuses a memory snapshot of a VM with a passed-through device.** Cloud Hypervisor snapshots a VFIO device without refusing and, for a device without VFIO migration support (every GPU bound to `vfio-pci`), saves no device state, so a restored guest can hang in its driver (a GPU whose driver held state hung CUDA). The admission webhook refused this only for `gpuProfileRef` and SR-IOV guests, and only when enabled. swiftletd now reads the VM's devices from Cloud Hypervisor before pausing and fails the capture if any VFIO device is attached, whatever put it there (including a DRA GPU claim): the guest keeps running, the destination is not touched, and the SwiftSnapshot fails with `capture failed: memory snapshot refused: ...` naming the device and its driver. Applies to guests started after the upgrade (running guests keep their launcher).
 - **A warm checkout starts in the pool image's `WORKDIR`** when it sets no `spec.workingDir`, as a cold sandbox does. It started in `/`. The pool records the image's `WORKDIR` as `status.imageWorkingDir`; a pool created before the upgrade picks it up on its next reconcile.
 
+### Docs
+
+- **GPU sandboxes: a worked Pascal image.** `docs/sandbox/gpu-sandboxes.md` now walks
+  through building driver 580.95.05 against the `gpu-sandbox` kernel tree, a CUDA 12.x
+  `sm_61` image with the module ABI label, its entrypoint, and pushing to a registry that
+  accepts OCI media types only.
+
+
 ## [v0.24.1] — 2026-11-13
 
 A patch release. A pool no longer drops below its availability floor when its template is reverted or changed mid-rollout (#934), and the `sandbox-materialize` and `snapshot-oras` images ship cosign v3.1.4.
