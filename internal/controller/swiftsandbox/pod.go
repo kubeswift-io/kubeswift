@@ -138,14 +138,7 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 		sandboxExec = &runtimeintent.SandboxExecSpec{Argv: exec.Argv, Env: exec.Env, Cwd: exec.Cwd, User: exec.User,
 			SecretEnv: secretEnvRefs(sb), SecretFiles: secretFileRefs(sb)}
 	}
-	cpu := int(sb.Spec.CPU)
-	if cpu < 1 {
-		cpu = 1
-	}
-	memMiB := int(sb.Spec.Memory.Value() >> 20)
-	if memMiB < 128 {
-		memMiB = 128
-	}
+	cpu, memMiB := guestSize(sb)
 	// Rootfs delivery. block: the ext4 rides SandboxRootfs.Path as /dev/vda.
 	// virtiofs: the unpacked tree at rootfsPath is shared over virtio-fs (tag
 	// "sandboxroot"); SandboxRootfs stays present (the sandbox marker) but carries
@@ -548,6 +541,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 				Name:            launcherName,
 				Image:           swiftguest.LauncherImage(),
 				SecurityContext: privileged(),
+				Resources:       launcherResources(sb),
 				// swiftletd reads POD_NAME/POD_NAMESPACE (downward API) to know which
 				// pod to report onto; without them it skips the report + lease paths
 				// entirely (guest pid/hypervisor/IP never surface). KUBESWIFT_REPORT_GUEST_CR

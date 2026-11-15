@@ -62,8 +62,8 @@ Ready-to-edit manifests and notes:
 | `image` | string | — | OCI image to run as the root filesystem. Required. A digest reference (`repo@sha256:...`) is preferred for reproducibility; a tag is accepted. |
 | `imagePullSecret` | string | — | docker-registry Secret (same namespace) for pulling `image` from a private registry. |
 | `verifyKeySecretRef.name` | string | — | Secret (same namespace) holding a cosign public key at key `cosign.pub`. When set, the image is cosign-verified before it materializes; an unsigned or tampered image fails and never boots. See [Signed images](#signed-images-verify-before-boot). |
-| `cpu` | int32 | `1` | vCPU count. |
-| `memory` | Quantity | `512Mi` | Guest RAM. |
+| `cpu` | int32 | `1` | vCPU count. The launcher pod requests one CPU per vCPU (chart `sandboxMaterialize.launcherCPUPerVCPU`). |
+| `memory` | Quantity | `512Mi` | Guest RAM. The launcher pod requests this plus 64Mi, so the scheduler places the sandbox only on a node with room for it. |
 | `command` | []string | — | Overrides the image's ENTRYPOINT. Empty uses the image's own Entrypoint+Cmd. |
 | `args` | []string | — | Appended to `command` (or the image's CMD when `command` is empty). |
 | `env` | []EnvVar | — | Merged over the image's config env. |

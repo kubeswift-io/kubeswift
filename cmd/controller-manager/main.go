@@ -146,6 +146,12 @@ func main() {
 	} else {
 		swiftsandbox.ExtraEgressDeny = deny
 	}
+	if q, err := swiftsandbox.ParseLauncherCPUPerVCPU(os.Getenv("KUBESWIFT_SANDBOX_LAUNCHER_CPU_PER_VCPU")); err != nil {
+		klog.ErrorS(err, "invalid KUBESWIFT_SANDBOX_LAUNCHER_CPU_PER_VCPU")
+		os.Exit(1)
+	} else {
+		swiftsandbox.LauncherCPUPerVCPU = q
+	}
 	if err := materialize.SetRegistryCA(os.Getenv(swiftsandbox.SandboxRegistryCAEnv)); err != nil {
 		klog.ErrorS(err, "invalid sandbox registry CA bundle", "env", swiftsandbox.SandboxRegistryCAEnv)
 		os.Exit(1)

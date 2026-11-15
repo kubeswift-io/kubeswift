@@ -74,8 +74,9 @@ func TestBuildPod_OutputVolumes(t *testing.T) {
 	if _, ok := c.Resources.Requests[corev1.ResourceEphemeralStorage]; !ok {
 		t.Error("no ephemeral-storage request for the staging and spool disk")
 	}
-	if plain := buildPod(plainSandbox("busybox:1"), "sandbox"); len(plain.Spec.Containers[0].Resources.Requests) != 0 {
-		t.Errorf("a sandbox without outputs got requests: %+v", plain.Spec.Containers[0].Resources.Requests)
+	plain := buildPod(plainSandbox("busybox:1"), "sandbox").Spec.Containers[0].Resources.Requests
+	if _, ok := plain[corev1.ResourceEphemeralStorage]; ok {
+		t.Errorf("a sandbox without outputs got an ephemeral-storage request: %+v", plain)
 	}
 }
 
