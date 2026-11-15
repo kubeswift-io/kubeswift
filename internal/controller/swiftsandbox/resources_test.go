@@ -2,9 +2,11 @@ package swiftsandbox
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -128,5 +130,46 @@ func TestReconcilePodState_Unschedulable(t *testing.T) {
 	}
 	if got := get(); got.Status.Phase != sandboxv1alpha1.SwiftSandboxMaterializing {
 		t.Errorf("placed: phase %q", got.Status.Phase)
+	}
+}
+
+// A pool whose warm slots no node can take is Degraded with the scheduler's
+// reason, once per transition; Warming otherwise.
+func TestPoolStatus_UnschedulableSlots(t *testing.T) {
+	s := checkoutTestScheme()
+	pool := &sandboxv1alpha1.SwiftSandboxPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "ns"},
+		Spec:       sandboxv1alpha1.SwiftSandboxPoolSpec{Image: "alpine", MinWarm: 2},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pool).WithStatusSubresource(pool).Build()
+	rec := record.NewFakeRecorder(10)
+	r := &SwiftSandboxPoolReconciler{Client: c, Scheme: s, Recorder: rec}
+	get := func() *sandboxv1alpha1.SwiftSandboxPool {
+		got := &sandboxv1alpha1.SwiftSandboxPool{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "ns", Name: "p"}, got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	sched := "0/3 nodes are available: 3 Insufficient cpu."
+	for range 2 {
+		if _, err := r.updateStatus(context.Background(), get(), 1, 0, nil, 1, sched); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := get()
+	w := apimeta.FindStatusCondition(got.Status.Conditions, sandboxv1alpha1.SwiftSandboxPoolConditionWarm)
+	if got.Status.Phase != sandboxv1alpha1.SwiftSandboxPoolDegraded || w == nil || w.Reason != reasonUnschedulable ||
+		!strings.Contains(got.Status.Message, "1 waiting for a node: "+sched) {
+		t.Errorf("phase %q message %q warm %+v", got.Status.Phase, got.Status.Message, w)
+	}
+	if n := len(rec.Events); n != 1 {
+		t.Errorf("%d events, want 1", n)
+	}
+	if _, err := r.updateStatus(context.Background(), get(), 1, 0, nil, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := get(); got.Status.Phase != sandboxv1alpha1.SwiftSandboxPoolWarming {
+		t.Errorf("schedulable again: phase %q", got.Status.Phase)
 	}
 }

@@ -106,7 +106,7 @@ Ready-to-edit manifests: [`config/samples/sandbox/`](../../config/samples/sandbo
 
 | Field | Type | Description |
 |---|---|---|
-| `phase` | enum | `Pending` (resolving image/kernel), `Warming` (bringing slots up toward `minWarm`), `Ready` (buffer at target), `Degraded` (cannot reach `minWarm` — e.g. no schedulable node, or the slots' SwiftKernel is missing or not `Ready`: `Resolved=False` with reason `KernelNotFound` or `KernelNotReady`, and no slot is created until it is). |
+| `phase` | enum | `Pending` (resolving image/kernel), `Warming` (bringing slots up toward `minWarm`), `Ready` (buffer at target), `Degraded` (cannot reach `minWarm` — e.g. no node has room for a slot: `Warm=False` with reason `Unschedulable` and the scheduler's message, or the slots' SwiftKernel is missing or not `Ready`: `Resolved=False` with reason `KernelNotFound` or `KernelNotReady`, and no slot is created until it is). |
 | `warmReplicas` | int32 | Unclaimed slots ready for a checkout right now: booted, with the guest agent answering. Only these are handed out. |
 | `warmingReplicas` | int32 | Unclaimed slots not ready yet (scheduling, materializing or booting). A checkout never takes one. |
 | `claimedReplicas` | int32 | Slots currently checked out (each owned by its SwiftSandbox). |
