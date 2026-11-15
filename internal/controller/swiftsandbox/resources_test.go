@@ -1,10 +1,17 @@
 package swiftsandbox
 
 import (
+	"context"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 )
 
 func launcherOf(t *testing.T, pod *corev1.Pod) corev1.Container {
@@ -72,5 +79,54 @@ func TestParseLauncherCPUPerVCPU(t *testing.T) {
 		if _, err := ParseLauncherCPUPerVCPU(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
+	}
+}
+
+// A launcher pod no node can take holds the sandbox Pending with the
+// scheduler's message and one Warning Event, then Materializing once placed.
+func TestReconcilePodState_Unschedulable(t *testing.T) {
+	s := checkoutTestScheme()
+	sb := &sandboxv1alpha1.SwiftSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "ns", UID: "uid-1"},
+		Spec:       sandboxv1alpha1.SwiftSandboxSpec{Image: "alpine"},
+		Status:     sandboxv1alpha1.SwiftSandboxStatus{Phase: sandboxv1alpha1.SwiftSandboxMaterializing},
+	}
+	sched := "0/3 nodes are available: 3 Insufficient memory."
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "ns"},
+		Status: corev1.PodStatus{Phase: corev1.PodPending, Conditions: []corev1.PodCondition{{
+			Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: corev1.PodReasonUnschedulable, Message: sched,
+		}}},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sb, pod).WithStatusSubresource(sb).Build()
+	rec := record.NewFakeRecorder(10)
+	r := &SwiftSandboxReconciler{Client: c, Scheme: s, Recorder: rec}
+	get := func() *sandboxv1alpha1.SwiftSandbox {
+		got := &sandboxv1alpha1.SwiftSandbox{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "ns", Name: "sb"}, got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	for range 2 {
+		if _, err := r.reconcilePodState(context.Background(), get(), pod); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := get()
+	if got.Status.Phase != sandboxv1alpha1.SwiftSandboxPending || got.Status.Message != "waiting for a node: "+sched {
+		t.Errorf("phase %q message %q", got.Status.Phase, got.Status.Message)
+	}
+	if n := len(rec.Events); n != 1 {
+		t.Errorf("%d events, want 1", n)
+	}
+
+	pod.Spec.NodeName = "n1"
+	pod.Status.Conditions = nil
+	if _, err := r.reconcilePodState(context.Background(), get(), pod); err != nil {
+		t.Fatal(err)
+	}
+	if got := get(); got.Status.Phase != sandboxv1alpha1.SwiftSandboxMaterializing {
+		t.Errorf("placed: phase %q", got.Status.Phase)
 	}
 }

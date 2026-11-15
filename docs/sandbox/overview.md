@@ -710,8 +710,14 @@ the NetworkPolicy stays until the pod is gone.
   yet. The new sandbox creates its own launcher once it has.
   `LauncherPodConflict` means a running pod by that name is not this
   sandbox's: delete it, or use another name.
-- **Stuck `Materializing`** — check `kubectl describe pod <name>`. Unscheduled
-  usually means no node carries `kubeswift.io/kernel-node=true`. A failing
+- **`Pending` with "waiting for a node: ..."**: the scheduler cannot place
+  the launcher pod; the rest of the message is its reason, and the sandbox
+  has an `Unschedulable` Warning Event. `Insufficient memory` or
+  `Insufficient cpu` means no node has room for the guest (the launcher
+  requests `memory` plus 64Mi and a CPU per vCPU); a node selector or
+  affinity mismatch usually means no node carries
+  `kubeswift.io/kernel-node=true`. The sandbox starts once a node frees up.
+- **Stuck `Materializing`** — check `kubectl describe pod <name>`. A failing
   `sandbox-materialize` init container usually means the image pull failed —
   check `spec.image` and `spec.imagePullSecret` and inspect the init
   container's logs.
