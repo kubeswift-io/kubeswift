@@ -685,7 +685,10 @@ type SandboxEgress struct {
 	// Allow lists destinations the guest may reach in addition to DNS and the
 	// public internet. The link-local range 169.254.0.0/16 (the cloud metadata
 	// endpoint), node addresses, the API server endpoints and the administrator's
-	// deny list stay blocked whatever is allowed, and IPv6 stays blocked.
+	// deny list stay blocked whatever is allowed, and IPv6 stays blocked. So do
+	// the ClusterIPs, external IPs and load-balancer IPs of any Service with an
+	// endpoint on one of those addresses; a service rule naming such a Service
+	// keeps the sandbox Pending (EgressServiceReachesNode).
 	// +kubebuilder:validation:MaxItems=32
 	// +listType=atomic
 	// +optional
