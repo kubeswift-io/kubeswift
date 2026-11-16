@@ -6,6 +6,10 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **API for proxied sandbox egress (not usable yet).** `spec.network.mode: proxied`, `spec.network.egress.allow[].host` and `allow[].tls`, `spec.network.egress.proxy`, `spec.network.egress.credentials[]` and `spec.identity.spiffe` on SwiftSandbox and SwiftSandboxPool, plus the `egress-intent.kubeswift.io/v1` file format (Go types and JSON Schema under `api/egressintent`, Apache-2.0). The webhook and the controller validate these fields and then refuse `mode: proxied` and `identity.spiffe: Enabled` (a sandbox fails with `InvalidNetwork` / `InvalidIdentity`, a pool is `Degraded`) until the proxy runtime ships. CRDs: swiftsandboxes, swiftsandboxpools.
+
 ## [v0.25.1] — 2026-11-16
 
 Security patch for v0.25.0's `restricted` sandbox egress: a Service in front of a node or the API server could be used to reach them (#953). Also acceptance tests for the v0.25.0 sandbox hardening (#952) and dependency updates.
