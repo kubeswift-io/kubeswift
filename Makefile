@@ -48,7 +48,7 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
 	build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-snapshot-oras-image build-dra-driver-image build-gateway-image build-sandbox-materialize-image generate deploy deploy-with-webhook deploy-with-mtls deploy-with-webhook-and-mtls undeploy load-images smoke-test smoke-test-cleanup \
 	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
-	b0-cross-node-tcp-test b0-cross-node-tcp-test-cleanup sandbox-tcp-receive-test sandbox-tcp-receive-test-cleanup sandbox-warm-checkout-test sandbox-warm-checkout-test-cleanup sandbox-hardening-test sandbox-hardening-test-cleanup sandbox-gpu-test sandbox-gpu-test-cleanup e2e-tests \
+	b0-cross-node-tcp-test b0-cross-node-tcp-test-cleanup sandbox-tcp-receive-test sandbox-tcp-receive-test-cleanup sandbox-warm-checkout-test sandbox-warm-checkout-test-cleanup sandbox-hardening-test sandbox-hardening-test-cleanup sandbox-gpu-test sandbox-gpu-test-cleanup sandbox-egress-restricted-test sandbox-egress-restricted-test-cleanup e2e-tests \
 	verify-e2e-scripts verify-kustomize-sync verify-base-image-pins \
 	preflight help push-images package-chart push-chart release-dev release-rc release-stable print-version
 
@@ -431,9 +431,19 @@ sandbox-gpu-test:
 sandbox-gpu-test-cleanup:
 	@test/sandbox/gpu.sh cleanup
 
+# What a restricted sandbox guest can reach: metadata, node and API server
+# addresses and Services in front of them stay blocked whatever the allowlist
+# says, including a Service repointed at a node while the guest runs. Needs a
+# KVM node; PUBLIC_TARGET (default 1.1.1.1:443, empty to skip).
+sandbox-egress-restricted-test:
+	@test/sandbox/egress-restricted.sh validate
+
+sandbox-egress-restricted-test-cleanup:
+	@test/sandbox/egress-restricted.sh cleanup
+
 # Every cluster-side e2e in sequence. Each script accepts --no-cleanup;
 # this target opts out so the cluster is clean between scripts.
-e2e-tests: smoke-test snapshot-test clonestrategy-test local-roundtrip-test local-clone-identity-test b0-cross-node-tcp-test sandbox-tcp-receive-test sandbox-warm-checkout-test sandbox-hardening-test
+e2e-tests: smoke-test snapshot-test clonestrategy-test local-roundtrip-test local-clone-identity-test b0-cross-node-tcp-test sandbox-tcp-receive-test sandbox-warm-checkout-test sandbox-hardening-test sandbox-egress-restricted-test
 
 # Fast static check: every e2e script parses (bash -n). Catches
 # typos / unclosed quotes without needing a cluster. Designed to run
