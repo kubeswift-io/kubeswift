@@ -101,6 +101,24 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+              identity:
+                description: |-
+                  Identity is the workload identity of the pool's sandboxes (SPIFFE). A
+                  warm slot holds no sandbox identity until a sandbox claims it.
+                properties:
+                  spiffe:
+                    description: |-
+                      SPIFFE gives the sandbox a SPIFFE ID,
+                      spiffe://<trust-domain>/ns/<namespace>/pool/<pool>/sandbox/<name> (without
+                      the pool segment when the sandbox has no poolRef). The egress proxy or
+                      the built-in broker holds the SVID; the guest never sees it. Disabled
+                      when unset. Not available yet: Enabled is refused until the identity
+                      runtime ships.
+                    enum:
+                    - Enabled
+                    - Disabled
+                    type: string
+                type: object
               image:
                 description: |-
                   Image is the OCI image every warm slot boots as its root filesystem. A digest
@@ -199,13 +217,14 @@ spec:
               network:
                 description: |-
                   Network is the slot networking posture (default restricted), the same modes as
-                  SwiftSandbox: restricted | open | none.
+                  SwiftSandbox: restricted | open | none | proxied.
                 properties:
                   egress:
                     description: |-
                       Egress lets a restricted sandbox reach destinations the restricted mode
-                      blocks, such as one in-cluster Service, without opening everything.
-                      Only valid with mode restricted.
+                      blocks, such as one in-cluster Service, without opening everything. In
+                      mode proxied it is the guest's allowlist, enforced by the egress proxy.
+                      Only valid with mode restricted or proxied.
                     properties:
                       allow:
                         description: |-
@@ -218,12 +237,23 @@ spec:
                           keeps the sandbox Pending (EgressServiceReachesNode).
                         items:
                           description: |-
-                            SandboxEgressRule allows one destination: a Service or an IPv4 CIDR,
-                            optionally narrowed to ports. Exactly one of service and cidr is set.
+                            SandboxEgressRule allows one destination: a Service, an IPv4 CIDR or (mode
+                            proxied only) a DNS name, optionally narrowed to ports. Exactly one of
+                            service, cidr and host is set.
                           properties:
                             cidr:
                               description: CIDR allows an IPv4 range, e.g. 10.20.0.0/24
                                 or 10.20.0.5/32.
+                              type: string
+                            host:
+                              description: |-
+                                Host allows a DNS name, e.g. api.example.com, or every name under a
+                                domain with a leading "*." (*.example.com matches a.example.com and
+                                a.b.example.com, not example.com). The proxy matches it against the TLS
+                                server name or the HTTP Host of each connection and requires the
+                                connection's destination to be an address the name resolves to. TCP
+                                only. Only valid with mode proxied, and not in proxy.upstreams.
+                              maxLength: 253
                               type: string
                             ports:
                               description: |-
@@ -271,10 +301,440 @@ spec:
                               required:
                               - name
                               type: object
+                            tls:
+                              description: |-
+                                TLS asks the proxy to originate TLS to this destination: the guest
+                                connects in plaintext and the proxy connects over TLS presenting the
+                                sandbox's SPIFFE X.509-SVID. Needs mode proxied and
+                                spec.identity.spiffe Enabled.
+                              properties:
+                                originate:
+                                  description: |-
+                                    Originate is the client identity the proxy presents. SPIFFE is the
+                                    only value.
+                                  enum:
+                                  - SPIFFE
+                                  type: string
+                              required:
+                              - originate
+                              type: object
                           type: object
                         maxItems: 32
                         type: array
                         x-kubernetes-list-type: atomic
+                      credentials:
+                        description: |-
+                          Credentials keeps secret values out of the guest. The guest sees each
+                          as an environment variable holding a placeholder; the proxy replaces the
+                          placeholder with the Secret's value in the named header of requests to
+                          the listed destinations, after terminating TLS with a certificate
+                          authority generated for the launcher, which the guest is made to trust.
+                          The value is never written into the guest. Needs mode proxied and a
+                          proxy preset with config Intent.
+                        items:
+                          description: |-
+                            SandboxEgressCredential is one secret the proxy adds to requests in place
+                            of a placeholder the guest holds.
+                          properties:
+                            destinations:
+                              description: |-
+                                Destinations are host or host:port (port 443 when omitted) the value is
+                                sent to. Each must be allowed by a host rule in allow. A request to any
+                                other destination that still contains the placeholder is refused.
+                              items:
+                                type: string
+                              maxItems: 16
+                              minItems: 1
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            header:
+                              description: |-
+                                Header is the request header the placeholder is replaced in.
+                                Default Authorization.
+                              maxLength: 128
+                              type: string
+                            name:
+                              description: Name of the guest environment variable
+                                that holds the placeholder.
+                              maxLength: 128
+                              minLength: 1
+                              type: string
+                            placeholder:
+                              description: |-
+                                Placeholder is the value the guest sees. Generated when unset: per pool
+                                for a pool, per sandbox otherwise. 16 to 128 characters from
+                                [A-Za-z0-9._-].
+                              maxLength: 128
+                              type: string
+                            secretKeyRef:
+                              description: |-
+                                SecretKeyRef is the Secret key holding the real value, in the
+                                sandbox's namespace.
+                              properties:
+                                key:
+                                  description: The key of the secret to select from.  Must
+                                    be a valid secret key.
+                                  type: string
+                                name:
+                                  default: ""
+                                  description: |-
+                                    Name of the referent.
+                                    This field is effectively required, but due to backwards compatibility is
+                                    allowed to be empty. Instances of this type with an empty value here are
+                                    almost certainly wrong.
+                                    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                  type: string
+                                optional:
+                                  description: Specify whether the Secret or its key
+                                    must be defined
+                                  type: boolean
+                              required:
+                              - key
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            valueTemplate:
+                              description: |-
+                                ValueTemplate is the header value, with {} standing for the secret
+                                value. Default "Bearer {}" for Authorization, "{}" for any other header.
+                              maxLength: 256
+                              type: string
+                          required:
+                          - destinations
+                          - name
+                          - secretKeyRef
+                          type: object
+                        maxItems: 16
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      proxy:
+                        description: |-
+                          Proxy selects the egress proxy of a proxied sandbox. Unset, the built-in
+                          broker allows connections that match allow (by TLS server name or HTTP
+                          Host for host rules, by address for the others). Only valid with mode
+                          proxied.
+                        properties:
+                          args:
+                            description: Args for an image proxy.
+                            items:
+                              type: string
+                            maxItems: 64
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          config:
+                            description: |-
+                              Config is where the proxy gets its policy: Intent (the default for a
+                              preset) or Self (the default for an image).
+                            enum:
+                            - Self
+                            - Intent
+                            type: string
+                          env:
+                            description: |-
+                              Env for an image proxy. Secrets referenced here reach the proxy
+                              container only, never the guest.
+                            items:
+                              description: EnvVar represents an environment variable
+                                present in a Container.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name of the environment variable.
+                                    May consist of any printable ASCII characters except '='.
+                                  type: string
+                                value:
+                                  description: |-
+                                    Variable references $(VAR_NAME) are expanded
+                                    using the previously defined environment variables in the container and
+                                    any service environment variables. If a variable cannot be resolved,
+                                    the reference in the input string will be unchanged. Double $$ are reduced
+                                    to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e.
+                                    "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)".
+                                    Escaped references will never be expanded, regardless of whether the variable
+                                    exists or not.
+                                    Defaults to "".
+                                  type: string
+                                valueFrom:
+                                  description: Source for the environment variable's
+                                    value. Cannot be used if value is not empty.
+                                  properties:
+                                    configMapKeyRef:
+                                      description: Selects a key of a ConfigMap.
+                                      properties:
+                                        key:
+                                          description: |-
+                                            The key to select from the ConfigMap's Data field.
+                                            Keys in the BinaryData field are not currently propagated to container env vars.
+                                          type: string
+                                        name:
+                                          default: ""
+                                          description: |-
+                                            Name of the referent.
+                                            This field is effectively required, but due to backwards compatibility is
+                                            allowed to be empty. Instances of this type with an empty value here are
+                                            almost certainly wrong.
+                                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                          type: string
+                                        optional:
+                                          description: Specify whether the ConfigMap
+                                            or its key must be defined
+                                          type: boolean
+                                      required:
+                                      - key
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                    fieldRef:
+                                      description: |-
+                                        Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
+                                        spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.
+                                      properties:
+                                        apiVersion:
+                                          description: Version of the schema the FieldPath
+                                            is written in terms of, defaults to "v1".
+                                          type: string
+                                        fieldPath:
+                                          description: Path of the field to select
+                                            in the specified API version.
+                                          type: string
+                                      required:
+                                      - fieldPath
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                    fileKeyRef:
+                                      description: |-
+                                        FileKeyRef selects a key of the env file.
+                                        Requires the EnvFiles feature gate to be enabled.
+                                      properties:
+                                        key:
+                                          description: |-
+                                            The key within the env file. An invalid key will prevent the pod from starting.
+                                            The keys defined within a source may consist of any printable ASCII characters except '='.
+                                            During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.
+                                          type: string
+                                        optional:
+                                          default: false
+                                          description: |-
+                                            Specify whether the file or its key must be defined. If the file or key
+                                            does not exist, then the env var is not published.
+                                            If optional is set to true and the specified key does not exist,
+                                            the environment variable will not be set in the Pod's containers.
+
+                                            If optional is set to false and the specified key does not exist,
+                                            an error will be returned during Pod creation.
+                                          type: boolean
+                                        path:
+                                          description: |-
+                                            The path within the volume from which to select the file.
+                                            Must be relative and may not contain the '..' path or start with '..'.
+                                          type: string
+                                        volumeName:
+                                          description: The name of the volume mount
+                                            containing the env file.
+                                          type: string
+                                      required:
+                                      - key
+                                      - path
+                                      - volumeName
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                    resourceFieldRef:
+                                      description: |-
+                                        Selects a resource of the container: only resources limits and requests
+                                        (limits.cpu, limits.memory, limits.ephemeral-storage, requests.cpu, requests.memory and requests.ephemeral-storage) are currently supported.
+                                      properties:
+                                        containerName:
+                                          description: 'Container name: required for
+                                            volumes, optional for env vars'
+                                          type: string
+                                        divisor:
+                                          anyOf:
+                                          - type: integer
+                                          - type: string
+                                          description: Specifies the output format
+                                            of the exposed resources, defaults to
+                                            "1"
+                                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                          x-kubernetes-int-or-string: true
+                                        resource:
+                                          description: 'Required: resource to select'
+                                          type: string
+                                      required:
+                                      - resource
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                    secretKeyRef:
+                                      description: Selects a key of a secret in the
+                                        pod's namespace
+                                      properties:
+                                        key:
+                                          description: The key of the secret to select
+                                            from.  Must be a valid secret key.
+                                          type: string
+                                        name:
+                                          default: ""
+                                          description: |-
+                                            Name of the referent.
+                                            This field is effectively required, but due to backwards compatibility is
+                                            allowed to be empty. Instances of this type with an empty value here are
+                                            almost certainly wrong.
+                                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                          type: string
+                                        optional:
+                                          description: Specify whether the Secret
+                                            or its key must be defined
+                                          type: boolean
+                                      required:
+                                      - key
+                                      type: object
+                                      x-kubernetes-map-type: atomic
+                                  type: object
+                              required:
+                              - name
+                              type: object
+                            maxItems: 64
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          image:
+                            description: |-
+                              Image is a proxy image the administrator allows
+                              (sandboxProxy.allowedImages). Needs listeners.
+                            type: string
+                          listeners:
+                            description: |-
+                              Listeners are the proxy's ports. Required with image; a preset supplies
+                              them.
+                            properties:
+                              dns:
+                                description: |-
+                                  DNS, when set, receives every guest DNS query. Unset, the launcher
+                                  answers only names the allowlist permits.
+                                format: int32
+                                maximum: 65535
+                                minimum: 1024
+                                type: integer
+                              http:
+                                description: |-
+                                  HTTP, when set, is an explicit HTTP proxy port: the guest gets
+                                  HTTP_PROXY, HTTPS_PROXY and NO_PROXY pointing at it. Connections that
+                                  ignore them still reach the transparent listener.
+                                format: int32
+                                maximum: 65535
+                                minimum: 1024
+                                type: integer
+                              transparent:
+                                description: |-
+                                  Transparent receives every guest TCP connection; the original
+                                  destination is read with SO_ORIGINAL_DST.
+                                format: int32
+                                maximum: 65535
+                                minimum: 1024
+                                type: integer
+                            required:
+                            - transparent
+                            type: object
+                          preset:
+                            description: |-
+                              Preset names a proxy the administrator configured in the chart (for
+                              example envoy or agentgateway): image, translator and listeners. Exactly
+                              one of preset and image is set.
+                            maxLength: 63
+                            type: string
+                          upstreams:
+                            description: |-
+                              Upstreams are what the proxy itself may connect to, in addition to
+                              cluster DNS and the public internet; same rules as allow, without host
+                              and tls. A Service in front of a node or the API server keeps the
+                              sandbox Pending (EgressServiceReachesNode).
+                            items:
+                              description: |-
+                                SandboxEgressRule allows one destination: a Service, an IPv4 CIDR or (mode
+                                proxied only) a DNS name, optionally narrowed to ports. Exactly one of
+                                service, cidr and host is set.
+                              properties:
+                                cidr:
+                                  description: CIDR allows an IPv4 range, e.g. 10.20.0.0/24
+                                    or 10.20.0.5/32.
+                                  type: string
+                                host:
+                                  description: |-
+                                    Host allows a DNS name, e.g. api.example.com, or every name under a
+                                    domain with a leading "*." (*.example.com matches a.example.com and
+                                    a.b.example.com, not example.com). The proxy matches it against the TLS
+                                    server name or the HTTP Host of each connection and requires the
+                                    connection's destination to be an address the name resolves to. TCP
+                                    only. Only valid with mode proxied, and not in proxy.upstreams.
+                                  maxLength: 253
+                                  type: string
+                                ports:
+                                  description: |-
+                                    Ports narrows the rule. Empty allows every port: for a Service, every
+                                    port the Service declares; for a CIDR, any port and protocol.
+                                  items:
+                                    description: SandboxEgressPort is one allowed
+                                      destination port.
+                                    properties:
+                                      port:
+                                        description: Port number. For a Service, a
+                                          port the Service declares.
+                                        format: int32
+                                        maximum: 65535
+                                        minimum: 1
+                                        type: integer
+                                      protocol:
+                                        default: TCP
+                                        description: Protocol is TCP (default) or
+                                          UDP.
+                                        enum:
+                                        - TCP
+                                        - UDP
+                                        type: string
+                                    required:
+                                    - port
+                                    type: object
+                                  maxItems: 16
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                service:
+                                  description: |-
+                                    Service allows the ClusterIP of a Service. It is resolved when the
+                                    sandbox's launcher is created (for a pool, each time the pool reconciles:
+                                    warm slots holding an older address are replaced). A Service that is
+                                    missing, headless or has no IPv4 ClusterIP keeps the sandbox Pending.
+                                  properties:
+                                    name:
+                                      description: Name of the Service.
+                                      minLength: 1
+                                      type: string
+                                    namespace:
+                                      description: Namespace of the Service; defaults
+                                        to the sandbox's.
+                                      type: string
+                                  required:
+                                  - name
+                                  type: object
+                                tls:
+                                  description: |-
+                                    TLS asks the proxy to originate TLS to this destination: the guest
+                                    connects in plaintext and the proxy connects over TLS presenting the
+                                    sandbox's SPIFFE X.509-SVID. Needs mode proxied and
+                                    spec.identity.spiffe Enabled.
+                                  properties:
+                                    originate:
+                                      description: |-
+                                        Originate is the client identity the proxy presents. SPIFFE is the
+                                        only value.
+                                      enum:
+                                      - SPIFFE
+                                      type: string
+                                  required:
+                                  - originate
+                                  type: object
+                              type: object
+                            maxItems: 32
+                            type: array
+                            x-kubernetes-list-type: atomic
+                        type: object
                     type: object
                   ingress:
                     description: Ingress narrows who may reach Ports. Without it,
@@ -422,11 +882,13 @@ spec:
                     type: object
                   mode:
                     default: restricted
-                    description: Mode is "restricted" (default), "open", or "none".
+                    description: Mode is "restricted" (default), "open", "none" or
+                      "proxied".
                     enum:
                     - restricted
                     - open
                     - none
+                    - proxied
                     type: string
                   ports:
                     description: |-

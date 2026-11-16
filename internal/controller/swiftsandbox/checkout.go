@@ -162,6 +162,9 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		if err := sandboxwebhook.ValidateArtifacts(&sb.Spec); err != nil {
 			return r.fail(ctx, sb, "InvalidArtifacts", err.Error())
 		}
+		if err := sandboxwebhook.ValidateIdentity(sb.Spec.Identity, sb.Spec.Network); err != nil {
+			return r.fail(ctx, sb, "InvalidIdentity", err.Error())
+		}
 		// Missing Secrets: wait without holding a slot.
 		if reason, msg, err := checkSecretEnv(ctx, r.APIReader, sb); err != nil {
 			return ctrl.Result{}, err

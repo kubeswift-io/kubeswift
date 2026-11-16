@@ -1,0 +1,19 @@
+{
+  "apiVersion": "egress-intent.kubeswift.io/v1",
+  "kind": "EgressIntent",
+  "owner": {"namespace": "team-a", "kind": "SwiftSandboxPool", "name": "agents"},
+  "listeners": {"transparent": 15001, "http": 15002},
+  "allow": [
+    {"host": "api.example.com", "ports": [{"port": 443, "protocol": "TCP"}], "from": "host api.example.com"},
+    {"host": "*.githubusercontent.com", "ports": [{"port": 443, "protocol": "TCP"}], "from": "host *.githubusercontent.com"},
+    {"cidr": "10.96.14.7/32", "ports": [{"port": 8080, "protocol": "TCP"}], "from": "service ai/llm-gateway"},
+    {"cidr": "10.96.20.9/32", "ports": [{"port": 80, "protocol": "TCP"}], "tls": {"originate": "SPIFFE"}, "from": "service ai/billing"}
+  ],
+  "credentials": [
+    {"name": "API_KEY", "placeholder": "ks-0123456789abcdef0123456789abcdef",
+     "destinations": ["api.example.com:443"], "header": "Authorization", "valueTemplate": "Bearer {}",
+     "file": "/run/kubeswift/egress/credentials/API_KEY"}
+  ],
+  "tls": {"interceptCA": {"cert": "/run/kubeswift/egress/ca/ca.crt", "key": "/run/kubeswift/egress/ca/ca.key"}},
+  "identity": {"spiffe": {"workloadAPISocket": "unix:///run/spiffe/agent.sock"}}
+}

@@ -30,6 +30,7 @@ import (
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/namespaces"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
+	sandboxwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsandbox"
 )
 
 const (
@@ -228,6 +229,11 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	egress, egressWait, err := resolveEgress(ctx, r.APIReader, pool.Namespace, pool.Spec.Network)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if egressWait == nil {
+		if err := sandboxwebhook.ValidateIdentity(pool.Spec.Identity, pool.Spec.Network); err != nil {
+			egressWait = &egressProblem{Reason: "InvalidIdentity", Message: err.Error(), Invalid: true}
+		}
 	}
 	egressNow := egressAllowedJSON(egress)
 
