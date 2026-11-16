@@ -6,14 +6,25 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.25.1] — 2026-11-16
+
+Security patch for v0.25.0's `restricted` sandbox egress: a Service in front of a node or the API server could be used to reach them (#953). Also acceptance tests for the v0.25.0 sandbox hardening (#952) and dependency updates.
+
 ### Upgrade
 
+- **CRDs changed (descriptions only): apply `crds/` before `helm upgrade`.** `swiftsandboxes` and `swiftsandboxpools` (`network.egress.allow` description). No new field, no new CRD (21).
+- No chart values change. Template: the controller's ClusterRole (below).
 - **`restricted` sandboxes can no longer reach Services whose endpoints are node or API server addresses**, such as the `kubernetes` Service or a hostNetwork ingress controller's Services, by ClusterIP, external IP or load-balancer IP. A `service` allow rule naming one now keeps the sandbox (or pool) Pending with `EgressServiceReachesNode`. Running sandboxes and warm slots pick up the new deny list within about two minutes.
 - The controller now lists and watches EndpointSlices cluster-wide (it read only `default/kubernetes`); the chart's ClusterRole carries the change.
 
 ### Security
 
 - **v0.25.0's `restricted` egress block on node and API server addresses could be bypassed through a Service.** The launcher's rules see a packet's destination before kube-proxy translates it on the node, so a Service in front of a node or the API server reached them: allowed by name or by ClusterIP, or through an external IP or load-balancer IP, which `restricted` treats as public. The controller now adds the ClusterIPs, external IPs and load-balancer IPs of every Service with an endpoint on a node, API server or `restrictedEgressDeny` address to the deny list (recomputed every 30 s, so a Service repointed later is blocked within the same window as a new node), and a `service` allow rule naming such a Service waits instead of resolving. DNS to the cluster resolver is unaffected.
+
+### Changed
+
+- Dependencies: kube-rs 5.1.0 (#948); Go modules `golang.org/x/{crypto,sys,term,text,oauth2,sync,mod}`, `klauspost/compress` 1.20.4, `prometheus/common` 0.74.0 and others (#950); swiftletd built with Rust 1.100.0; refreshed `distroless/static` and `alpine:3.24` base image digests (#951); `azure/setup-helm` 5.1.0 in the release workflows (#949).
+- New acceptance tests `make sandbox-hardening-test` (Landlock, VM Generation ID, nested virtualization default, launcher requests, run-as-user, `runAsNonRoot`, nono inside a sandbox; part of `make e2e-tests`) and `make sandbox-gpu-test` (memory snapshot refused for a GPU sandbox, which keeps running; needs a GPU node) (#952).
 
 ## [v0.25.0] — 2026-11-15
 
