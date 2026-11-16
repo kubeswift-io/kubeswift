@@ -160,6 +160,15 @@ addresses. An administrator adds more with the chart value
   closes.
 - These come before `network.egress.allow`: a tenant cannot allow a node or
   the API server.
+- So are the addresses of any Service with an endpoint on one of them: its
+  ClusterIPs, `externalIPs` and load-balancer IPs. That covers the
+  `kubernetes` Service and, for example, a hostNetwork ingress controller's
+  Services. The launcher sees a packet's destination before kube-proxy
+  translates it on the node, so these are blocked by address. A `service`
+  allow rule naming such a Service keeps the sandbox Pending
+  (`Resolved=False`, reason `EgressServiceReachesNode`). When a Service's
+  endpoints move onto such an address later, running sandboxes lose it
+  within the same refresh window.
 - DNS to the cluster resolver is still allowed, even on a node address.
 - Sandboxes created before the upgrade, and warm slots booted before it, keep
   their old rules until they are replaced.

@@ -174,3 +174,77 @@ func TestEgressDenyRefresher(t *testing.T) {
 		t.Errorf("a finished pod was patched: %q", got)
 	}
 }
+
+func svcSlice(ns, svc, name string, addrs ...string) *discoveryv1.EndpointSlice {
+	return &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: map[string]string{discoveryv1.LabelServiceName: svc}},
+		Endpoints:  []discoveryv1.Endpoint{{Addresses: addrs}},
+	}
+}
+
+// A Service with an endpoint on a denied address has every IPv4 frontend
+// denied: ClusterIPs, externalIPs, load-balancer IPs. Others are left alone.
+func TestForwardedFrontends(t *testing.T) {
+	deny := denyPrefixes("198.51.100.0/24 203.0.113.10/32")
+	fwd := corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "fwd", Namespace: "t"},
+		Spec: corev1.ServiceSpec{ClusterIP: "10.96.0.50", ClusterIPs: []string{"10.96.0.50", "fd00::50"},
+			ExternalIPs: []string{"192.0.2.7"}},
+		Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{Ingress: []corev1.LoadBalancerIngress{{IP: "192.0.2.8"}, {Hostname: "lb.example"}}}},
+	}
+	ranged := corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "ranged", Namespace: "t"}, Spec: corev1.ServiceSpec{ClusterIP: "10.96.0.51"}}
+	ok := corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "ok", Namespace: "t"}, Spec: corev1.ServiceSpec{ClusterIP: "10.96.0.52"}}
+	other := corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "fwd", Namespace: "elsewhere"}, Spec: corev1.ServiceSpec{ClusterIP: "10.96.0.53"}}
+	slices := []discoveryv1.EndpointSlice{
+		*svcSlice("t", "fwd", "fwd-a", "10.244.1.5"),
+		*svcSlice("t", "fwd", "fwd-b", "203.0.113.10"),
+		*svcSlice("t", "ranged", "ranged-a", "198.51.100.9"),
+		*svcSlice("t", "ok", "ok-a", "10.244.1.6", "fd00::6"),
+	}
+	got := forwardedFrontends([]corev1.Service{fwd, ranged, ok, other}, slices, deny)
+	want := []string{"10.96.0.50/32", "192.0.2.7/32", "192.0.2.8/32", "10.96.0.51/32"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if got := forwardedFrontends([]corev1.Service{fwd}, slices, nil); got != nil {
+		t.Errorf("empty deny list: got %v", got)
+	}
+	if got := mergeDeny("203.0.113.10/32", []string{"10.96.0.50/32", "203.0.113.10/32"}); got != "10.96.0.50/32 203.0.113.10/32" {
+		t.Errorf("mergeDeny = %q", got)
+	}
+}
+
+// The refresher denies the kubernetes Service's ClusterIP (its endpoints are
+// the API server) and a tenant Service pointed at a node.
+func TestEgressDenyRefresher_ForwardingServices(t *testing.T) {
+	t.Cleanup(func() { currentEgressDeny.Store(nil); currentEgressBase.Store(nil) })
+	n := addrNode("a", corev1.NodeAddress{Type: corev1.NodeInternalIP, Address: "203.0.113.10"})
+	api := svcSlice("default", "kubernetes", "kubernetes", "203.0.113.2")
+	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+		&n, api,
+		clusterIPService("default", "kubernetes", "10.96.0.1"),
+		clusterIPService("t", "kubelet-fwd", "10.96.0.50"),
+		svcSlice("t", "kubelet-fwd", "kubelet-fwd-1", "203.0.113.10"),
+		clusterIPService("t", "app", "10.96.0.60"),
+		svcSlice("t", "app", "app-1", "10.244.1.5"),
+		launcherPod("stale", "203.0.113.10/32 203.0.113.2/32", true, corev1.PodRunning),
+	).Build()
+	r := &EgressDenyRefresher{Client: c, APIReader: c}
+	if err := r.refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := "10.96.0.1/32 10.96.0.50/32 203.0.113.10/32 203.0.113.2/32"
+	if got := egressDenyValue(); got != want {
+		t.Errorf("list = %q, want %q", got, want)
+	}
+	p := &corev1.Pod{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: "stale"}, p); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Annotations[EgressDenyAnnotation]; got != want {
+		t.Errorf("pod not patched: %q", got)
+	}
+	if got := egressBase(); len(got) != 2 {
+		t.Errorf("base = %v, want the node and the API server only", got)
+	}
+}

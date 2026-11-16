@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -74,6 +75,14 @@ func resolveEgress(ctx context.Context, c client.Reader, ns string, n sandboxv1a
 		if len(ips) == 0 {
 			return nil, &egressProblem{Reason: "EgressServiceNoClusterIP", Message: at +
 				" has no IPv4 ClusterIP (headless, ExternalName or IPv6-only); allow its endpoints with a cidr instead"}, nil
+		}
+		var slices discoveryv1.EndpointSliceList
+		if err := c.List(ctx, &slices, client.InNamespace(svcNS), client.MatchingLabels{discoveryv1.LabelServiceName: r.Service.Name}); err != nil {
+			return nil, nil, err
+		}
+		if a := deniedAddress(slices.Items, egressBase()); a != "" {
+			return nil, &egressProblem{Reason: "EgressServiceReachesNode", Message: at + " has endpoint " + a +
+				", a node, API server or denied address, which a restricted sandbox never reaches"}, nil
 		}
 		ports, missing := servicePorts(&svc, r.Ports)
 		if missing != "" {

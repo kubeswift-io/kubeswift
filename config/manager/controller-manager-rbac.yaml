@@ -135,11 +135,12 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
-  # The API server's own endpoints, for the restricted-sandbox egress deny list
+  # The restricted-sandbox egress deny list: the API server's endpoints, and
+  # every Service's endpoints, to deny the addresses of Services in front of
+  # a node or the API server
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]
-    resourceNames: ["kubernetes"]
-    verbs: ["get"]
+    verbs: ["get", "list", "watch"]
   # SwiftSnapshot / SwiftRestore
   - apiGroups: ["snapshot.kubeswift.io"]
     resources: ["swiftsnapshots", "swiftsnapshots/status"]

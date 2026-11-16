@@ -314,3 +314,33 @@ func TestApplyGuestAnnotations_KeepsTheEgressAllowlist(t *testing.T) {
 		t.Errorf("status.network after the IP report = %+v", sb.Status.Network)
 	}
 }
+
+// An allow rule naming a Service with an endpoint on a node or API server
+// address waits instead of opening it; other Services resolve as before.
+func TestResolveEgress_ServiceInFrontOfANode(t *testing.T) {
+	base := denyPrefixes("203.0.113.2/32 203.0.113.10/32")
+	currentEgressBase.Store(&base)
+	t.Cleanup(func() { currentEgressBase.Store(nil) })
+	ctx := context.Background()
+	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+		clusterIPService("default", "kubernetes", "10.96.0.1", tcpPort(443)),
+		svcSlice("default", "kubernetes", "kubernetes", "203.0.113.2"),
+		clusterIPService("t", "kubelet-fwd", "10.96.0.50", tcpPort(10250)),
+		svcSlice("t", "kubelet-fwd", "kubelet-fwd-1", "10.244.1.9", "203.0.113.10"),
+		clusterIPService("t", "app", "10.96.0.60", tcpPort(80)),
+		svcSlice("t", "app", "app-1", "10.244.1.5"),
+	).Build()
+	for _, rule := range []sandboxv1alpha1.SandboxEgressRule{allowSvc("kubernetes", "default"), allowSvc("kubelet-fwd", "")} {
+		_, problem, err := resolveEgress(ctx, c, "t", egressNet(rule))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if problem == nil || problem.Reason != "EgressServiceReachesNode" || problem.Invalid {
+			t.Fatalf("%s: problem = %+v, want a wait with EgressServiceReachesNode", rule.Service.Name, problem)
+		}
+	}
+	got, problem, err := resolveEgress(ctx, c, "t", egressNet(allowSvc("app", "")))
+	if err != nil || problem != nil || len(got) != 1 || got[0].CIDR != "10.96.0.60/32" {
+		t.Errorf("app: %v %+v %v", got, problem, err)
+	}
+}

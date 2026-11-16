@@ -6,6 +6,15 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Upgrade
+
+- **`restricted` sandboxes can no longer reach Services whose endpoints are node or API server addresses**, such as the `kubernetes` Service or a hostNetwork ingress controller's Services, by ClusterIP, external IP or load-balancer IP. A `service` allow rule naming one now keeps the sandbox (or pool) Pending with `EgressServiceReachesNode`. Running sandboxes and warm slots pick up the new deny list within about two minutes.
+- The controller now lists and watches EndpointSlices cluster-wide (it read only `default/kubernetes`); the chart's ClusterRole carries the change.
+
+### Security
+
+- **v0.25.0's `restricted` egress block on node and API server addresses could be bypassed through a Service.** The launcher's rules see a packet's destination before kube-proxy translates it on the node, so a Service in front of a node or the API server reached them: allowed by name or by ClusterIP, or through an external IP or load-balancer IP, which `restricted` treats as public. The controller now adds the ClusterIPs, external IPs and load-balancer IPs of every Service with an endpoint on a node, API server or `restrictedEgressDeny` address to the deny list (recomputed every 30 s, so a Service repointed later is blocked within the same window as a new node), and a `service` allow rule naming such a Service waits instead of resolving. DNS to the cluster resolver is unaffected.
+
 ## [v0.25.0] — 2026-11-15
 
 Sandbox hardening for running agents and other untrusted code. A sandbox workload runs as its image's `USER` or `spec.securityContext` (#940), `restricted` egress also blocks node addresses and the API server (#941), nested virtualization is off for sandboxes unless enabled (#942), and sandbox launcher pods request their guest's memory and CPU so the scheduler counts them (#943, #944). New sandbox kernels add Landlock and VM Generation ID (#938) and a GPU module ABI guard (#939). swiftletd refuses a memory snapshot of a VM with a passed-through device (#945).

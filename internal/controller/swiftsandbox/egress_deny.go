@@ -28,7 +28,11 @@ import (
 // endpoint addresses (on a distribution whose control plane is not a Node,
 // blocking node addresses alone leaves :6443 open), and an admin-set list
 // (chart sandboxNetwork.restrictedDeny), and network-init drops them before
-// spec.network.egress.allow: a tenant cannot open them.
+// spec.network.egress.allow: a tenant cannot open them. The rules see a
+// packet's destination before kube-proxy translates it on the node, so the
+// list also holds the frontends (ClusterIPs, externalIPs, load-balancer IPs)
+// of every Service with an endpoint in that set, and an allow rule naming such
+// a Service waits (EgressServiceReachesNode).
 //
 // The list reaches the launcher as a pod annotation, exposed to network-init
 // and swiftletd as a downward-API file. network-init applies it at boot;
@@ -58,6 +62,20 @@ var ExtraEgressDeny []string
 
 // currentEgressDeny is the last computed list; nil until the first compute.
 var currentEgressDeny atomic.Pointer[string]
+
+// currentEgressBase is the last computed list without the forwarded Service
+// addresses: what a Service's endpoints must not be in. nil until the first
+// compute.
+var currentEgressBase atomic.Pointer[[]netip.Prefix]
+
+// egressBase is currentEgressBase, or the admin-set part alone before the
+// first compute.
+func egressBase() []netip.Prefix {
+	if v := currentEgressBase.Load(); v != nil {
+		return *v
+	}
+	return denyPrefixes(strings.Join(ExtraEgressDeny, " "))
+}
 
 // egressDenyValue is the list a new restricted launcher pod gets: the last
 // computed one, or the admin-set part alone before the first compute (the
@@ -131,6 +149,102 @@ func computeEgressDeny(nodes []corev1.Node, apiserver *discoveryv1.EndpointSlice
 	}
 	for _, e := range extra {
 		add(e)
+	}
+	out := make([]string, 0, len(set))
+	for p := range set {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return strings.Join(out, " ")
+}
+
+// denyPrefixes parses a computed list (space-separated, already normalized).
+func denyPrefixes(list string) []netip.Prefix {
+	var out []netip.Prefix
+	for _, f := range strings.Fields(list) {
+		if p, err := parseIPv4Prefix(f); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// deniedAddress returns the first IPv4 endpoint address of slices that falls
+// in deny, or "".
+func deniedAddress(slices []discoveryv1.EndpointSlice, deny []netip.Prefix) string {
+	for _, sl := range slices {
+		for _, e := range sl.Endpoints {
+			for _, a := range e.Addresses {
+				ip, err := netip.ParseAddr(a)
+				if err != nil || !ip.Is4() {
+					continue
+				}
+				for _, p := range deny {
+					if p.Contains(ip) {
+						return a
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// serviceFrontends is every IPv4 address a pod can send to that kube-proxy
+// forwards to the Service's endpoints: its ClusterIPs, spec.externalIPs and
+// load-balancer ingress IPs.
+func serviceFrontends(svc *corev1.Service) []string {
+	out := ipv4ClusterIPs(svc)
+	ips := append([]string{}, svc.Spec.ExternalIPs...)
+	for _, in := range svc.Status.LoadBalancer.Ingress {
+		ips = append(ips, in.IP)
+	}
+	for _, s := range ips {
+		if a, err := netip.ParseAddr(s); err == nil && a.Is4() {
+			out = append(out, a.String())
+		}
+	}
+	return out
+}
+
+// forwardedFrontends returns, as /32 CIDRs, the frontends of every Service
+// with an endpoint in deny. The launcher's rules see a packet's destination
+// before kube-proxy translates it on the node, so a Service in front of a
+// node or the API server would otherwise reach them: through an allowed
+// ClusterIP, or through an externalIP or load-balancer IP, which restricted
+// mode treats as public.
+func forwardedFrontends(svcs []corev1.Service, slices []discoveryv1.EndpointSlice, deny []netip.Prefix) []string {
+	if len(deny) == 0 {
+		return nil
+	}
+	byService := map[types.NamespacedName][]discoveryv1.EndpointSlice{}
+	for _, sl := range slices {
+		k := types.NamespacedName{Namespace: sl.Namespace, Name: sl.Labels[discoveryv1.LabelServiceName]}
+		byService[k] = append(byService[k], sl)
+	}
+	var out []string
+	for i := range svcs {
+		svc := &svcs[i]
+		if deniedAddress(byService[types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}], deny) == "" {
+			continue
+		}
+		for _, ip := range serviceFrontends(svc) {
+			out = append(out, ip+"/32")
+		}
+	}
+	return out
+}
+
+// mergeDeny adds extra CIDRs to a computed list, keeping it sorted and unique.
+func mergeDeny(list string, extra []string) string {
+	set := map[string]bool{}
+	for _, f := range strings.Fields(list) {
+		set[f] = true
+	}
+	for _, e := range extra {
+		if p, err := parseIPv4Prefix(e); err == nil {
+			set[p.String()] = true
+		}
 	}
 	out := make([]string, 0, len(set))
 	for p := range set {
@@ -225,10 +339,21 @@ func (r *EgressDenyRefresher) refresh(ctx context.Context) error {
 		// Keep the previous list rather than drop the API server from it.
 		return fmt.Errorf("get the API server EndpointSlice: %w", err)
 	}
-	want := computeEgressDeny(nodes.Items, slice, ExtraEgressDeny)
+	base := computeEgressDeny(nodes.Items, slice, ExtraEgressDeny)
+	basePrefixes := denyPrefixes(base)
+	var svcs corev1.ServiceList
+	if err := r.Client.List(ctx, &svcs); err != nil {
+		return fmt.Errorf("list services: %w", err)
+	}
+	var slices discoveryv1.EndpointSliceList
+	if err := r.Client.List(ctx, &slices, client.HasLabels{discoveryv1.LabelServiceName}); err != nil {
+		return fmt.Errorf("list endpointslices: %w", err)
+	}
+	want := mergeDeny(base, forwardedFrontends(svcs.Items, slices.Items, basePrefixes))
 	if old := currentEgressDeny.Load(); old == nil || *old != want {
 		klog.InfoS("egress deny list", "entries", len(strings.Fields(want)))
 	}
+	currentEgressBase.Store(&basePrefixes)
 	currentEgressDeny.Store(&want)
 
 	var pods corev1.PodList
