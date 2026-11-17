@@ -172,6 +172,11 @@ EOF
 	[ "$n" -eq 0 ] || die "the secret value is in guest RAM ($n)"
 	n=$(count "$keyline"); log "guest RAM: proxy leaf key $n"
 	[ "$n" -eq 0 ] || die "the proxy's private key is in guest RAM ($n)"
+	local audit
+	audit=$(kubectl -n "$NS" logs "$(pod_of cred)" -c egress-audit 2>&1 || true)
+	grep -qF '"kind":"credentials","event":"delivered"' <<<"$audit" || die "no credential delivery in the egress audit: $audit"
+	! grep -qF -- "$VALUE" <<<"$audit" || die "the secret value is in the egress audit"
+	log "egress audit records the delivery (names, hosts, serials), not the value"
 	kubectl -n "$NS" delete swiftsandbox cred --wait=false >/dev/null
 
 	# 3: warm pool and checkout.

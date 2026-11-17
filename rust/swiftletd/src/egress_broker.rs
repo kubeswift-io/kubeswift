@@ -559,11 +559,24 @@ pub fn spawn_if_proxied() -> Result<(), String> {
         let mut backoff = Duration::from_millis(500);
         loop {
             let started = std::time::Instant::now();
-            match Command::new(&exe).arg(SUBCOMMAND).uid(uid).gid(uid).spawn() {
-                Ok(mut child) => match child.wait() {
-                    Ok(st) => log::warn!("egress_broker_exited status={}", st),
-                    Err(e) => log::warn!("egress_broker_wait: {}", e),
-                },
+            // Its log comes back through a pipe: copied to this log and
+            // its decisions to the egress audit (audit.rs).
+            match Command::new(&exe)
+                .arg(SUBCOMMAND)
+                .uid(uid)
+                .gid(uid)
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+            {
+                Ok(mut child) => {
+                    if let Some(e) = child.stderr.take() {
+                        std::thread::spawn(move || crate::audit::follow_broker(e));
+                    }
+                    match child.wait() {
+                        Ok(st) => log::warn!("egress_broker_exited status={}", st),
+                        Err(e) => log::warn!("egress_broker_wait: {}", e),
+                    }
+                }
                 Err(e) => log::error!("egress_broker_spawn: {}", e),
             }
             if started.elapsed() > Duration::from_secs(30) {

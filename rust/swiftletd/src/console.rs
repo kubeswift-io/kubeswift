@@ -71,7 +71,7 @@ pub fn hold_alive() {
     }
 }
 
-fn hold_alive_in(dir: &Path) -> std::io::Result<()> {
+pub(crate) fn hold_alive_in(dir: &Path) -> std::io::Result<()> {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::create_dir_all(dir)?;

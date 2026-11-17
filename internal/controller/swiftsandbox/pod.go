@@ -716,6 +716,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		pod.Annotations[EgressUpstreamsAnnotation] = ups
 	}
 	addConsole(pod, consoleSerialLog)
+	addEgressAudit(pod, sb)
 	return pod
 }
 

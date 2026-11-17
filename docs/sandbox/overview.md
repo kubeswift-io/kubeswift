@@ -249,10 +249,10 @@ spec:
 
 - DNS answers only allowed names: each `host` (a `*.` rule as its domain) and
   the cluster name of each allowed Service. Every other name is answered as
-  not existing (NXDOMAIN), so the guest cannot send data out through DNS. The queries appear in the
-  launcher container's log.
-- A connection that matches nothing is closed. Each decision appears in the
-  launcher container's log (`egress_broker_allow`, `egress_broker_deny`).
+  not existing (NXDOMAIN), so the guest cannot send data out through DNS. The
+  queries are in the egress audit (below).
+- A connection that matches nothing is closed. Each decision is in the egress
+  audit.
 - A client that sends no name (an IP literal, a protocol other than TLS or
   HTTP/1) is matched only by `cidr` and `service` rules.
 - The broker runs under its own uid, and the kernel applies the `restricted`
@@ -264,6 +264,17 @@ spec:
   `network.ports`.
 - A broker that does not start fails the sandbox (`EgressBrokerFailed`) before
   the guest boots.
+- The egress audit is `kubectl logs <pod> -c egress-audit`: one JSON object
+  per line, with `time`, `kind` and `event`. `kind: dns` is the guest's DNS
+  queries (`query`, `reply`, and `blocked` for a name outside the allowlist);
+  `kind: connection` is the broker's decisions (`allow`, `deny`,
+  `connect-failed`, with peer, destination and the matching rule or reason);
+  `kind: credentials` is each delivery of egress credentials (names, hosts and
+  certificate serials, never a value). It comes from an unprivileged container
+  that reads one file the launcher writes, like the [console](console.md), so
+  it needs `get pods/log`, not exec. It is bounded at 16 MiB per launcher;
+  past that a `truncated` line ends it and the launcher log keeps the rest. An
+  egress proxy container's own access log is `-c egress-proxy`.
 - `proxy.listeners.http` is part of the API but refused in this release.
 
 #### Your own egress proxy

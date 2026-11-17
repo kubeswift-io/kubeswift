@@ -1112,6 +1112,16 @@ async fn dispatch_sandbox_exec(
             args.egress_credentials.len(),
             staged.len()
         );
+        crate::audit::record(
+            "credentials",
+            "delivered",
+            serde_json::json!({
+                "checkout": action.id,
+                "names": args.egress_credentials.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+                "hosts": spec.hosts,
+                "serials": m.serials(),
+            }),
+        );
         mounts.extend(staged);
     }
     // An older agent would ignore the identity and run the workload as root.

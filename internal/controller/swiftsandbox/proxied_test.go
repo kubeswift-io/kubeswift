@@ -287,3 +287,38 @@ func TestIntentVersionVerdict(t *testing.T) {
 		}
 	}
 }
+
+// A proxied launcher gets the egress-audit container, unprivileged, without
+// a token, the audit volume read-only; the launcher writes into it. Other
+// modes do not.
+func TestBuildPod_EgressAudit(t *testing.T) {
+	pod := buildPod(proxiedSandbox(), "sandbox")
+	var audit *corev1.Container
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == EgressAuditContainerName {
+			audit = &pod.Spec.Containers[i]
+		}
+	}
+	if audit == nil {
+		t.Fatal("no egress-audit container")
+	}
+	sc := audit.SecurityContext
+	if *sc.Privileged || !*sc.RunAsNonRoot || !*sc.ReadOnlyRootFilesystem || audit.Args[0] != "follow-console" || audit.Args[2] != egressAuditLog {
+		t.Errorf("egress-audit %+v %v", sc, audit.Args)
+	}
+	for _, m := range audit.VolumeMounts {
+		if m.Name == egressAuditVolume && !m.ReadOnly {
+			t.Error("the audit volume must be read-only in egress-audit")
+		}
+	}
+	if env := containerEnv(pod.Spec.Containers, launcherName); env["KUBESWIFT_EGRESS_AUDIT_DIR"] != egressAuditDir {
+		t.Errorf("launcher env %v", env)
+	}
+	plain := plainSandbox("busybox:1")
+	plain.Spec.Network = sandboxv1alpha1.SandboxNetwork{Mode: sandboxv1alpha1.SandboxNetworkRestricted}
+	for _, c := range buildPod(plain, "sandbox").Spec.Containers {
+		if c.Name == EgressAuditContainerName {
+			t.Error("a restricted sandbox has an egress-audit container")
+		}
+	}
+}
