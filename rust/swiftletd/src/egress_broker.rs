@@ -641,30 +641,50 @@ fn wait_for_proxy() -> Result<(), String> {
 }
 
 /// Whether something listens on TCP `port` in this network namespace.
+/// IPv6 too: a proxy that binds the dual-stack wildcard (`::`, busybox nc
+/// and many others) accepts the redirected IPv4 connections but shows only
+/// in tcp6.
 fn listening(port: u16) -> bool {
-    socket_in("/proc/net/tcp", port, Some("0A"))
+    socket_in("/proc/net/tcp", port, Some("0A")) || socket_in("/proc/net/tcp6", port, Some("0A"))
 }
 
 /// Whether a UDP socket is bound to `port` in this network namespace.
 fn udp_bound(port: u16) -> bool {
-    socket_in("/proc/net/udp", port, None)
+    socket_in("/proc/net/udp", port, None) || socket_in("/proc/net/udp6", port, None)
 }
 
 fn socket_in(table: &str, port: u16, state: Option<&str>) -> bool {
-    let want = format!(":{:04X}", port);
     std::fs::read_to_string(table)
-        .map(|t| {
-            t.lines().skip(1).any(|l| {
-                let f: Vec<&str> = l.split_whitespace().collect();
-                f.len() > 3 && f[1].ends_with(&want) && state.map_or(true, |s| f[3] == s)
-            })
-        })
+        .map(|t| socket_in_text(&t, port, state))
         .unwrap_or(false)
+}
+
+fn socket_in_text(t: &str, port: u16, state: Option<&str>) -> bool {
+    let want = format!(":{:04X}", port);
+    t.lines().skip(1).any(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        f.len() > 3 && f[1].ends_with(&want) && state.is_none_or(|s| f[3] == s)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_listeners_in_ipv4_and_ipv6_tables() {
+        let v4 = "  sl  local_address rem_address   st\n   0: 00000000:3A9E 00000000:0000 0A 00000000:00000000\n";
+        let v6 = "  sl  local_address                         remote_address                        st\n   0: 00000000000000000000000000000000:3A9E 00000000000000000000000000000000:0000 0A 00000000:00000000\n";
+        assert!(socket_in_text(v4, 15006, Some("0A")));
+        assert!(socket_in_text(v6, 15006, Some("0A")));
+        assert!(!socket_in_text(v6, 15007, Some("0A")));
+        // An established socket on the port is not a listener.
+        assert!(!socket_in_text(
+            &v6.replace(" 0A ", " 01 "),
+            15006,
+            Some("0A")
+        ));
+    }
 
     fn client_hello(sni: &str) -> Vec<u8> {
         let name = sni.as_bytes();
