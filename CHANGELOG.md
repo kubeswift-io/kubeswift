@@ -6,6 +6,10 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **KubeSwift is now licensed under the Apache License, Version 2.0** (was AGPL-3.0), so it can be used and embedded by projects and vendors that cannot take a copyleft dependency. Earlier releases stay under AGPL-3.0. Contributions are accepted under Apache-2.0 with the DCO sign-off; see [CONTRIBUTING.md](CONTRIBUTING.md) and the new [MAINTAINERS.md](MAINTAINERS.md).
+
 ### Added
 
 - **Network mode `proxied` with a built-in egress broker.** The guest keeps its network card but nothing it sends is forwarded: every TCP connection goes to a broker in the launcher pod, which allows it by address (`cidr`, `service` rules) or by the TLS server name or HTTP `Host` (`host` rules, only to an address the name resolves to), and DNS resolves only allowed names (NXDOMAIN for the rest). The broker runs under its own uid, to which the kernel applies the `restricted` rules, so no allow rule reaches a node, the API server or the metadata endpoint. Decisions and DNS queries are in the launcher's log. Warm pools work. A broker that does not start fails the sandbox with `EgressBrokerFailed`. See [Mode proxied](docs/sandbox/overview.md#mode-proxied).
