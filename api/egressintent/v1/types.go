@@ -36,6 +36,18 @@ const Path = "/etc/kubeswift/egress/intent.json"
 // reads, comma-separated (for example "v1").
 const ImageLabel = "io.kubeswift.egress-intent.versions"
 
+// FeaturesLabel on the same image lists optional parts of v1 it implements,
+// comma-separated. KubeSwift writes an optional part only for an image that
+// declares it, and refuses a sandbox that needs one its image lacks
+// (EgressIntentUnsupported), rather than have it ignored.
+const FeaturesLabel = "io.kubeswift.egress-intent.features"
+
+// FeatureTLSOriginate: Rule.TLS. The proxy connects to the rule's
+// destinations over TLS presenting the X.509-SVID from Identity.SPIFFE and
+// accepts only an upstream SVID of the same trust domain; the guest speaks
+// plaintext (for a host rule, HTTP, matched by its Host header).
+const FeatureTLSOriginate = "tls-originate"
+
 // EgressIntent is the whole file.
 type EgressIntent struct {
 	// APIVersion is APIVersion.

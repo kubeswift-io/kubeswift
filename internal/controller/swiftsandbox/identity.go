@@ -133,9 +133,30 @@ func addSPIFFE(pod *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox) {
 // broker, in the formats of KUBESWIFT_SANDBOX_EGRESS_ALLOW (the resolved
 // cidr and service entries of those rules) and KUBESWIFT_SANDBOX_EGRESS_HOSTS.
 func brokerTLSEnv(sb *sandboxv1alpha1.SwiftSandbox) []corev1.EnvVar {
+	from, hosts := tlsRules(sb)
+	var tls []sandboxv1alpha1.SandboxEgressAllowed
+	for _, a := range egressAllowed(sb) {
+		if from[a.From] {
+			tls = append(tls, a)
+		}
+	}
+	var out []corev1.EnvVar
+	if v := egressAllowEnv(tls); v != "" {
+		out = append(out, corev1.EnvVar{Name: "KUBESWIFT_EGRESS_BROKER_TLS_ALLOW", Value: v})
+	}
+	if len(hosts) > 0 {
+		out = append(out, corev1.EnvVar{Name: "KUBESWIFT_EGRESS_BROKER_TLS_HOSTS", Value: strings.Join(hosts, " ")})
+	}
+	return out
+}
+
+// tlsRules are the allow rules with tls.originate: the From labels of the
+// cidr and service rules among them (as on their resolved entries) and the
+// host rules as "<host>,<port>" (0: every port), sorted.
+func tlsRules(sb *sandboxv1alpha1.SwiftSandbox) (map[string]bool, []string) {
 	e := sb.Spec.Network.Egress
 	if e == nil {
-		return nil
+		return nil, nil
 	}
 	from := map[string]bool{}
 	var hosts []string
@@ -163,19 +184,6 @@ func brokerTLSEnv(sb *sandboxv1alpha1.SwiftSandbox) []corev1.EnvVar {
 			from["service "+ns+"/"+r.Service.Name] = true
 		}
 	}
-	var tls []sandboxv1alpha1.SandboxEgressAllowed
-	for _, a := range egressAllowed(sb) {
-		if from[a.From] {
-			tls = append(tls, a)
-		}
-	}
-	var out []corev1.EnvVar
-	if v := egressAllowEnv(tls); v != "" {
-		out = append(out, corev1.EnvVar{Name: "KUBESWIFT_EGRESS_BROKER_TLS_ALLOW", Value: v})
-	}
-	if len(hosts) > 0 {
-		sort.Strings(hosts)
-		out = append(out, corev1.EnvVar{Name: "KUBESWIFT_EGRESS_BROKER_TLS_HOSTS", Value: strings.Join(hosts, " ")})
-	}
-	return out
+	sort.Strings(hosts)
+	return from, hosts
 }

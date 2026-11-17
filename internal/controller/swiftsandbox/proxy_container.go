@@ -129,6 +129,30 @@ func proxyKey(n sandboxv1alpha1.SandboxNetwork) string {
 	return string(b)
 }
 
+// intentFeatures are the optional parts of v1 the sandbox's intent file uses.
+func intentFeatures(sb *sandboxv1alpha1.SwiftSandbox) []string {
+	if froms, hosts := tlsRules(sb); len(froms) > 0 || len(hosts) > 0 {
+		return []string{egressintentv1.FeatureTLSOriginate}
+	}
+	return nil
+}
+
+// intentFeatureVerdict refuses an intent reader that does not declare a
+// feature the sandbox's intent uses (FeaturesLabel).
+func intentFeatureVerdict(image string, labels map[string]string, sb *sandboxv1alpha1.SwiftSandbox) (reason, msg string) {
+	have := map[string]bool{}
+	for _, f := range strings.Split(labels[egressintentv1.FeaturesLabel], ",") {
+		have[strings.TrimSpace(f)] = true
+	}
+	for _, f := range intentFeatures(sb) {
+		if !have[f] {
+			return reasonEgressIntentUnsupported, "egress proxy image " + image + " does not list " + f + " in its " +
+				egressintentv1.FeaturesLabel + " label, which spec.network.egress.allow[].tls needs"
+		}
+	}
+	return "", ""
+}
+
 // egressIntentJSON is the egress-intent.kubeswift.io/v1 file for the proxy:
 // the guest's allowlist (host rules as written, cidr and service rules as
 // resolved) and the listeners. ownerKind/ownerName name the pool for a warm
@@ -149,12 +173,16 @@ func egressIntentJSON(sb *sandboxv1alpha1.SwiftSandbox, ownerKind, ownerName str
 			continue
 		}
 		rule := egressintentv1.Rule{Host: r.Host, From: "host " + r.Host}
+		if r.TLS != nil {
+			rule.TLS = &egressintentv1.RuleTLS{Originate: string(r.TLS.Originate)}
+		}
 		for _, pt := range r.Ports {
 			rule.Ports = append(rule.Ports, egressintentv1.Port{Port: pt.Port, Protocol: string(corev1.ProtocolTCP)})
 		}
 		in.Allow = append(in.Allow, rule)
 	}
 	// Resolved cidr and service rules, one per address, ports merged.
+	tlsFrom, _ := tlsRules(sb)
 	byCIDR := map[string]int{}
 	for _, a := range egressAllowed(sb) {
 		key := a.CIDR + " " + a.From
@@ -162,6 +190,9 @@ func egressIntentJSON(sb *sandboxv1alpha1.SwiftSandbox, ownerKind, ownerName str
 		if !seen {
 			in.Allow = append(in.Allow, egressintentv1.Rule{CIDR: a.CIDR, From: a.From})
 			i = len(in.Allow) - 1
+			if tlsFrom[a.From] {
+				in.Allow[i].TLS = &egressintentv1.RuleTLS{Originate: string(sandboxv1alpha1.SandboxEgressTLSSPIFFE)}
+			}
 			byCIDR[key] = i
 		}
 		if a.Port != 0 {
@@ -306,11 +337,11 @@ func intentReaderRequest(sb *sandboxv1alpha1.SwiftSandbox) (req resolveRequest, 
 
 // intentVersionVerdict refuses an intent reader whose label does not list
 // the version KubeSwift writes; "" when it does.
-func intentVersionVerdict(image string, labels map[string]string) (reason, msg string) {
+func intentVersionVerdict(image string, labels map[string]string, sb *sandboxv1alpha1.SwiftSandbox) (reason, msg string) {
 	declared := labels[egressintentv1.ImageLabel]
 	for _, v := range strings.Split(declared, ",") {
 		if strings.TrimSpace(v) == "v1" {
-			return "", ""
+			return intentFeatureVerdict(image, labels, sb)
 		}
 	}
 	if declared == "" {

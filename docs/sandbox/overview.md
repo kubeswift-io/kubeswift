@@ -542,7 +542,12 @@ Requirements:
 - Network mode `proxied`. With an egress proxy (an image or a preset) the
   proxy gets `SPIFFE_ENDPOINT_SOCKET` and the socket under `/run/spiffe`, and
   with config `Intent` the egress-intent file's `identity.spiffe` (`id`,
-  `workloadAPISocket`); `allow[].tls` is refused there (configure the proxy).
+  `workloadAPISocket`). With config `Intent`, `allow[].tls` rules reach the
+  intent file as `rule.tls`, and the intent reader image (the preset's
+  translator) must list `tls-originate` in its
+  `io.kubeswift.egress-intent.features` label, or the sandbox fails with
+  `EgressIntentUnsupported` (envoy-translator v0.3.0 and later). A `Self`
+  proxy refuses `allow[].tls` (configure the proxy).
   Without one, the launcher's built-in broker gets them and originates TLS for
   `allow[].tls` rules. A TLS connection waits up to 10 s for the first SVID,
   then fails (`connect-failed`, `no-svid` in the egress audit).

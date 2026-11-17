@@ -277,14 +277,14 @@ func TestProxyKey_PresetDefinition(t *testing.T) {
 }
 
 func TestIntentVersionVerdict(t *testing.T) {
-	if r, _ := intentVersionVerdict("x", map[string]string{"io.kubeswift.egress-intent.versions": "v1"}); r != "" {
+	if r, _ := intentVersionVerdict("x", map[string]string{"io.kubeswift.egress-intent.versions": "v1"}, plainSandbox("x")); r != "" {
 		t.Errorf("v1: %s", r)
 	}
-	if r, _ := intentVersionVerdict("x", map[string]string{"io.kubeswift.egress-intent.versions": "v0, v1"}); r != "" {
+	if r, _ := intentVersionVerdict("x", map[string]string{"io.kubeswift.egress-intent.versions": "v0, v1"}, plainSandbox("x")); r != "" {
 		t.Errorf("v0, v1: %s", r)
 	}
 	for _, labels := range []map[string]string{nil, {"io.kubeswift.egress-intent.versions": "v2"}} {
-		if r, _ := intentVersionVerdict("x", labels); r != reasonEgressIntentUnsupported {
+		if r, _ := intentVersionVerdict("x", labels, plainSandbox("x")); r != reasonEgressIntentUnsupported {
 			t.Errorf("%v: %q", labels, r)
 		}
 	}
