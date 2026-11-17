@@ -98,8 +98,9 @@ func nestedKey(v swiftv1alpha1.NestedVirtualization) string {
 // egressMode is the effective egress posture for a networked sandbox. The CRD
 // default is restricted; the fallthrough also covers a pre-admission empty value.
 func egressMode(sb *sandboxv1alpha1.SwiftSandbox) sandboxv1alpha1.SandboxNetworkMode {
-	if sb.Spec.Network.Mode == sandboxv1alpha1.SandboxNetworkOpen {
-		return sandboxv1alpha1.SandboxNetworkOpen
+	switch sb.Spec.Network.Mode {
+	case sandboxv1alpha1.SandboxNetworkOpen, sandboxv1alpha1.SandboxNetworkProxied:
+		return sb.Spec.Network.Mode
 	}
 	return sandboxv1alpha1.SandboxNetworkRestricted
 }
@@ -467,6 +468,11 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		if allow := egressAllowEnv(egressAllowed(sb)); allow != "" && egressMode(sb) == sandboxv1alpha1.SandboxNetworkRestricted {
 			ni.Env = append(ni.Env, corev1.EnvVar{Name: "KUBESWIFT_SANDBOX_EGRESS_ALLOW", Value: allow})
 		}
+		// Mode proxied: the redirect to the broker, and the chain that holds the
+		// broker's own connections to the restricted rules plus the allowlist.
+		if proxiedLauncher(sb) {
+			ni.Env = append(ni.Env, proxiedEnv(sb)...)
+		}
 		initContainers = append([]corev1.Container{ni}, initContainers...)
 	}
 
@@ -679,6 +685,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		}
 	}
 	addEgressDeny(pod, sb)
+	addProxiedLauncherEnv(pod, sb)
 	applyPodMetadata(pod, sb.Spec.PodMetadata)
 	addOutputVolumes(pod, sb)
 	if usesSecrets(sb) {

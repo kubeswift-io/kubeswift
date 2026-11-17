@@ -647,6 +647,9 @@ func (r *SwiftSandboxReconciler) finishTerminal(ctx context.Context, sb *sandbox
 	if msg, failed := kernelError(pod); failed {
 		return r.fail(ctx, sb, "KernelUnsupported", msg)
 	}
+	if msg, failed := egressError(pod); failed {
+		return r.fail(ctx, sb, "EgressBrokerFailed", msg)
+	}
 	// swiftletd could not read a secret variable and ended the launcher.
 	if msg, failed := secretError(pod); failed {
 		return r.fail(ctx, sb, "SecretUnavailable", msg)

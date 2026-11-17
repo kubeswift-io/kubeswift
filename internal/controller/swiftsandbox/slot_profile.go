@@ -223,6 +223,9 @@ func egressKey(ns string, n sandboxv1alpha1.SandboxNetwork) []string {
 		if c, err := sandboxwebhook.EgressCIDR(r.CIDR); err == nil {
 			dest = "cidr " + c
 		}
+		if r.Host != "" {
+			dest = "host " + r.Host
+		}
 		if r.Service != nil {
 			svcNS := r.Service.Namespace
 			if svcNS == "" {

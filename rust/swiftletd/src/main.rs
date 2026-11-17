@@ -3,6 +3,7 @@ mod agent_ready;
 mod bridge;
 mod console;
 mod cpuset;
+mod egress_broker;
 mod egress_deny;
 mod hotplug;
 mod intent;
@@ -90,6 +91,13 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format_timestamp_millis()
         .init();
+
+    // `swiftletd egress-broker`: the built-in egress broker of a proxied
+    // sandbox, started by this process under the proxy uid (egress_broker.rs).
+    // Before anything else: it is not a launcher.
+    if env::args().nth(1).as_deref() == Some(egress_broker::SUBCOMMAND) {
+        egress_broker::main();
+    }
 
     // The console container follows this launcher's life, including
     // an exit before the intent is read (console.rs; only sandbox launchers
@@ -670,6 +678,20 @@ fn main() {
             // (no-op when the pod carries none).
             if intent.is_sandbox() {
                 egress_deny::spawn_if_present();
+                // Mode proxied: the guest's only way out. Without it the
+                // guest would boot with no egress and no explanation.
+                if let Err(e) = egress_broker::spawn_if_proxied() {
+                    log::error!("egress_broker_start_failed: {}", e);
+                    if let (Ok(ns), Ok(n)) = (env::var("POD_NAMESPACE"), env::var("POD_NAME")) {
+                        if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                        {
+                            let _ = rt.block_on(report::report_egress_error(&ns, &n, &e));
+                        }
+                    }
+                    std::process::exit(1);
+                }
             }
             let result = launch::run(&intent, &runtime_dir, on_socket_ready);
             let abnormal_exit_detail: Option<String> = match &result {
