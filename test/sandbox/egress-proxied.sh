@@ -205,15 +205,15 @@ $guarded"
 		log "launcher of 'proxied' carries the platform deny list"
 		# The egress audit (kubectl logs -c egress-audit): JSON lines for the
 		# guest's DNS queries and the broker's decisions.
-		local audit want
+		local audit sel
 		audit=$(kubectl -n "$NS" logs "$pod" -c egress-audit 2>&1 || true)
-		for want in '"kind":"dns","event":"query"' '"kind":"dns","event":"blocked"' \
-			"\"name\":\"$OTHER_HOST\"" '"kind":"connection","event":"allow"' '"kind":"connection","event":"deny"'; do
-			grep -qF "$want" <<<"$audit" || die "egress audit of $pod lacks $want: $(head -c 2000 <<<"$audit")"
-		done
 		while IFS= read -r line; do
 			[ -z "$line" ] || jq -e . >/dev/null 2>&1 <<<"$line" || die "egress audit line is not JSON: $line"
 		done <<<"$audit"
+		for sel in '.kind=="dns" and .event=="query"' ".kind==\"dns\" and .event==\"blocked\" and .name==\"$OTHER_HOST\"" \
+			'.kind=="connection" and .event=="allow"' '.kind=="connection" and .event=="deny"'; do
+			[ -n "$(jq -c "select($sel)" <<<"$audit")" ] || die "egress audit of $pod has no event with $sel: $(head -c 2000 <<<"$audit")"
+		done
 		log "egress audit of 'proxied': $(grep -c . <<<"$audit") JSON lines (DNS queries, blocked names, allow and deny decisions)"
 	fi
 
