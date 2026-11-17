@@ -71,6 +71,9 @@ func validateSpec(s *sandboxv1alpha1.SwiftSandboxSpec) error {
 	if err := ValidateNetwork(s.Network); err != nil {
 		return err
 	}
+	if err := ValidateIdentity(s.Identity, s.Network); err != nil {
+		return err
+	}
 	if err := ValidatePodMetadata(s.PodMetadata); err != nil {
 		return err
 	}

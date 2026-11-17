@@ -20,30 +20,78 @@ func ValidateNetwork(n sandboxv1alpha1.SandboxNetwork) error {
 	if err := validateEgress(n); err != nil {
 		return err
 	}
-	return validateExposure(n)
+	if err := validateExposure(n); err != nil {
+		return err
+	}
+	if n.Mode == sandboxv1alpha1.SandboxNetworkProxied && !ProxiedAvailable {
+		return fmt.Errorf("spec.network.mode proxied is not available in this version of KubeSwift yet")
+	}
+	return nil
 }
 
 func validateEgress(n sandboxv1alpha1.SandboxNetwork) error {
 	if n.Egress == nil {
 		return nil
 	}
-	if n.Mode != "" && n.Mode != sandboxv1alpha1.SandboxNetworkRestricted {
-		return fmt.Errorf("spec.network.egress applies to mode restricted only (mode is %s)", n.Mode)
+	proxied := n.Mode == sandboxv1alpha1.SandboxNetworkProxied
+	if n.Mode != "" && n.Mode != sandboxv1alpha1.SandboxNetworkRestricted && !proxied {
+		return fmt.Errorf("spec.network.egress applies to mode restricted or proxied only (mode is %s)", n.Mode)
 	}
 	if len(n.Egress.Allow) > 32 {
 		return fmt.Errorf("spec.network.egress.allow has %d entries, at most 32", len(n.Egress.Allow))
 	}
 	for i, r := range n.Egress.Allow {
-		if err := validateEgressRule(r); err != nil {
+		if err := validateEgressRule(r, ruleAllow, proxied); err != nil {
 			return fmt.Errorf("spec.network.egress.allow[%d]: %w", i, err)
 		}
 	}
-	return nil
+	if !proxied {
+		if n.Egress.Proxy != nil {
+			return fmt.Errorf("spec.network.egress.proxy needs mode proxied")
+		}
+		if len(n.Egress.Credentials) > 0 {
+			return fmt.Errorf("spec.network.egress.credentials need mode proxied")
+		}
+	}
+	if err := validateProxy(n); err != nil {
+		return err
+	}
+	return validateCredentials(n)
 }
 
-func validateEgressRule(r sandboxv1alpha1.SandboxEgressRule) error {
-	if (r.Service == nil) == (r.CIDR == "") {
+func validateEgressRule(r sandboxv1alpha1.SandboxEgressRule, kind ruleKind, proxied bool) error {
+	set := 0
+	for _, b := range []bool{r.Service != nil, r.CIDR != "", r.Host != ""} {
+		if b {
+			set++
+		}
+	}
+	if set != 1 {
+		if proxied && kind == ruleAllow {
+			return fmt.Errorf("set exactly one of service, cidr and host")
+		}
 		return fmt.Errorf("set exactly one of service and cidr")
+	}
+	if r.Host != "" {
+		switch {
+		case kind == ruleUpstream:
+			return fmt.Errorf("host is not valid in upstreams: the proxy's own connections are filtered by address")
+		case !proxied:
+			return fmt.Errorf("host needs mode proxied: mode restricted filters by address and cannot match names")
+		}
+		if err := EgressHost(r.Host); err != nil {
+			return err
+		}
+	}
+	if r.TLS != nil {
+		switch {
+		case kind == ruleUpstream:
+			return fmt.Errorf("tls is not valid in upstreams")
+		case !proxied:
+			return fmt.Errorf("tls needs mode proxied")
+		case r.TLS.Originate != sandboxv1alpha1.SandboxEgressTLSSPIFFE:
+			return fmt.Errorf("tls.originate %q is not SPIFFE", r.TLS.Originate)
+		}
 	}
 	if s := r.Service; s != nil {
 		if errs := validation.IsDNS1035Label(s.Name); len(errs) > 0 {
@@ -69,6 +117,9 @@ func validateEgressRule(r sandboxv1alpha1.SandboxEgressRule) error {
 		}
 		if p.Protocol != "" && p.Protocol != corev1.ProtocolTCP && p.Protocol != corev1.ProtocolUDP {
 			return fmt.Errorf("port %d: protocol %s is not TCP or UDP", p.Port, p.Protocol)
+		}
+		if p.Protocol == corev1.ProtocolUDP && proxied && kind == ruleAllow {
+			return fmt.Errorf("port %d: mode proxied carries no guest UDP other than DNS", p.Port)
 		}
 	}
 	return nil

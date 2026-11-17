@@ -1,0 +1,289 @@
+package swiftsandbox
+
+import (
+	"fmt"
+	"net"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"k8s.io/apimachinery/pkg/util/validation"
+
+	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+)
+
+// ProxiedAvailable reports whether this build runs proxied sandboxes. Until
+// the proxy runtime ships, mode proxied and its fields are validated in full
+// and then refused, so a spec written against the API fails with its real
+// errors first.
+var ProxiedAvailable = false
+
+// IdentityAvailable is the same switch for spec.identity.spiffe.
+var IdentityAvailable = false
+
+var (
+	envNameRe     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	placeholderRe = regexp.MustCompile(`^[A-Za-z0-9._-]{16,128}$`)
+	headerRe      = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+)
+
+// ruleKind is where an egress rule appears.
+type ruleKind int
+
+const (
+	ruleAllow    ruleKind = iota // spec.network.egress.allow
+	ruleUpstream                 // spec.network.egress.proxy.upstreams
+)
+
+// EgressHost checks a host rule: a DNS name with at least two labels,
+// optionally prefixed with "*." to match every name under it.
+func EgressHost(h string) error {
+	name := strings.TrimPrefix(h, "*.")
+	if net.ParseIP(name) != nil {
+		return fmt.Errorf("host %q is an address; use cidr", h)
+	}
+	if strings.Contains(name, "*") {
+		return fmt.Errorf("host %q: a wildcard is only valid as a leading \"*.\"", h)
+	}
+	if errs := validation.IsDNS1123Subdomain(name); len(errs) > 0 {
+		return fmt.Errorf("host %q: %s", h, errs[0])
+	}
+	if !strings.Contains(name, ".") {
+		return fmt.Errorf("host %q needs at least two labels (a single label resolves through search domains)", h)
+	}
+	return nil
+}
+
+// hostMatches reports whether allow-rule host pattern p covers host h (both
+// valid; h may itself be a wildcard, covered only by the same pattern or a
+// broader one).
+func hostMatches(p, h string) bool {
+	if p == h {
+		return true
+	}
+	if !strings.HasPrefix(p, "*.") {
+		return false
+	}
+	return strings.HasSuffix(strings.TrimPrefix(h, "*."), p[1:])
+}
+
+func validateProxy(n sandboxv1alpha1.SandboxNetwork) error {
+	p := n.Egress.Proxy
+	if p == nil {
+		return nil
+	}
+	const f = "spec.network.egress.proxy"
+	if (p.Preset == "") == (p.Image == "") {
+		return fmt.Errorf("%s: set exactly one of preset and image", f)
+	}
+	if p.Preset != "" {
+		if errs := validation.IsDNS1123Label(p.Preset); len(errs) > 0 {
+			return fmt.Errorf("%s.preset %q: %s", f, p.Preset, errs[0])
+		}
+		if len(p.Args) > 0 || len(p.Env) > 0 || p.Listeners != nil {
+			return fmt.Errorf("%s: args, env and listeners apply to an image; a preset supplies them", f)
+		}
+	}
+	if p.Image != "" && p.Listeners == nil {
+		return fmt.Errorf("%s: an image needs listeners", f)
+	}
+	if l := p.Listeners; l != nil {
+		seen := map[int32]string{}
+		for _, pt := range n.Ports {
+			seen[pt.Port] = "spec.network.ports " + pt.Name
+		}
+		for _, x := range []struct {
+			name string
+			port int32
+			opt  bool
+		}{{"transparent", l.Transparent, false}, {"dns", l.DNS, true}, {"http", l.HTTP, true}} {
+			if x.port == 0 && x.opt {
+				continue
+			}
+			if x.port < 1024 || x.port > 65535 {
+				return fmt.Errorf("%s.listeners.%s %d is out of range 1024-65535 (the proxy runs without privileges)", f, x.name, x.port)
+			}
+			if other, dup := seen[x.port]; dup {
+				return fmt.Errorf("%s.listeners.%s %d is also used by %s", f, x.name, x.port, other)
+			}
+			seen[x.port] = "listeners." + x.name
+		}
+	}
+	switch p.Config {
+	case "", sandboxv1alpha1.SandboxEgressProxyConfigSelf, sandboxv1alpha1.SandboxEgressProxyConfigIntent:
+	default:
+		return fmt.Errorf("%s.config %q is not Self or Intent", f, p.Config)
+	}
+	for i, e := range p.Env {
+		if e.Name == "" {
+			return fmt.Errorf("%s.env[%d].name is required", f, i)
+		}
+		vf := e.ValueFrom
+		if vf == nil {
+			continue
+		}
+		if e.Value != "" {
+			return fmt.Errorf("%s.env[%d] (%s): set value or valueFrom, not both", f, i, e.Name)
+		}
+		if vf.FieldRef != nil || vf.ResourceFieldRef != nil || vf.ConfigMapKeyRef != nil || vf.FileKeyRef != nil {
+			return fmt.Errorf("%s.env[%d] (%s): only valueFrom.secretKeyRef is supported", f, i, e.Name)
+		}
+		if ref := vf.SecretKeyRef; ref == nil || ref.Name == "" || ref.Key == "" {
+			return fmt.Errorf("%s.env[%d] (%s): valueFrom.secretKeyRef needs a name and a key", f, i, e.Name)
+		}
+	}
+	if len(p.Upstreams) > 32 {
+		return fmt.Errorf("%s.upstreams has %d entries, at most 32", f, len(p.Upstreams))
+	}
+	for i, r := range p.Upstreams {
+		if err := validateEgressRule(r, ruleUpstream, true); err != nil {
+			return fmt.Errorf("%s.upstreams[%d]: %w", f, i, err)
+		}
+	}
+	return nil
+}
+
+func validateCredentials(n sandboxv1alpha1.SandboxNetwork) error {
+	creds := n.Egress.Credentials
+	if len(creds) == 0 {
+		return nil
+	}
+	const f = "spec.network.egress.credentials"
+	p := n.Egress.Proxy
+	switch {
+	case p == nil:
+		return fmt.Errorf("%s need a proxy: the built-in broker does not terminate TLS", f)
+	case p.Preset == "":
+		return fmt.Errorf("%s need a proxy preset; an image proxy cannot receive credentials in this version", f)
+	case p.Config == sandboxv1alpha1.SandboxEgressProxyConfigSelf:
+		return fmt.Errorf("%s need proxy.config Intent; a Self proxy uses its own credential source", f)
+	}
+	if len(creds) > 16 {
+		return fmt.Errorf("%s has %d entries, at most 16", f, len(creds))
+	}
+	type hostRule struct {
+		host  string
+		ports []sandboxv1alpha1.SandboxEgressPort
+	}
+	var hosts []hostRule
+	for _, r := range n.Egress.Allow {
+		if r.Host != "" {
+			hosts = append(hosts, hostRule{r.Host, r.Ports})
+		}
+	}
+	names := map[string]bool{}
+	for i, c := range creds {
+		at := fmt.Sprintf("%s[%d]", f, i)
+		if !envNameRe.MatchString(c.Name) {
+			return fmt.Errorf("%s.name %q is not an environment variable name", at, c.Name)
+		}
+		if names[c.Name] {
+			return fmt.Errorf("%s.name %q appears twice", at, c.Name)
+		}
+		names[c.Name] = true
+		if c.Placeholder != "" && !placeholderRe.MatchString(c.Placeholder) {
+			return fmt.Errorf("%s.placeholder must be 16 to 128 characters from [A-Za-z0-9._-]", at)
+		}
+		if c.SecretKeyRef.Name == "" || c.SecretKeyRef.Key == "" {
+			return fmt.Errorf("%s.secretKeyRef needs a name and a key", at)
+		}
+		if len(c.Destinations) == 0 || len(c.Destinations) > 16 {
+			return fmt.Errorf("%s.destinations needs 1 to 16 entries", at)
+		}
+		for _, d := range c.Destinations {
+			host, port, err := credentialDestination(d)
+			if err != nil {
+				return fmt.Errorf("%s.destinations: %w", at, err)
+			}
+			covered := false
+			for _, h := range hosts {
+				if hostMatches(h.host, host) && portAllowed(h.ports, port) {
+					covered = true
+					break
+				}
+			}
+			if !covered {
+				return fmt.Errorf("%s.destinations: %s is not allowed by a host rule in spec.network.egress.allow", at, d)
+			}
+		}
+		if c.Header != "" {
+			if !headerRe.MatchString(c.Header) {
+				return fmt.Errorf("%s.header %q is not an HTTP header name", at, c.Header)
+			}
+			if strings.EqualFold(c.Header, "host") {
+				return fmt.Errorf("%s.header cannot be Host", at)
+			}
+		}
+		if t := c.ValueTemplate; t != "" {
+			if strings.Count(t, "{}") != 1 {
+				return fmt.Errorf("%s.valueTemplate must contain {} exactly once", at)
+			}
+			if strings.ContainsAny(t, "\r\n") {
+				return fmt.Errorf("%s.valueTemplate cannot contain a line break", at)
+			}
+		}
+	}
+	return nil
+}
+
+// credentialDestination parses host or host:port (443 when omitted).
+func credentialDestination(d string) (string, int32, error) {
+	host, port := d, int32(443)
+	if i := strings.LastIndex(d, ":"); i >= 0 {
+		n, err := strconv.Atoi(d[i+1:])
+		if err != nil || n < 1 || n > 65535 {
+			return "", 0, fmt.Errorf("%q: port is not 1-65535", d)
+		}
+		host, port = d[:i], int32(n)
+	}
+	if err := EgressHost(host); err != nil {
+		return "", 0, err
+	}
+	return host, port, nil
+}
+
+// portAllowed reports whether a host rule's ports admit TCP port p (no ports
+// admits every port).
+func portAllowed(ports []sandboxv1alpha1.SandboxEgressPort, p int32) bool {
+	if len(ports) == 0 {
+		return true
+	}
+	for _, x := range ports {
+		if x.Port == p {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateIdentity checks spec.identity of a SwiftSandbox or SwiftSandboxPool
+// against its network. The controller runs it too.
+func ValidateIdentity(id *sandboxv1alpha1.SandboxIdentity, n sandboxv1alpha1.SandboxNetwork) error {
+	enabled := false
+	if id != nil {
+		switch id.SPIFFE {
+		case "", sandboxv1alpha1.SandboxIdentitySPIFFEDisabled:
+		case sandboxv1alpha1.SandboxIdentitySPIFFEEnabled:
+			enabled = true
+		default:
+			return fmt.Errorf("spec.identity.spiffe %q is not Enabled or Disabled", id.SPIFFE)
+		}
+	}
+	if n.Egress != nil && !enabled {
+		for i, r := range n.Egress.Allow {
+			if r.TLS != nil {
+				return fmt.Errorf("spec.network.egress.allow[%d].tls needs spec.identity.spiffe Enabled", i)
+			}
+		}
+	}
+	if !enabled {
+		return nil
+	}
+	if n.Mode != sandboxv1alpha1.SandboxNetworkProxied {
+		return fmt.Errorf("spec.identity.spiffe Enabled needs network mode proxied: the egress proxy or the built-in broker holds the identity, never the guest")
+	}
+	if !IdentityAvailable {
+		return fmt.Errorf("spec.identity.spiffe Enabled is not available in this version of KubeSwift yet")
+	}
+	return nil
+}

@@ -126,6 +126,10 @@ type SwiftSandboxSpec struct {
 	// +optional
 	NestedVirtualization swiftv1alpha1.NestedVirtualization `json:"nestedVirtualization,omitempty"`
 
+	// Identity is the sandbox's workload identity (SPIFFE).
+	// +optional
+	Identity *SandboxIdentity `json:"identity,omitempty"`
+
 	// KernelProfileRef names the SwiftKernel sandbox profile to boot. Defaults to
 	// the well-known "sandbox" kernel when unset.
 	// +optional
@@ -349,7 +353,7 @@ const (
 )
 
 // SandboxNetworkMode selects the sandbox connectivity posture.
-// +kubebuilder:validation:Enum=restricted;open;none
+// +kubebuilder:validation:Enum=restricted;open;none;proxied
 type SandboxNetworkMode string
 
 const (
@@ -365,6 +369,13 @@ const (
 	SandboxNetworkOpen SandboxNetworkMode = "open"
 	// SandboxNetworkNone attaches no network (detonation / pure compute).
 	SandboxNetworkNone SandboxNetworkMode = "none"
+	// SandboxNetworkProxied keeps the guest's NIC but forwards none of its
+	// traffic: every guest TCP connection is redirected to an egress proxy in
+	// the launcher pod (spec.network.egress.proxy, or the built-in broker when
+	// unset), DNS answers only allowed names, and UDP other than DNS, ICMP and
+	// IPv6 never leave the guest. Not available yet: refused until the proxy
+	// runtime ships.
+	SandboxNetworkProxied SandboxNetworkMode = "proxied"
 )
 
 // SandboxReadinessStartup is the fast start of the readiness probe.
@@ -423,14 +434,15 @@ const (
 
 // SandboxNetwork is the sandbox networking policy.
 type SandboxNetwork struct {
-	// Mode is "restricted" (default), "open", or "none".
+	// Mode is "restricted" (default), "open", "none" or "proxied".
 	// +kubebuilder:default=restricted
 	// +optional
 	Mode SandboxNetworkMode `json:"mode,omitempty"`
 
 	// Egress lets a restricted sandbox reach destinations the restricted mode
-	// blocks, such as one in-cluster Service, without opening everything.
-	// Only valid with mode restricted.
+	// blocks, such as one in-cluster Service, without opening everything. In
+	// mode proxied it is the guest's allowlist, enforced by the egress proxy.
+	// Only valid with mode restricted or proxied.
 	// +optional
 	Egress *SandboxEgress `json:"egress,omitempty"`
 
@@ -693,10 +705,31 @@ type SandboxEgress struct {
 	// +listType=atomic
 	// +optional
 	Allow []SandboxEgressRule `json:"allow,omitempty"`
+
+	// Proxy selects the egress proxy of a proxied sandbox. Unset, the built-in
+	// broker allows connections that match allow (by TLS server name or HTTP
+	// Host for host rules, by address for the others). Only valid with mode
+	// proxied.
+	// +optional
+	Proxy *SandboxEgressProxy `json:"proxy,omitempty"`
+
+	// Credentials keeps secret values out of the guest. The guest sees each
+	// as an environment variable holding a placeholder; the proxy replaces the
+	// placeholder with the Secret's value in the named header of requests to
+	// the listed destinations, after terminating TLS with a certificate
+	// authority generated for the launcher, which the guest is made to trust.
+	// The value is never written into the guest. Needs mode proxied and a
+	// proxy preset with config Intent.
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Credentials []SandboxEgressCredential `json:"credentials,omitempty"`
 }
 
-// SandboxEgressRule allows one destination: a Service or an IPv4 CIDR,
-// optionally narrowed to ports. Exactly one of service and cidr is set.
+// SandboxEgressRule allows one destination: a Service, an IPv4 CIDR or (mode
+// proxied only) a DNS name, optionally narrowed to ports. Exactly one of
+// service, cidr and host is set.
 type SandboxEgressRule struct {
 	// Service allows the ClusterIP of a Service. It is resolved when the
 	// sandbox's launcher is created (for a pool, each time the pool reconciles:
@@ -708,6 +741,23 @@ type SandboxEgressRule struct {
 	// CIDR allows an IPv4 range, e.g. 10.20.0.0/24 or 10.20.0.5/32.
 	// +optional
 	CIDR string `json:"cidr,omitempty"`
+
+	// Host allows a DNS name, e.g. api.example.com, or every name under a
+	// domain with a leading "*." (*.example.com matches a.example.com and
+	// a.b.example.com, not example.com). The proxy matches it against the TLS
+	// server name or the HTTP Host of each connection and requires the
+	// connection's destination to be an address the name resolves to. TCP
+	// only. Only valid with mode proxied, and not in proxy.upstreams.
+	// +kubebuilder:validation:MaxLength=253
+	// +optional
+	Host string `json:"host,omitempty"`
+
+	// TLS asks the proxy to originate TLS to this destination: the guest
+	// connects in plaintext and the proxy connects over TLS presenting the
+	// sandbox's SPIFFE X.509-SVID. Needs mode proxied and
+	// spec.identity.spiffe Enabled.
+	// +optional
+	TLS *SandboxEgressTLS `json:"tls,omitempty"`
 
 	// Ports narrows the rule. Empty allows every port: for a Service, every
 	// port the Service declares; for a CIDR, any port and protocol.
@@ -738,6 +788,174 @@ type SandboxEgressPort struct {
 	// +kubebuilder:default=TCP
 	// +optional
 	Protocol corev1.Protocol `json:"protocol,omitempty"`
+}
+
+// SandboxEgressTLSOrigination is how the proxy originates TLS.
+// +kubebuilder:validation:Enum=SPIFFE
+type SandboxEgressTLSOrigination string
+
+// SandboxEgressTLSSPIFFE originates TLS with the sandbox's X.509-SVID.
+const SandboxEgressTLSSPIFFE SandboxEgressTLSOrigination = "SPIFFE"
+
+// SandboxEgressTLS is TLS the proxy originates on the guest's behalf.
+type SandboxEgressTLS struct {
+	// Originate is the client identity the proxy presents. SPIFFE is the
+	// only value.
+	Originate SandboxEgressTLSOrigination `json:"originate"`
+}
+
+// SandboxEgressProxyConfig is where an egress proxy gets its policy.
+// +kubebuilder:validation:Enum=Self;Intent
+type SandboxEgressProxyConfig string
+
+const (
+	// SandboxEgressProxyConfigSelf: the proxy takes its policy from its own
+	// control plane. KubeSwift delivers the traffic, confines the proxy's own
+	// connections and offers identity, nothing else.
+	SandboxEgressProxyConfigSelf SandboxEgressProxyConfig = "Self"
+	// SandboxEgressProxyConfigIntent: KubeSwift mounts a read-only
+	// egress-intent.kubeswift.io/v1 file (allow, credentials, listeners) that
+	// the proxy, or a translator next to it, turns into its configuration.
+	SandboxEgressProxyConfigIntent SandboxEgressProxyConfig = "Intent"
+)
+
+// SandboxEgressProxy is the egress proxy of a proxied sandbox: a preset the
+// administrator defines, or an image the administrator allows. It runs as an
+// unprivileged container in the launcher pod under a uid KubeSwift assigns,
+// and its own connections are held to upstreams plus the restrictions of mode
+// restricted: never the cloud metadata endpoint, node addresses, the API
+// server or Services in front of them.
+type SandboxEgressProxy struct {
+	// Preset names a proxy the administrator configured in the chart (for
+	// example envoy or agentgateway): image, translator and listeners. Exactly
+	// one of preset and image is set.
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	Preset string `json:"preset,omitempty"`
+
+	// Image is a proxy image the administrator allows
+	// (sandboxProxy.allowedImages). Needs listeners.
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// Args for an image proxy.
+	// +kubebuilder:validation:MaxItems=64
+	// +listType=atomic
+	// +optional
+	Args []string `json:"args,omitempty"`
+
+	// Env for an image proxy. Secrets referenced here reach the proxy
+	// container only, never the guest.
+	// +kubebuilder:validation:MaxItems=64
+	// +listType=atomic
+	// +optional
+	Env []corev1.EnvVar `json:"env,omitempty"`
+
+	// Listeners are the proxy's ports. Required with image; a preset supplies
+	// them.
+	// +optional
+	Listeners *SandboxEgressProxyListeners `json:"listeners,omitempty"`
+
+	// Config is where the proxy gets its policy: Intent (the default for a
+	// preset) or Self (the default for an image).
+	// +optional
+	Config SandboxEgressProxyConfig `json:"config,omitempty"`
+
+	// Upstreams are what the proxy itself may connect to, in addition to
+	// cluster DNS and the public internet; same rules as allow, without host
+	// and tls. A Service in front of a node or the API server keeps the
+	// sandbox Pending (EgressServiceReachesNode).
+	// +kubebuilder:validation:MaxItems=32
+	// +listType=atomic
+	// +optional
+	Upstreams []SandboxEgressRule `json:"upstreams,omitempty"`
+}
+
+// SandboxEgressProxyListeners are the ports an egress proxy listens on, in
+// the launcher pod. Each is between 1024 and 65535 and differs from the
+// others and from spec.network.ports.
+type SandboxEgressProxyListeners struct {
+	// Transparent receives every guest TCP connection; the original
+	// destination is read with SO_ORIGINAL_DST.
+	// +kubebuilder:validation:Minimum=1024
+	// +kubebuilder:validation:Maximum=65535
+	Transparent int32 `json:"transparent"`
+
+	// DNS, when set, receives every guest DNS query. Unset, the launcher
+	// answers only names the allowlist permits.
+	// +kubebuilder:validation:Minimum=1024
+	// +kubebuilder:validation:Maximum=65535
+	// +optional
+	DNS int32 `json:"dns,omitempty"`
+
+	// HTTP, when set, is an explicit HTTP proxy port: the guest gets
+	// HTTP_PROXY, HTTPS_PROXY and NO_PROXY pointing at it. Connections that
+	// ignore them still reach the transparent listener.
+	// +kubebuilder:validation:Minimum=1024
+	// +kubebuilder:validation:Maximum=65535
+	// +optional
+	HTTP int32 `json:"http,omitempty"`
+}
+
+// SandboxEgressCredential is one secret the proxy adds to requests in place
+// of a placeholder the guest holds.
+type SandboxEgressCredential struct {
+	// Name of the guest environment variable that holds the placeholder.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	Name string `json:"name"`
+
+	// Placeholder is the value the guest sees. Generated when unset: per pool
+	// for a pool, per sandbox otherwise. 16 to 128 characters from
+	// [A-Za-z0-9._-].
+	// +kubebuilder:validation:MaxLength=128
+	// +optional
+	Placeholder string `json:"placeholder,omitempty"`
+
+	// SecretKeyRef is the Secret key holding the real value, in the
+	// sandbox's namespace.
+	SecretKeyRef corev1.SecretKeySelector `json:"secretKeyRef"`
+
+	// Destinations are host or host:port (port 443 when omitted) the value is
+	// sent to. Each must be allowed by a host rule in allow. A request to any
+	// other destination that still contains the placeholder is refused.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=atomic
+	Destinations []string `json:"destinations"`
+
+	// Header is the request header the placeholder is replaced in.
+	// Default Authorization.
+	// +kubebuilder:validation:MaxLength=128
+	// +optional
+	Header string `json:"header,omitempty"`
+
+	// ValueTemplate is the header value, with {} standing for the secret
+	// value. Default "Bearer {}" for Authorization, "{}" for any other header.
+	// +kubebuilder:validation:MaxLength=256
+	// +optional
+	ValueTemplate string `json:"valueTemplate,omitempty"`
+}
+
+// SandboxIdentitySPIFFE turns the per-sandbox SPIFFE identity on or off.
+// +kubebuilder:validation:Enum=Enabled;Disabled
+type SandboxIdentitySPIFFE string
+
+const (
+	SandboxIdentitySPIFFEEnabled  SandboxIdentitySPIFFE = "Enabled"
+	SandboxIdentitySPIFFEDisabled SandboxIdentitySPIFFE = "Disabled"
+)
+
+// SandboxIdentity is the workload identity of a sandbox.
+type SandboxIdentity struct {
+	// SPIFFE gives the sandbox a SPIFFE ID,
+	// spiffe://<trust-domain>/ns/<namespace>/pool/<pool>/sandbox/<name> (without
+	// the pool segment when the sandbox has no poolRef). The egress proxy or
+	// the built-in broker holds the SVID; the guest never sees it. Disabled
+	// when unset. Not available yet: Enabled is refused until the identity
+	// runtime ships.
+	// +optional
+	SPIFFE SandboxIdentitySPIFFE `json:"spiffe,omitempty"`
 }
 
 // SandboxEgressAllowed is one rule the launcher enforces, as resolved.

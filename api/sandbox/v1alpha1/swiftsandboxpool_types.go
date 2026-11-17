@@ -56,7 +56,7 @@ type SwiftSandboxPoolSpec struct {
 	Memory resource.Quantity `json:"memory"`
 
 	// Network is the slot networking posture (default restricted), the same modes as
-	// SwiftSandbox: restricted | open | none.
+	// SwiftSandbox: restricted | open | none | proxied.
 	// +optional
 	Network SandboxNetwork `json:"network,omitempty"`
 
@@ -69,6 +69,11 @@ type SwiftSandboxPoolSpec struct {
 	// A claiming SwiftSandbox must resolve to the same value.
 	// +optional
 	NestedVirtualization swiftv1alpha1.NestedVirtualization `json:"nestedVirtualization,omitempty"`
+
+	// Identity is the workload identity of the pool's sandboxes (SPIFFE). A
+	// warm slot holds no sandbox identity until a sandbox claims it.
+	// +optional
+	Identity *SandboxIdentity `json:"identity,omitempty"`
 
 	// KernelProfileRef names the SwiftKernel sandbox profile to boot; defaults to the
 	// well-known "sandbox" kernel when unset ("gpu-sandbox" for a GPU pool). A

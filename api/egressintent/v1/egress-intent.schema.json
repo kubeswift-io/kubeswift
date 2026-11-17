@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kubeswift.io/schemas/egress-intent/v1/egress-intent.schema.json",
+  "title": "EgressIntent",
+  "description": "egress-intent.kubeswift.io/v1: the policy KubeSwift hands to the egress proxy of a proxied SwiftSandbox. Consumers must ignore properties they do not know. Apache-2.0.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "owner", "listeners", "allow"],
+  "properties": {
+    "apiVersion": {"const": "egress-intent.kubeswift.io/v1"},
+    "kind": {"const": "EgressIntent"},
+    "owner": {"$ref": "#/$defs/Owner"},
+    "listeners": {"$ref": "#/$defs/Listeners"},
+    "allow": {"type": "array", "items": {"$ref": "#/$defs/Rule"}},
+    "credentials": {"type": "array", "items": {"$ref": "#/$defs/Credential"}},
+    "tls": {"$ref": "#/$defs/TLS"},
+    "identity": {"$ref": "#/$defs/Identity"}
+  },
+  "$defs": {
+    "Owner": {
+      "type": "object",
+      "required": ["namespace", "kind", "name"],
+      "properties": {
+        "namespace": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["SwiftSandbox", "SwiftSandboxPool"]},
+        "name": {"type": "string", "minLength": 1}
+      }
+    },
+    "Listeners": {
+      "type": "object",
+      "required": ["transparent"],
+      "properties": {
+        "transparent": {"$ref": "#/$defs/ListenerPort"},
+        "dns": {"$ref": "#/$defs/ListenerPort"},
+        "http": {"$ref": "#/$defs/ListenerPort"}
+      }
+    },
+    "ListenerPort": {"type": "integer", "minimum": 1024, "maximum": 65535},
+    "Rule": {
+      "type": "object",
+      "description": "Exactly one of host and cidr.",
+      "required": ["from"],
+      "oneOf": [
+        {"required": ["host"], "not": {"required": ["cidr"]}},
+        {"required": ["cidr"], "not": {"required": ["host"]}}
+      ],
+      "properties": {
+        "host": {"type": "string", "pattern": "^(\\*\\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$", "maxLength": 253},
+        "cidr": {"type": "string", "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"},
+        "ports": {"type": "array", "items": {"$ref": "#/$defs/Port"}},
+        "tls": {"$ref": "#/$defs/RuleTLS"},
+        "from": {"type": "string"}
+      }
+    },
+    "Port": {
+      "type": "object",
+      "required": ["port", "protocol"],
+      "properties": {
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "protocol": {"const": "TCP"}
+      }
+    },
+    "RuleTLS": {
+      "type": "object",
+      "required": ["originate"],
+      "properties": {
+        "originate": {"const": "SPIFFE"}
+      }
+    },
+    "Credential": {
+      "type": "object",
+      "required": ["name", "placeholder", "destinations", "header", "valueTemplate", "file"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+        "placeholder": {"type": "string", "pattern": "^[A-Za-z0-9._-]{16,128}$"},
+        "destinations": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^(\\*\\.)?[a-z0-9.-]+:[0-9]{1,5}$"}},
+        "header": {"type": "string", "minLength": 1},
+        "valueTemplate": {"type": "string", "pattern": "^[^{}]*\\{\\}[^{}]*$"},
+        "file": {"type": "string", "minLength": 1}
+      }
+    },
+    "TLS": {
+      "type": "object",
+      "required": ["interceptCA"],
+      "properties": {
+        "interceptCA": {"$ref": "#/$defs/CA"}
+      }
+    },
+    "CA": {
+      "type": "object",
+      "required": ["cert", "key"],
+      "properties": {
+        "cert": {"type": "string", "minLength": 1},
+        "key": {"type": "string", "minLength": 1}
+      }
+    },
+    "Identity": {
+      "type": "object",
+      "properties": {
+        "spiffe": {"$ref": "#/$defs/SPIFFE"}
+      }
+    },
+    "SPIFFE": {
+      "type": "object",
+      "required": ["workloadAPISocket"],
+      "properties": {
+        "workloadAPISocket": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

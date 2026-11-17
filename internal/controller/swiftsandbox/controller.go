@@ -250,6 +250,9 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	if err := sandboxwebhook.ValidateArtifacts(&sb.Spec); err != nil {
 		return r.fail(ctx, sb, "InvalidArtifacts", err.Error())
 	}
+	if err := sandboxwebhook.ValidateIdentity(sb.Spec.Identity, sb.Spec.Network); err != nil {
+		return r.fail(ctx, sb, "InvalidIdentity", err.Error())
+	}
 	// A referenced Secret or key that does not exist (yet) keeps the sandbox
 	// Pending, named, before any launcher exists.
 	if reason, msg, err := checkSecretEnv(ctx, r.APIReader, sb); err != nil {
