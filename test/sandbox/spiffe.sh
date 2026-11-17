@@ -24,7 +24,10 @@
 #      in status), on the warm slot.
 #   4. Sandbox "anonymous": the same proxy without spec.identity has no
 #      socket and no SVID; the guest's request fails.
-#   5. spec.identity.spiffe Enabled without an egress proxy is refused.
+#   5. Sandbox "broker": no proxy; the built-in broker originates the mTLS
+#      for an allow rule with tls: {originate: SPIFFE}: 200, and the egress
+#      audit records tls=spiffe with the SVID. "broker-other": 403.
+#   6. allow[].tls together with an egress proxy is refused.
 #
 # Prerequisites:
 #   - a node labeled kubeswift.io/kernel-node=true with KVM
@@ -138,6 +141,7 @@ static_resources:
                     permissions: [{any: true}]
                     principals:
                     - {authenticated: {principal_name: {exact: "spiffe://$TRUST_DOMAIN/ns/$NS/sandbox/allowed"}}}
+                    - {authenticated: {principal_name: {exact: "spiffe://$TRUST_DOMAIN/ns/$NS/sandbox/broker"}}}
                     - {authenticated: {principal_name: {prefix: "spiffe://$TRUST_DOMAIN/ns/$NS/pool/agents/slot/"}}}
           - name: envoy.filters.http.router
             typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router}
@@ -166,7 +170,19 @@ $(sandbox_envoy "$1" | sed 's/^/          /')
 EOF
 }
 
-# sandbox NAME IDENTITY EXTRA TARGET_IP: a sandbox whose workload prints the
+# broker_network: no proxy; the broker originates TLS to the target Service.
+broker_network() {
+	cat <<EOF
+  network:
+    mode: proxied
+    egress:
+      allow:
+      - service: {name: target}
+        tls: {originate: SPIFFE}
+EOF
+}
+
+# sandbox NAME IDENTITY EXTRA TARGET_IP [NETWORK]: a sandbox whose workload prints the
 # HTTP status the target answered (000: no answer).
 sandbox() {
 	cat <<EOF | kubectl apply -f - >/dev/null
@@ -180,17 +196,17 @@ spec:
   memory: 256Mi
 $2
 $3
-$(network "$4" target)
+${5:-$(network "$4" target)}
   command: [sh, -c]
   args: ['for i in 1 2 3 4 5; do c=\$(curl -s -m 5 -o /dev/null -w "%{http_code}" http://$4:8443/) || true; [ "\$c" = 000 ] || break; sleep 2; done; echo "SPIFFE-STATUS \$c"; sleep 300']
 EOF
 }
 
-# run NAME WANT IDENTITY EXTRA TARGET_IP. The output is read while the
+# run NAME WANT IDENTITY EXTRA TARGET_IP [NETWORK]. The output is read while the
 # workload still runs: a warm checkout's slot pod is deleted once it ends.
 run() {
 	kubectl -n "$NS" delete swiftsandbox "$1" --ignore-not-found --wait=true >/dev/null
-	sandbox "$1" "$3" "$4" "$5"
+	sandbox "$1" "$3" "$4" "$5" "${6:-}"
 	local deadline=$((SECONDS + TIMEOUT)) pod got="" phase
 	while [ -z "$got" ]; do
 		phase=$(kubectl -n "$NS" get swiftsandbox "$1" -o jsonpath='{.status.phase}')
@@ -260,19 +276,23 @@ EOF
 	ip=$(kubectl -n "$NS" get service target -o jsonpath='{.spec.clusterIP}')
 	local on="  identity: {spiffe: Enabled}"
 
-	# 5 first: no launcher needed.
+	# 6 first: no launcher needed.
 	if out=$(cat <<EOF | kubectl apply --dry-run=server -f - 2>&1
 apiVersion: sandbox.kubeswift.io/v1alpha1
 kind: SwiftSandbox
-metadata: {name: no-proxy, namespace: $NS}
+metadata: {name: tls-with-proxy, namespace: $NS}
 spec:
   image: $IMAGE
   identity: {spiffe: Enabled}
-  network: {mode: proxied}
+  network:
+    mode: proxied
+    egress:
+      allow: [{service: {name: target}, tls: {originate: SPIFFE}}]
+      proxy: {image: $PROXY_IMAGE, listeners: {transparent: 15006}}
   command: ["true"]
 EOF
-	); then die "identity without a proxy was accepted"; fi
-	case "$out" in *"needs an egress proxy"*) log "identity without an egress proxy is refused" ;; *) die "unexpected refusal: $out" ;; esac
+	); then die "allow[].tls with an egress proxy was accepted"; fi
+	case "$out" in *"built-in broker"*) log "allow[].tls with an egress proxy is refused" ;; *) die "unexpected refusal: $out" ;; esac
 
 	run allowed 200 "$on" "" "$ip"
 	[ "$(spiffe_id allowed)" = "spiffe://$TRUST_DOMAIN/ns/$NS/sandbox/allowed" ] || die "allowed: status.identity.spiffeID is '$(spiffe_id allowed)'"
@@ -281,6 +301,14 @@ EOF
 	log "other: the target saw $(spiffe_id other) and refused it"
 	run anonymous 000 "" "" "$ip"
 	log "anonymous: no identity, no SVID, no mTLS"
+
+	run broker 200 "$on" "" "$ip" "$(broker_network)"
+	local audit
+	audit=$(kubectl -n "$NS" logs broker -c egress-audit 2>/dev/null | grep '"tls":"spiffe"' | head -1 || true)
+	case "$audit" in *"\"svid\":\"spiffe://$TRUST_DOMAIN/ns/$NS/sandbox/broker\""*) log "broker: egress audit $audit" ;;
+	*) die "broker: no tls=spiffe audit line with the sandbox's SVID: '$audit'" ;; esac
+	run broker-other 403 "$on" "" "$ip" "$(broker_network)"
+	log "broker-other: the target saw $(spiffe_id broker-other) and refused it"
 
 	cat <<EOF | kubectl apply -f - >/dev/null
 apiVersion: sandbox.kubeswift.io/v1alpha1

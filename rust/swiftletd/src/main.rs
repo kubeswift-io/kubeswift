@@ -22,6 +22,7 @@ mod report;
 mod rootfs_read;
 mod secrets;
 mod shutdown;
+mod spiffe;
 mod use_locks;
 mod vfio_guard;
 mod warm_artifacts;

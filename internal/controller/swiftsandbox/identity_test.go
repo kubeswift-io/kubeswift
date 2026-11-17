@@ -69,6 +69,9 @@ func TestBuildPod_SPIFFE(t *testing.T) {
 	if !mounted(*c) {
 		t.Error("proxy has no read-only socket mount")
 	}
+	if containerEnv(pod.Spec.Containers, launcherName)["KUBESWIFT_EGRESS_BROKER_TLS_ALLOW"] != "" {
+		t.Error("broker TLS rules with a proxy")
+	}
 	for _, other := range append(append([]corev1.Container(nil), pod.Spec.Containers...), pod.Spec.InitContainers...) {
 		if other.Name != EgressProxyContainerName && mounted(other) {
 			t.Errorf("%s has the Workload API socket", other.Name)
@@ -93,13 +96,55 @@ func TestBuildPod_SPIFFE(t *testing.T) {
 	}
 }
 
-// Nothing changes without the identity, without a proxy, or with SPIFFE off.
+// Without a proxy the launcher container (the built-in broker) gets the
+// socket and the TLS rules: the resolved entries of cidr and service rules
+// with tls, and host rules with tls.
+func TestBuildPod_SPIFFEBroker(t *testing.T) {
+	withSPIFFE(t, csiSPIFFE)
+	sb := proxiedSandbox()
+	sb.Spec.Identity = &sandboxv1alpha1.SandboxIdentity{SPIFFE: sandboxv1alpha1.SandboxIdentitySPIFFEEnabled}
+	tls := &sandboxv1alpha1.SandboxEgressTLS{Originate: sandboxv1alpha1.SandboxEgressTLSSPIFFE}
+	sb.Spec.Network.Egress.Allow[0].TLS = tls // host api.example.com, 443 and 8443
+	sb.Spec.Network.Egress.Allow[2].TLS = tls // service ai/llm
+	sb.Spec.Network.Egress.Allow = append(sb.Spec.Network.Egress.Allow,
+		sandboxv1alpha1.SandboxEgressRule{CIDR: "10.20.0.0/16", Ports: []sandboxv1alpha1.SandboxEgressPort{{Port: 443}}})
+	setEgressAllowed(sb, []sandboxv1alpha1.SandboxEgressAllowed{
+		{CIDR: "10.96.0.12/32", Protocol: corev1.ProtocolTCP, Port: 8000, From: "service ai/llm"},
+		{CIDR: "10.20.0.0/16", Protocol: corev1.ProtocolTCP, Port: 443, From: "cidr 10.20.0.0/16"},
+	})
+	pod := buildPod(sb, "sandbox")
+	if pod.Labels[SPIFFELabelKey] != "enabled" {
+		t.Errorf("labels %v", pod.Labels)
+	}
+	env := containerEnv(pod.Spec.Containers, launcherName)
+	if env["SPIFFE_ENDPOINT_SOCKET"] != "unix:///run/spiffe/spire-agent.sock" ||
+		env["KUBESWIFT_EGRESS_BROKER_TLS_ALLOW"] != "tcp,10.96.0.12/32,8000" ||
+		env["KUBESWIFT_EGRESS_BROKER_TLS_HOSTS"] != "api.example.com,443 api.example.com,8443" {
+		t.Errorf("launcher env %v", env)
+	}
+	mounted := false
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		mounted = mounted || (m.Name == spiffeVolume && m.ReadOnly)
+	}
+	if pod.Spec.Containers[0].Name != launcherName || !mounted {
+		t.Error("launcher has no read-only socket mount")
+	}
+	// Without tls rules: the socket, no rule lists.
+	plain := proxiedSandbox()
+	plain.Spec.Identity = sb.Spec.Identity
+	env = containerEnv(buildPod(plain, "sandbox").Spec.Containers, launcherName)
+	if env["SPIFFE_ENDPOINT_SOCKET"] == "" || env["KUBESWIFT_EGRESS_BROKER_TLS_ALLOW"] != "" || env["KUBESWIFT_EGRESS_BROKER_TLS_HOSTS"] != "" {
+		t.Errorf("no tls rules: env %v", env)
+	}
+}
+
+// Nothing changes without the identity, outside mode proxied, or with SPIFFE off.
 func TestBuildPod_NoSPIFFE(t *testing.T) {
 	withSPIFFE(t, csiSPIFFE)
 	off := proxySandbox(sandboxv1alpha1.SandboxEgressProxyConfigSelf)
-	noProxy := proxiedSandbox()
-	noProxy.Spec.Identity = &sandboxv1alpha1.SandboxIdentity{SPIFFE: sandboxv1alpha1.SandboxIdentitySPIFFEEnabled}
-	for name, sb := range map[string]*sandboxv1alpha1.SwiftSandbox{"identity unset": off, "no proxy": noProxy} {
+	restricted := plainSandbox("busybox:1")
+	restricted.Spec.Identity = &sandboxv1alpha1.SandboxIdentity{SPIFFE: sandboxv1alpha1.SandboxIdentitySPIFFEEnabled}
+	for name, sb := range map[string]*sandboxv1alpha1.SwiftSandbox{"identity unset": off, "not proxied": restricted} {
 		pod := buildPod(sb, "sandbox")
 		if _, ok := pod.Labels[SPIFFELabelKey]; ok {
 			t.Errorf("%s: labeled", name)

@@ -1,6 +1,10 @@
 package swiftsandbox
 
 import (
+	"sort"
+	"strconv"
+	"strings"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
 
@@ -10,9 +14,11 @@ import (
 
 // A sandbox's SPIFFE identity. The chart's two ClusterSPIFFEIDs register the
 // launcher pods carrying SPIFFELabelKey; SPIRE (or another SPIFFE
-// implementation behind the same Workload API) issues the SVID, and the
-// egress proxy fetches it from the Workload API socket mounted at
-// spiffeMountDir. Neither swiftletd nor the guest sees the socket.
+// implementation behind the same Workload API) issues the SVID, fetched from
+// the Workload API socket mounted at spiffeMountDir by whatever holds the
+// sandbox's egress: the egress proxy container, or without one the launcher
+// container, whose built-in broker originates TLS with it for
+// allow[].tls rules. The guest never sees the socket.
 //
 //   - A warm slot is registered as .../ns/<ns>/pool/<pool>/slot/<slot>, from
 //     PoolLabelKey and SlotNameLabelKey, which a checkout does not change: the
@@ -79,14 +85,20 @@ func workloadAPISocket() string {
 	return "unix://" + spiffeMountDir + "/" + sandboxwebhook.SPIFFE.SocketName
 }
 
-// addSPIFFE labels a launcher pod for registration and gives its egress proxy
-// the Workload API socket. Runs after addEgressProxy. A warm slot's pool
-// labels are added by the pool controller; a cold launcher of a pooled
-// sandbox gets PoolRefLabelKey here.
+// addSPIFFE labels a launcher pod for registration and gives the egress
+// proxy container, or without one the launcher container (the built-in
+// broker), the Workload API socket; the broker also gets its TLS rules. Runs
+// after addEgressProxy and addProxiedLauncherEnv. A warm slot's pool labels
+// are added by the pool controller; a cold launcher of a pooled sandbox gets
+// PoolRefLabelKey here.
 func addSPIFFE(pod *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox) {
 	cfg := sandboxwebhook.SPIFFE
-	if cfg == nil || !identityEnabled(sb.Spec.Identity) || !hasEgressProxy(pod) {
+	if cfg == nil || !identityEnabled(sb.Spec.Identity) || sb.Spec.Network.Mode != sandboxv1alpha1.SandboxNetworkProxied {
 		return
+	}
+	holder, holderInit := launcherName, false
+	if hasEgressProxy(pod) {
+		holder, holderInit = EgressProxyContainerName, true
 	}
 	if pod.Labels == nil {
 		pod.Labels = map[string]string{}
@@ -102,10 +114,68 @@ func addSPIFFE(pod *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox) {
 		vol.VolumeSource = corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: cfg.HostPath, Type: ptr.To(corev1.HostPathDirectory)}}
 	}
 	pod.Spec.Volumes = append(pod.Spec.Volumes, vol)
-	for i := range pod.Spec.InitContainers {
-		if c := &pod.Spec.InitContainers[i]; c.Name == EgressProxyContainerName {
+	cs := pod.Spec.Containers
+	if holderInit {
+		cs = pod.Spec.InitContainers
+	}
+	for i := range cs {
+		if c := &cs[i]; c.Name == holder {
 			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: spiffeVolume, MountPath: spiffeMountDir, ReadOnly: true})
 			c.Env = append(c.Env, corev1.EnvVar{Name: "SPIFFE_ENDPOINT_SOCKET", Value: workloadAPISocket()})
+			if !holderInit {
+				c.Env = append(c.Env, brokerTLSEnv(sb)...)
+			}
 		}
 	}
+}
+
+// brokerTLSEnv lists the allow rules with tls.originate for the built-in
+// broker, in the formats of KUBESWIFT_SANDBOX_EGRESS_ALLOW (the resolved
+// cidr and service entries of those rules) and KUBESWIFT_SANDBOX_EGRESS_HOSTS.
+func brokerTLSEnv(sb *sandboxv1alpha1.SwiftSandbox) []corev1.EnvVar {
+	e := sb.Spec.Network.Egress
+	if e == nil {
+		return nil
+	}
+	from := map[string]bool{}
+	var hosts []string
+	for _, r := range e.Allow {
+		if r.TLS == nil || r.TLS.Originate != sandboxv1alpha1.SandboxEgressTLSSPIFFE {
+			continue
+		}
+		switch {
+		case r.Host != "":
+			if len(r.Ports) == 0 {
+				hosts = append(hosts, r.Host+",0")
+			}
+			for _, p := range r.Ports {
+				hosts = append(hosts, r.Host+","+strconv.Itoa(int(p.Port)))
+			}
+		case r.CIDR != "":
+			if cidr, err := sandboxwebhook.EgressCIDR(r.CIDR); err == nil {
+				from["cidr "+cidr] = true
+			}
+		case r.Service != nil:
+			ns := r.Service.Namespace
+			if ns == "" {
+				ns = sb.Namespace
+			}
+			from["service "+ns+"/"+r.Service.Name] = true
+		}
+	}
+	var tls []sandboxv1alpha1.SandboxEgressAllowed
+	for _, a := range egressAllowed(sb) {
+		if from[a.From] {
+			tls = append(tls, a)
+		}
+	}
+	var out []corev1.EnvVar
+	if v := egressAllowEnv(tls); v != "" {
+		out = append(out, corev1.EnvVar{Name: "KUBESWIFT_EGRESS_BROKER_TLS_ALLOW", Value: v})
+	}
+	if len(hosts) > 0 {
+		sort.Strings(hosts)
+		out = append(out, corev1.EnvVar{Name: "KUBESWIFT_EGRESS_BROKER_TLS_HOSTS", Value: strings.Join(hosts, " ")})
+	}
+	return out
 }

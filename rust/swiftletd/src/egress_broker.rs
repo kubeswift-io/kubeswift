@@ -15,6 +15,14 @@
 //!
 //! Anything else is closed. No TLS termination, no credentials.
 //!
+//! Rules from `allow[].tls: {originate: SPIFFE}` are also listed in
+//! `KUBESWIFT_EGRESS_BROKER_TLS_ALLOW` / `KUBESWIFT_EGRESS_BROKER_TLS_HOSTS`
+//! (same formats). For those the guest speaks plaintext and the broker
+//! connects over TLS, presenting the sandbox's X.509-SVID from the SPIFFE
+//! Workload API (`SPIFFE_ENDPOINT_SOCKET`, see spiffe.rs) and requiring the
+//! upstream to present an SVID of the same trust domain. A host rule sends
+//! the name the guest asked for as SNI.
+//!
 //! swiftletd runs the broker as a child process (`swiftletd egress-broker`)
 //! under `KUBESWIFT_EGRESS_PROXY_UID`. network-init matches that uid in
 //! OUTPUT and applies the restricted rules to it (metadata, the platform deny
@@ -58,6 +66,9 @@ pub struct Config {
     port: u16,
     cidrs: Vec<CidrRule>,
     hosts: Vec<HostRule>,
+    /// Destinations the broker originates TLS to with the SVID.
+    tls_cidrs: Vec<CidrRule>,
+    tls_hosts: Vec<HostRule>,
 }
 
 impl Config {
@@ -65,11 +76,60 @@ impl Config {
     pub fn from_env() -> Result<Config, String> {
         let port = std::env::var("KUBESWIFT_EGRESS_BROKER_PORT")
             .map_err(|_| "KUBESWIFT_EGRESS_BROKER_PORT is not set".to_string())?;
-        Config::parse(
+        let mut c = Config::parse(
             &port,
             &std::env::var("KUBESWIFT_SANDBOX_EGRESS_ALLOW").unwrap_or_default(),
             &std::env::var("KUBESWIFT_SANDBOX_EGRESS_HOSTS").unwrap_or_default(),
-        )
+        )?;
+        c.parse_tls(
+            &std::env::var("KUBESWIFT_EGRESS_BROKER_TLS_ALLOW").unwrap_or_default(),
+            &std::env::var("KUBESWIFT_EGRESS_BROKER_TLS_HOSTS").unwrap_or_default(),
+        )?;
+        Ok(c)
+    }
+
+    /// Adds the TLS-originating rules; each must also be an allow rule.
+    fn parse_tls(&mut self, allow: &str, hosts: &str) -> Result<(), String> {
+        let t = Config::parse("1", allow, hosts)?;
+        for r in &t.cidrs {
+            if !self.cidrs.contains(r) {
+                return Err(format!("tls rule {:?} is not an allow rule", r));
+            }
+        }
+        for r in &t.hosts {
+            if !self.hosts.contains(r) {
+                return Err(format!("tls host rule {:?} is not an allow rule", r));
+            }
+        }
+        self.tls_cidrs = t.cidrs;
+        self.tls_hosts = t.hosts;
+        Ok(())
+    }
+
+    fn originates_tls(&self) -> bool {
+        !self.tls_cidrs.is_empty() || !self.tls_hosts.is_empty()
+    }
+
+    /// The server name to originate TLS with for a connection to dst
+    /// allowed by `host` (the host rule and the name the guest sent), or
+    /// None to splice bytes.
+    fn tls_name(
+        &self,
+        dst: SocketAddrV4,
+        host: Option<(&HostRule, &str)>,
+    ) -> Option<rustls_pki_types::ServerName<'static>> {
+        if let Some((rule, name)) = host {
+            if self.tls_hosts.contains(rule) {
+                return rustls_pki_types::ServerName::try_from(name.to_string()).ok();
+            }
+        }
+        let ip = u32::from(*dst.ip());
+        self.tls_cidrs
+            .iter()
+            .any(|r| ip & r.mask == r.net && (r.port == 0 || r.port == dst.port()))
+            .then(|| {
+                rustls_pki_types::ServerName::IpAddress(std::net::IpAddr::V4(*dst.ip()).into())
+            })
     }
 
     fn parse(port: &str, allow: &str, hosts: &str) -> Result<Config, String> {
@@ -386,7 +446,12 @@ async fn sniff_stream(s: &TcpStream) -> Sniff {
     }
 }
 
-async fn handle(mut client: TcpStream, peer: SocketAddr, cfg: Arc<Config>) {
+type SvidRx = tokio::sync::watch::Receiver<Option<Arc<crate::spiffe::Svid>>>;
+
+/// How long a TLS-originating connection waits for the first SVID.
+const SVID_WAIT: Duration = Duration::from_secs(10);
+
+async fn handle(mut client: TcpStream, peer: SocketAddr, cfg: Arc<Config>, svid: Option<SvidRx>) {
     let dst = match original_dst(&client) {
         Ok(d) => d,
         Err(e) => {
@@ -411,6 +476,7 @@ async fn handle(mut client: TcpStream, peer: SocketAddr, cfg: Arc<Config>) {
         );
         return;
     }
+    let mut matched: Option<(HostRule, String)> = None;
     let decision = if cfg.cidr_allows(dst) {
         Ok("address".to_string())
     } else if cfg.hosts.is_empty() {
@@ -426,6 +492,7 @@ async fn handle(mut client: TcpStream, peer: SocketAddr, cfg: Arc<Config>) {
                             .iter()
                             .any(|a| a.ip() == std::net::IpAddr::V4(*dst.ip()))
                         {
+                            matched = Some((rule.clone(), name.clone()));
                             Ok(format!("host={} name={}", rule.pattern, name))
                         } else {
                             Err(format!("name={} resolves-elsewhere", name))
@@ -471,8 +538,50 @@ async fn handle(mut client: TcpStream, peer: SocketAddr, cfg: Arc<Config>) {
             return;
         }
     };
-    log::info!("egress_broker_allow peer={} dst={} {}", peer, dst, why);
-    let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+    let tls = cfg.tls_name(dst, matched.as_ref().map(|(r, n)| (r, n.as_str())));
+    let Some(name) = tls else {
+        log::info!("egress_broker_allow peer={} dst={} {}", peer, dst, why);
+        let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+        return;
+    };
+    let failed = |e: String| {
+        log::info!(
+            "egress_broker_connect_failed peer={} dst={} {} tls=spiffe error={}",
+            peer,
+            dst,
+            why,
+            e.replace(' ', "_")
+        )
+    };
+    let Some(mut rx) = svid else {
+        failed("no-workload-api".into());
+        return;
+    };
+    let Some(svid) = crate::spiffe::current(&mut rx, SVID_WAIT).await else {
+        failed("no-svid".into());
+        return;
+    };
+    let connector = tokio_rustls::TlsConnector::from(svid.tls.clone());
+    let mut tls =
+        match tokio::time::timeout(CONNECT_TIMEOUT, connector.connect(name, upstream)).await {
+            Ok(Ok(t)) => t,
+            Ok(Err(e)) => {
+                failed(format!("tls:{}", e));
+                return;
+            }
+            Err(_) => {
+                failed("tls:timeout".into());
+                return;
+            }
+        };
+    log::info!(
+        "egress_broker_allow peer={} dst={} {} tls=spiffe svid={}",
+        peer,
+        dst,
+        why,
+        svid.id
+    );
+    let _ = tokio::io::copy_bidirectional(&mut client, &mut tls).await;
 }
 
 /// `swiftletd egress-broker`: serves until killed. Exits non-zero when it
@@ -503,11 +612,28 @@ pub fn main() -> ! {
                 return 1;
             }
         };
+        // TLS origination needs the SVID: watch the Workload API from the
+        // start, so the first connection does not wait for it.
+        let svid = if cfg.originates_tls() {
+            match crate::spiffe::socket_from_env() {
+                Some(socket) => Some(crate::spiffe::watch(socket)),
+                None => {
+                    log::error!(
+                        "egress_broker_config_invalid: TLS origination needs {}",
+                        crate::spiffe::SOCKET_ENV
+                    );
+                    return 2;
+                }
+            }
+        } else {
+            None
+        };
         log::info!(
-            "egress_broker_listening port={} address_rules={} host_rules={} uid={}",
+            "egress_broker_listening port={} address_rules={} host_rules={} tls_rules={} uid={}",
             cfg.port,
             cfg.cidrs.len(),
             cfg.hosts.len(),
+            cfg.tls_cidrs.len() + cfg.tls_hosts.len(),
             unsafe { libc::getuid() }
         );
         let limit = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
@@ -528,8 +654,9 @@ pub fn main() -> ! {
                 continue;
             };
             let cfg = cfg.clone();
+            let svid = svid.clone();
             tokio::spawn(async move {
-                handle(sock, peer, cfg).await;
+                handle(sock, peer, cfg, svid).await;
                 drop(permit);
             });
         }
@@ -777,5 +904,41 @@ mod tests {
         assert!(Config::parse("15001", "udp,10.0.0.0/8,53", "").is_err());
         assert!(Config::parse("15001", "", "Bad.Host,443").is_err());
         assert!(Config::parse("0", "", "").is_err());
+    }
+
+    #[test]
+    fn tls_rules() {
+        let mut c = Config::parse(
+            "15001",
+            "tcp,10.96.0.12/32,8443 tcp,10.96.0.13/32,80",
+            "api.example.com,443 plain.example.com,80",
+        )
+        .unwrap();
+        assert!(!c.originates_tls());
+        c.parse_tls("tcp,10.96.0.12/32,8443", "api.example.com,443")
+            .unwrap();
+        assert!(c.originates_tls());
+        let name = |s: &str| match c.tls_name(s.parse().unwrap(), None) {
+            Some(rustls_pki_types::ServerName::IpAddress(_)) => "ip",
+            Some(_) => "dns",
+            None => "splice",
+        };
+        assert_eq!(name("10.96.0.12:8443"), "ip");
+        assert_eq!(name("10.96.0.13:80"), "splice");
+        let api = c.hosts[0].clone();
+        let plain = c.hosts[1].clone();
+        assert!(matches!(
+            c.tls_name("1.2.3.4:443".parse().unwrap(), Some((&api, "api.example.com"))),
+            Some(rustls_pki_types::ServerName::DnsName(n)) if n.as_ref() == "api.example.com"
+        ));
+        assert!(c
+            .tls_name(
+                "1.2.3.4:80".parse().unwrap(),
+                Some((&plain, "plain.example.com"))
+            )
+            .is_none());
+        // A TLS rule must also be an allow rule.
+        assert!(c.parse_tls("tcp,10.0.0.1/32,443", "").is_err());
+        assert!(c.parse_tls("", "other.example.com,443").is_err());
     }
 }
