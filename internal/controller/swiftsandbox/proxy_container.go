@@ -65,7 +65,7 @@ func resolveProxySpec(n sandboxv1alpha1.SandboxNetwork) *resolvedProxy {
 		}
 		rp.Image, rp.Args = pr.Image, pr.Args
 		rp.TranslatorImage, rp.TranslatorArgs = pr.TranslatorImage, pr.TranslatorArgs
-		rp.Listeners = sandboxv1alpha1.SandboxEgressProxyListeners{Transparent: pr.Listeners.Transparent, DNS: pr.Listeners.DNS}
+		rp.Listeners = sandboxv1alpha1.SandboxEgressProxyListeners{Transparent: pr.Listeners.Transparent, DNS: pr.Listeners.DNS, HTTP: pr.Listeners.HTTP}
 		return rp
 	}
 	if spec.Listeners == nil {

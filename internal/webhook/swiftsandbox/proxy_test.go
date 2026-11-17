@@ -67,6 +67,8 @@ func TestProxyNotAvailableYet(t *testing.T) {
 		proxied(&sandboxv1alpha1.SandboxEgress{Proxy: &sandboxv1alpha1.SandboxEgressProxy{
 			Image: "docker.io/envoyproxy/envoy:v1.36.2", Listeners: listeners,
 			Upstreams: []sandboxv1alpha1.SandboxEgressRule{{Service: svc("llm", "ai")}}}}),
+		proxied(&sandboxv1alpha1.SandboxEgress{Proxy: &sandboxv1alpha1.SandboxEgressProxy{Image: "docker.io/envoyproxy/envoy:v1.36.2",
+			Listeners: &sandboxv1alpha1.SandboxEgressProxyListeners{Transparent: 15001, HTTP: 15002}}}),
 	}
 	for i, n := range ok {
 		if err := ValidateNetwork(n); err != nil {
@@ -80,9 +82,6 @@ func TestProxyNotAvailableYet(t *testing.T) {
 		{"unknown preset", "is not a preset this cluster defines", proxied(&sandboxv1alpha1.SandboxEgress{Proxy: preset()})},
 		{"image not allowed", "is not an egress proxy image this cluster allows", proxied(&sandboxv1alpha1.SandboxEgress{
 			Proxy: &sandboxv1alpha1.SandboxEgressProxy{Image: "docker.io/library/nginx:1", Listeners: listeners}})},
-		{"http listener", "listeners.http is not available", proxied(&sandboxv1alpha1.SandboxEgress{
-			Proxy: &sandboxv1alpha1.SandboxEgressProxy{Image: "docker.io/envoyproxy/envoy:v1.36.2",
-				Listeners: &sandboxv1alpha1.SandboxEgressProxyListeners{Transparent: 15001, HTTP: 15002}}})},
 	} {
 		if err := ValidateNetwork(tc.n); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: got %v, want %q", tc.name, err, tc.want)
@@ -310,6 +309,8 @@ func TestParseProxyPresets(t *testing.T) {
 		"unknown field":           `{"envoy":{"image":"x","listeners":{"transparent":15006},"command":["sh"]}}`,
 		"not json":                `envoy`,
 		"readiness on a listener": `{"envoy":{"image":"x","listeners":{"transparent":15006},"readiness":{"httpGet":{"port":15006,"path":"/certs"}}}}`,
+		"http on transparent":     `{"envoy":{"image":"x","listeners":{"transparent":15006,"http":15006}}}`,
+		"readiness on http":       `{"envoy":{"image":"x","listeners":{"transparent":15006,"http":15002},"readiness":{"httpGet":{"port":15002,"path":"/certs"}}}}`,
 		"readiness relative path": `{"envoy":{"image":"x","listeners":{"transparent":15006},"readiness":{"httpGet":{"port":15000,"path":"certs"}}}}`,
 	} {
 		if _, err := ParseProxyPresets(in); err == nil {

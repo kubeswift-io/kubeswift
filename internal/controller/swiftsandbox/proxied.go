@@ -98,6 +98,9 @@ func proxiedEnv(sb *sandboxv1alpha1.SwiftSandbox) []corev1.EnvVar {
 		if p.Listeners.DNS != 0 {
 			extra = append(extra, corev1.EnvVar{Name: "KUBESWIFT_EGRESS_PROXY_DNS_PORT", Value: strconv.Itoa(int(p.Listeners.DNS))})
 		}
+		if p.Listeners.HTTP != 0 {
+			extra = append(extra, corev1.EnvVar{Name: "KUBESWIFT_EGRESS_PROXY_HTTP_PORT", Value: strconv.Itoa(int(p.Listeners.HTTP))})
+		}
 	}
 	env := []corev1.EnvVar{
 		{Name: "KUBESWIFT_EGRESS_BROKER_PORT", Value: strconv.Itoa(port)},
@@ -127,5 +130,26 @@ func addProxiedLauncherEnv(pod *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox) {
 			c.Env = append(c.Env, corev1.EnvVar{Name: "KUBESWIFT_SANDBOX_EGRESS", Value: string(sandboxv1alpha1.SandboxNetworkProxied)})
 			c.Env = append(c.Env, proxiedEnv(sb)...)
 		}
+	}
+}
+
+// sandboxBridgeGateway is the launcher bridge's address in the guest network
+// (network-init.sh BRIDGE_IP), where the guest reaches the launcher pod.
+const sandboxBridgeGateway = "192.168.99.1"
+
+// httpProxyEnv is what the workload's environment gains when its egress proxy
+// declares listeners.http: the proxy variables, upper and lower case (tools
+// read one or the other), pointing at the HTTP listener on the bridge. A
+// client that ignores them still reaches the transparent listener.
+func httpProxyEnv(sb *sandboxv1alpha1.SwiftSandbox) []string {
+	p := egressProxy(sb)
+	if p == nil || p.Listeners.HTTP == 0 {
+		return nil
+	}
+	url := "http://" + sandboxBridgeGateway + ":" + strconv.Itoa(int(p.Listeners.HTTP))
+	const noProxy = "localhost,127.0.0.1,::1"
+	return []string{
+		"HTTP_PROXY=" + url, "HTTPS_PROXY=" + url, "NO_PROXY=" + noProxy,
+		"http_proxy=" + url, "https_proxy=" + url, "no_proxy=" + noProxy,
 	}
 }

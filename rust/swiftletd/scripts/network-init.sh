@@ -100,6 +100,11 @@ apply_proxied_egress() {
     redir="KUBESWIFT_SBX_REDIRECT"
     iptables -t nat -N "$redir" 2>/dev/null || iptables -t nat -F "$redir"
     iptables -t nat -A "$redir" -p tcp -d "$gw" --dport 53 -j RETURN
+    # A proxy container's explicit HTTP listener (listeners.http): the guest's
+    # HTTP_PROXY points at the bridge address on that port, delivered as is.
+    hport="${KUBESWIFT_EGRESS_PROXY_HTTP_PORT:-}"
+    case "$hport" in *[!0-9]*) echo "ERROR: malformed KUBESWIFT_EGRESS_PROXY_HTTP_PORT" >&2; exit 1 ;; esac
+    [ -z "$hport" ] || iptables -t nat -A "$redir" -p tcp -d "$gw" --dport "$hport" -j RETURN
     iptables -t nat -A "$redir" -p tcp -j REDIRECT --to-ports "$port"
     iptables -t nat -C PREROUTING -i "$guest_if" -j "$redir" 2>/dev/null \
         || iptables -t nat -I PREROUTING 1 -i "$guest_if" -j "$redir"
@@ -112,11 +117,18 @@ apply_proxied_egress() {
     iptables -A "$inp" -d "$gw" -p udp --dport 53 -j ACCEPT
     iptables -A "$inp" -d "$gw" -p tcp --dport 53 -j ACCEPT
     iptables -A "$inp" -p tcp --dport "$port" -j ACCEPT
+    [ -z "$hport" ] || iptables -A "$inp" -d "$gw" -p tcp --dport "$hport" -j ACCEPT
     iptables -A "$inp" -j DROP
     iptables -C INPUT -i "$guest_if" -j "$inp" 2>/dev/null \
         || iptables -I INPUT 1 -i "$guest_if" -j "$inp"
     iptables -C INPUT ! -i "$guest_if" -p tcp --dport "$port" -j DROP 2>/dev/null \
         || iptables -I INPUT 1 ! -i "$guest_if" -p tcp --dport "$port" -j DROP
+    if [ -n "$hport" ]; then
+        # Only the guest reaches the HTTP listener: not the cluster, and not
+        # the pod's other containers over loopback.
+        iptables -C INPUT ! -i "$guest_if" -p tcp --dport "$hport" -j DROP 2>/dev/null \
+            || iptables -I INPUT 1 ! -i "$guest_if" -p tcp --dport "$hport" -j DROP
+    fi
     # A proxy container's DNS listener: dnsmasq forwards to it over loopback;
     # nothing else may use it.
     dport="${KUBESWIFT_EGRESS_PROXY_DNS_PORT:-}"

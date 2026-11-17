@@ -711,8 +711,7 @@ type SandboxEgress struct {
 	// Host for host rules, by address for the others). Only valid with mode
 	// proxied. An image runs when the administrator allows it (chart
 	// sandboxMaterialize.egressProxyImages), a preset when the administrator
-	// defines it (sandboxMaterialize.egressProxyPresets); the HTTP listener
-	// is not available yet and is refused.
+	// defines it (sandboxMaterialize.egressProxyPresets).
 	// +optional
 	Proxy *SandboxEgressProxy `json:"proxy,omitempty"`
 
@@ -900,8 +899,10 @@ type SandboxEgressProxyListeners struct {
 	DNS int32 `json:"dns,omitempty"`
 
 	// HTTP, when set, is an explicit HTTP proxy port: the guest gets
-	// HTTP_PROXY, HTTPS_PROXY and NO_PROXY pointing at it. Connections that
-	// ignore them still reach the transparent listener.
+	// HTTP_PROXY, HTTPS_PROXY and NO_PROXY (and their lowercase forms)
+	// pointing at it on the launcher bridge, 192.168.99.1. Connections that
+	// ignore them still reach the transparent listener. Only the guest can
+	// reach the port.
 	// +kubebuilder:validation:Minimum=1024
 	// +kubebuilder:validation:Maximum=65535
 	// +optional

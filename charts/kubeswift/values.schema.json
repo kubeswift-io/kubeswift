@@ -88,7 +88,7 @@
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["transparent"],
-                "properties": { "transparent": { "type": "integer" }, "dns": { "type": "integer" } }
+                "properties": { "transparent": { "type": "integer" }, "dns": { "type": "integer" }, "http": { "type": "integer" } }
               },
               "readiness": {
                 "type": "object",
