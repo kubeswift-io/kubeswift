@@ -435,6 +435,9 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		return ctrl.Result{}, err
 	}
 	cm := buildIntentConfigMap(sb, intentJSON)
+	if err := addEgressIntent(cm, sb, "SwiftSandbox", sb.Name); err != nil {
+		return ctrl.Result{}, err
+	}
 	if err := controllerutil.SetControllerReference(sb, cm, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -648,7 +651,11 @@ func (r *SwiftSandboxReconciler) finishTerminal(ctx context.Context, sb *sandbox
 		return r.fail(ctx, sb, "KernelUnsupported", msg)
 	}
 	if msg, failed := egressError(pod); failed {
-		return r.fail(ctx, sb, "EgressBrokerFailed", msg)
+		reason := "EgressBrokerFailed"
+		if hasEgressProxy(pod) {
+			reason = "EgressProxyNotReady"
+		}
+		return r.fail(ctx, sb, reason, msg)
 	}
 	// swiftletd could not read a secret variable and ended the launcher.
 	if msg, failed := secretError(pod); failed {

@@ -545,6 +545,9 @@ pub fn spawn_if_proxied() -> Result<(), String> {
     if std::env::var("KUBESWIFT_SANDBOX_EGRESS").as_deref() != Ok("proxied") {
         return Ok(());
     }
+    if std::env::var("KUBESWIFT_EGRESS_PROXY").as_deref() == Ok("container") {
+        return wait_for_proxy();
+    }
     let cfg = Config::from_env()?;
     let uid: u32 = std::env::var("KUBESWIFT_EGRESS_PROXY_UID")
         .ok()
@@ -583,14 +586,55 @@ pub fn spawn_if_proxied() -> Result<(), String> {
     ))
 }
 
+/// A proxy container (spec.network.egress.proxy) replaces the broker. It is a
+/// native sidecar started before this container; wait until it listens on
+/// its transparent port (and DNS port, when it has one) so the guest never
+/// boots into a redirect to nothing.
+fn wait_for_proxy() -> Result<(), String> {
+    let port: u16 = std::env::var("KUBESWIFT_EGRESS_BROKER_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .ok_or("KUBESWIFT_EGRESS_BROKER_PORT is not a port")?;
+    let dns: Option<u16> = std::env::var("KUBESWIFT_EGRESS_PROXY_DNS_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok());
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while std::time::Instant::now() < deadline {
+        if listening(port) && dns.map_or(true, udp_bound) {
+            log::info!("egress_proxy_ready port={} dns={:?}", port, dns);
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err(match dns {
+        Some(d) => format!(
+            "egress proxy is not listening on TCP port {} and UDP port {} after 60s",
+            port, d
+        ),
+        None => format!(
+            "egress proxy is not listening on TCP port {} after 60s",
+            port
+        ),
+    })
+}
+
 /// Whether something listens on TCP `port` in this network namespace.
 fn listening(port: u16) -> bool {
+    socket_in("/proc/net/tcp", port, Some("0A"))
+}
+
+/// Whether a UDP socket is bound to `port` in this network namespace.
+fn udp_bound(port: u16) -> bool {
+    socket_in("/proc/net/udp", port, None)
+}
+
+fn socket_in(table: &str, port: u16, state: Option<&str>) -> bool {
     let want = format!(":{:04X}", port);
-    std::fs::read_to_string("/proc/net/tcp")
+    std::fs::read_to_string(table)
         .map(|t| {
             t.lines().skip(1).any(|l| {
                 let f: Vec<&str> = l.split_whitespace().collect();
-                f.len() > 3 && f[1].ends_with(&want) && f[3] == "0A"
+                f.len() > 3 && f[1].ends_with(&want) && state.map_or(true, |s| f[3] == s)
             })
         })
         .unwrap_or(false)

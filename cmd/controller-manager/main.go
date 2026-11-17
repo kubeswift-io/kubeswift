@@ -146,6 +146,15 @@ func main() {
 	} else {
 		swiftsandbox.ExtraEgressDeny = deny
 	}
+	// Proxied sandboxes: the images allowed as egress proxy (chart
+	// sandboxMaterialize.egressProxyImages). Read by the webhook and the
+	// controller alike; a bad pattern stops the controller.
+	if imgs, err := swiftsandboxwebhook.ParseProxyImages(os.Getenv("KUBESWIFT_SANDBOX_EGRESS_PROXY_IMAGES")); err != nil {
+		klog.ErrorS(err, "invalid KUBESWIFT_SANDBOX_EGRESS_PROXY_IMAGES")
+		os.Exit(1)
+	} else {
+		swiftsandboxwebhook.AllowedProxyImages = imgs
+	}
 	if q, err := swiftsandbox.ParseLauncherCPUPerVCPU(os.Getenv("KUBESWIFT_SANDBOX_LAUNCHER_CPU_PER_VCPU")); err != nil {
 		klog.ErrorS(err, "invalid KUBESWIFT_SANDBOX_LAUNCHER_CPU_PER_VCPU")
 		os.Exit(1)

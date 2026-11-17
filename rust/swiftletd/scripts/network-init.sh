@@ -117,6 +117,16 @@ apply_proxied_egress() {
         || iptables -I INPUT 1 -i "$guest_if" -j "$inp"
     iptables -C INPUT ! -i "$guest_if" -p tcp --dport "$port" -j DROP 2>/dev/null \
         || iptables -I INPUT 1 ! -i "$guest_if" -p tcp --dport "$port" -j DROP
+    # A proxy container's DNS listener: dnsmasq forwards to it over loopback;
+    # nothing else may use it.
+    dport="${KUBESWIFT_EGRESS_PROXY_DNS_PORT:-}"
+    if [ -n "$dport" ]; then
+        case "$dport" in *[!0-9]*) echo "ERROR: malformed KUBESWIFT_EGRESS_PROXY_DNS_PORT" >&2; exit 1 ;; esac
+        for proto in udp tcp; do
+            iptables -C INPUT ! -i lo -p "$proto" --dport "$dport" -j DROP 2>/dev/null \
+                || iptables -I INPUT 1 ! -i lo -p "$proto" --dport "$dport" -j DROP
+        done
+    fi
 
     out="KUBESWIFT_SBX_PROXY"
     iptables -N "$out" 2>/dev/null || iptables -F "$out"

@@ -3,6 +3,7 @@ package swiftsandbox
 import (
 	"fmt"
 	"net"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,10 +18,78 @@ import (
 var ProxiedAvailable = true
 
 // EgressProxyAvailable reports whether this build runs an egress proxy
-// container (spec.network.egress.proxy) and credentials. Until that runtime
-// ships they are validated in full and then refused, so a spec written
-// against the API fails with its real errors first.
-var EgressProxyAvailable = false
+// container from an image (spec.network.egress.proxy.image).
+var EgressProxyAvailable = true
+
+// PresetsAvailable, CredentialsAvailable and ServiceUpstreamsAvailable are
+// parts of the egress proxy API this build does not run yet. They are
+// validated in full and then refused, so a spec written against the API fails
+// with its real errors first.
+var (
+	PresetsAvailable          = false
+	CredentialsAvailable      = false
+	ServiceUpstreamsAvailable = false
+	HTTPListenerAvailable     = false
+)
+
+// AllowedProxyImages are the image patterns a proxied sandbox may run as its
+// egress proxy (chart sandboxMaterialize.egressProxyImages), path.Match
+// patterns where "*" does not cross "/". Empty allows none: the proxy runs in
+// the launcher pod, so the administrator chooses which images may.
+var AllowedProxyImages []string
+
+// ProxyImageAllowed reports whether image matches AllowedProxyImages.
+func ProxyImageAllowed(image string) bool {
+	for _, p := range AllowedProxyImages {
+		if ok, err := path.Match(p, image); err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseProxyImages reads the comma- or space-separated pattern list, refusing
+// a malformed pattern.
+func ParseProxyImages(s string) ([]string, error) {
+	var out []string
+	for _, f := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' }) {
+		if _, err := path.Match(f, ""); err != nil {
+			return nil, fmt.Errorf("egress proxy image pattern %q: %w", f, err)
+		}
+		out = append(out, f)
+	}
+	return out, nil
+}
+
+// proxyNotAvailable is the refusal of a proxy feature this build lacks, or
+// "" when the spec uses none.
+func proxyNotAvailable(n sandboxv1alpha1.SandboxNetwork) string {
+	e := n.Egress
+	if e == nil {
+		return ""
+	}
+	if p := e.Proxy; p != nil {
+		switch {
+		case !EgressProxyAvailable:
+			return "spec.network.egress.proxy"
+		case p.Preset != "" && !PresetsAvailable:
+			return "spec.network.egress.proxy.preset (use an image)"
+		case p.Listeners != nil && p.Listeners.HTTP != 0 && !HTTPListenerAvailable:
+			return "spec.network.egress.proxy.listeners.http"
+		}
+		if !ServiceUpstreamsAvailable {
+			for _, r := range p.Upstreams {
+				if r.Service != nil {
+					return "a service entry in spec.network.egress.proxy.upstreams (use the Service's ClusterIP as a cidr)"
+				}
+			}
+		}
+	}
+	if len(e.Credentials) > 0 && !CredentialsAvailable {
+		return "spec.network.egress.credentials"
+	}
+	return ""
+}
 
 // EgressBrokerPort is the built-in broker's transparent listener in the
 // launcher pod. A proxied sandbox without a proxy cannot expose it.
@@ -147,6 +216,9 @@ func validateProxy(n sandboxv1alpha1.SandboxNetwork) error {
 		if err := validateEgressRule(r, ruleUpstream, true); err != nil {
 			return fmt.Errorf("%s.upstreams[%d]: %w", f, i, err)
 		}
+	}
+	if p.Image != "" && EgressProxyAvailable && !ProxyImageAllowed(p.Image) {
+		return fmt.Errorf("%s.image %q is not an egress proxy image this cluster allows (chart sandboxMaterialize.egressProxyImages)", f, p.Image)
 	}
 	return nil
 }

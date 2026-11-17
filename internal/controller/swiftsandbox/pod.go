@@ -686,6 +686,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 	}
 	addEgressDeny(pod, sb)
 	addProxiedLauncherEnv(pod, sb)
+	addEgressProxy(pod, sb)
 	applyPodMetadata(pod, sb.Spec.PodMetadata)
 	addOutputVolumes(pod, sb)
 	if usesSecrets(sb) {
