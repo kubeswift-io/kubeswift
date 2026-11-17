@@ -787,13 +787,15 @@ spec:
                               type: object
                             tls:
                               description: |-
-                                TLS asks the built-in egress broker to originate TLS to this
-                                destination: the guest connects in plaintext and the broker connects
-                                over TLS presenting the sandbox's SPIFFE X.509-SVID, and accepts only an
-                                upstream presenting an SVID of the same trust domain. For a host rule
-                                the guest must speak HTTP (the broker reads the Host header) and the
-                                name is sent as SNI. Needs mode proxied, spec.identity.spiffe Enabled
-                                and no egress proxy (a proxy originates TLS in its own configuration).
+                                TLS asks the egress path to originate TLS to this destination: the
+                                guest connects in plaintext and the built-in broker, or a config-Intent
+                                proxy whose image lists tls-originate in its
+                                io.kubeswift.egress-intent.features label, connects over TLS presenting
+                                the sandbox's SPIFFE X.509-SVID and accepts only an upstream presenting
+                                an SVID of the same trust domain. For a host rule the guest must speak
+                                HTTP (the Host header is matched). Needs mode proxied and
+                                spec.identity.spiffe Enabled; a Self proxy originates TLS in its own
+                                configuration.
                               properties:
                                 originate:
                                   description: |-
@@ -1217,13 +1219,15 @@ spec:
                                   type: object
                                 tls:
                                   description: |-
-                                    TLS asks the built-in egress broker to originate TLS to this
-                                    destination: the guest connects in plaintext and the broker connects
-                                    over TLS presenting the sandbox's SPIFFE X.509-SVID, and accepts only an
-                                    upstream presenting an SVID of the same trust domain. For a host rule
-                                    the guest must speak HTTP (the broker reads the Host header) and the
-                                    name is sent as SNI. Needs mode proxied, spec.identity.spiffe Enabled
-                                    and no egress proxy (a proxy originates TLS in its own configuration).
+                                    TLS asks the egress path to originate TLS to this destination: the
+                                    guest connects in plaintext and the built-in broker, or a config-Intent
+                                    proxy whose image lists tls-originate in its
+                                    io.kubeswift.egress-intent.features label, connects over TLS presenting
+                                    the sandbox's SPIFFE X.509-SVID and accepts only an upstream presenting
+                                    an SVID of the same trust domain. For a host rule the guest must speak
+                                    HTTP (the Host header is matched). Needs mode proxied and
+                                    spec.identity.spiffe Enabled; a Self proxy originates TLS in its own
+                                    configuration.
                                   properties:
                                     originate:
                                       description: |-

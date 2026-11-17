@@ -191,6 +191,13 @@ type SPIFFEConfig struct {
 // SPIFFE is the platform's SPIFFE setup; nil when off.
 var SPIFFE *SPIFFEConfig
 
+// proxyReadsIntent: the proxy takes its policy from the egress-intent file
+// (config Intent, the default for a preset).
+func proxyReadsIntent(p *sandboxv1alpha1.SandboxEgressProxy) bool {
+	return p.Config == sandboxv1alpha1.SandboxEgressProxyConfigIntent ||
+		(p.Config == "" && p.Preset != "")
+}
+
 // TLSOriginationAvailable is the switch for spec.network.egress.allow[].tls.
 var TLSOriginationAvailable = true
 
@@ -494,8 +501,8 @@ func ValidateIdentity(id *sandboxv1alpha1.SandboxIdentity, n sandboxv1alpha1.San
 				return fmt.Errorf("spec.network.egress.allow[%d].tls needs spec.identity.spiffe Enabled", i)
 			case !TLSOriginationAvailable:
 				return fmt.Errorf("spec.network.egress.allow[%d].tls is not available in this version of KubeSwift yet", i)
-			case n.Egress.Proxy != nil:
-				return fmt.Errorf("spec.network.egress.allow[%d].tls is done by the built-in broker; with an egress proxy, originate TLS in the proxy's own configuration", i)
+			case n.Egress.Proxy != nil && !proxyReadsIntent(n.Egress.Proxy):
+				return fmt.Errorf("spec.network.egress.allow[%d].tls needs the built-in broker or a proxy in config Intent; a Self proxy originates TLS in its own configuration", i)
 			}
 		}
 	}

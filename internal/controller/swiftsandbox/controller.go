@@ -404,7 +404,7 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	}
 	r.registryFailures.Delete(client.ObjectKeyFromObject(sb))
 	if irWanted {
-		if reason, msg := intentVersionVerdict(irImage, irLabels); reason != "" {
+		if reason, msg := intentVersionVerdict(irImage, irLabels, sb); reason != "" {
 			return r.fail(ctx, sb, reason, msg)
 		}
 	}

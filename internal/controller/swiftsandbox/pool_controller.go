@@ -467,7 +467,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{RequeueAfter: registryPendingRecheck}, nil
 		}
 		if irWanted {
-			if reason, msg := intentVersionVerdict(irImage, irLabels); reason != "" {
+			if reason, msg := intentVersionVerdict(irImage, irLabels, r.slotTemplate(&pool, pool.Name)); reason != "" {
 				wait := r.nextResolveBackoff(req.NamespacedName)
 				return r.degradedAfter(ctx, &pool, ready, claimed, reason, msg, wait)
 			}

@@ -282,8 +282,20 @@ func TestValidateIdentity(t *testing.T) {
 	}
 	withTLS := *withProxy
 	withTLS.Allow = tlsRule
-	if err := ValidateIdentity(on, proxied(&withTLS)); err == nil || !strings.Contains(err.Error(), "built-in broker") {
-		t.Errorf("tls rule with a proxy: got %v", err)
+	if err := ValidateIdentity(on, proxied(&withTLS)); err == nil || !strings.Contains(err.Error(), "config Intent") {
+		t.Errorf("tls rule with a Self proxy: got %v", err)
+	}
+	intent := withTLS
+	ip := *withProxy.Proxy
+	ip.Config = sandboxv1alpha1.SandboxEgressProxyConfigIntent
+	intent.Proxy = &ip
+	if err := ValidateIdentity(on, proxied(&intent)); err != nil {
+		t.Errorf("tls rule with an Intent proxy: %v", err)
+	}
+	preset := withTLS
+	preset.Proxy = &sandboxv1alpha1.SandboxEgressProxy{Preset: "envoy"}
+	if err := ValidateIdentity(on, proxied(&preset)); err != nil {
+		t.Errorf("tls rule with a preset (Intent by default): %v", err)
 	}
 	TLSOriginationAvailable = false
 	if err := ValidateIdentity(on, proxied(&sandboxv1alpha1.SandboxEgress{Allow: tlsRule})); err == nil || !strings.Contains(err.Error(), "not available") {

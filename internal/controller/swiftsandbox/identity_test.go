@@ -246,3 +246,46 @@ func TestSlotMismatch_Identity(t *testing.T) {
 		t.Error("slot profile changes for pools without identity")
 	}
 }
+
+// allow[].tls reaches a config-Intent proxy as rule.tls (host rules as
+// written, cidr and service rules on their resolved entries), and only an
+// intent reader that lists tls-originate in its features label is accepted.
+func TestIntentTLSOriginate(t *testing.T) {
+	withSPIFFE(t, csiSPIFFE)
+	sb := spiffeSandbox() // proxied, Intent proxy, allow: host api.example.com, *.example.org, service ai/llm
+	tls := &sandboxv1alpha1.SandboxEgressTLS{Originate: sandboxv1alpha1.SandboxEgressTLSSPIFFE}
+	sb.Spec.Network.Egress.Allow[0].TLS = tls
+	sb.Spec.Network.Egress.Allow[2].TLS = tls
+	js, err := egressIntentJSON(sb, "SwiftSandbox", sb.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var in egressintentv1.EgressIntent
+	if err := json.Unmarshal([]byte(js), &in); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, r := range in.Allow {
+		got[r.From] = r.TLS != nil && r.TLS.Originate == "SPIFFE"
+	}
+	want := map[string]bool{"host api.example.com": true, "host *.example.org": false, "service ai/llm": true}
+	for from, w := range want {
+		if got[from] != w {
+			t.Errorf("%s: tls %v, want %v (%s)", from, got[from], w, js)
+		}
+	}
+	if in.Identity == nil || in.Identity.SPIFFE == nil {
+		t.Error("tls rules without the identity")
+	}
+	v1 := map[string]string{egressintentv1.ImageLabel: "v1"}
+	if r, msg := intentVersionVerdict("t", v1, sb); r != reasonEgressIntentUnsupported || !strings.Contains(msg, "tls-originate") {
+		t.Errorf("reader without the feature: %q %q", r, msg)
+	}
+	v1[egressintentv1.FeaturesLabel] = "credentials, tls-originate"
+	if r, msg := intentVersionVerdict("t", v1, sb); r != "" {
+		t.Errorf("reader with the feature: %q %q", r, msg)
+	}
+	if r, _ := intentVersionVerdict("t", map[string]string{egressintentv1.ImageLabel: "v1"}, spiffeSandbox()); r != "" {
+		t.Errorf("no tls rules, no feature needed: %q", r)
+	}
+}
