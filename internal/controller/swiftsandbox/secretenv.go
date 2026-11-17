@@ -34,6 +34,9 @@ const (
 	// annIntentError is swiftletd's report that the intent it was given is not
 	// the one its pod was built for (EnvIntentSHA256), so it did not start.
 	annIntentError = "kubeswift.io/launcher-intent-error"
+	// annEgressError is swiftletd's report that the egress broker of a
+	// proxied sandbox did not start, so the guest was not booted.
+	annEgressError = "kubeswift.io/sandbox-egress-error"
 )
 
 // secretFileRefs lists spec.secretFiles item by item, with each file's mode
@@ -148,6 +151,11 @@ func checkSecretEnv(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.Sw
 // intentError is swiftletd's report that it refused its intent.
 func intentError(pod *corev1.Pod) (string, bool) {
 	msg, ok := pod.Annotations[annIntentError]
+	return msg, ok
+}
+
+func egressError(pod *corev1.Pod) (string, bool) {
+	msg, ok := pod.Annotations[annEgressError]
 	return msg, ok
 }
 

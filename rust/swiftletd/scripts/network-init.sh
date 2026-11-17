@@ -43,6 +43,122 @@ guest_run_dir() {
 # Downward-API file of the pod's sandbox.kubeswift.io/egress-deny annotation.
 EGRESS_DENY_FILE="${EGRESS_DENY_FILE:-/etc/kubeswift/egress-deny/deny}"
 
+# build_deny_chain (re)creates KUBESWIFT_SBX_DENY from EGRESS_DENY_FILE and
+# sets deny_chain and denied. swiftletd (egress_deny.rs) replaces the chain
+# when the list changes, so every chain that jumps to it stays current.
+build_deny_chain() {
+    deny_chain="KUBESWIFT_SBX_DENY"
+    iptables -N "$deny_chain" 2>/dev/null || iptables -F "$deny_chain"
+    denied=0
+    if [ -r "$EGRESS_DENY_FILE" ]; then
+        for cidr in $(cat "$EGRESS_DENY_FILE"); do
+            case "$cidr" in
+                ''|*[!0-9./]*) echo "ERROR: malformed egress deny entry '$cidr'" >&2; exit 1 ;;
+            esac
+            iptables -A "$deny_chain" -d "$cidr" -j DROP || exit 1
+            denied=$((denied + 1))
+        done
+    fi
+}
+
+# apply_proxied_egress sets up mode proxied (KUBESWIFT_SANDBOX_EGRESS=proxied):
+# the guest keeps its NIC, nothing it sends is forwarded, every TCP
+# connection is redirected to the egress broker's transparent listener, and
+# DNS goes to the launcher's dnsmasq (which answers only allowed names). The
+# broker runs as KUBESWIFT_EGRESS_PROXY_UID; its own connections pass the
+# same checks a restricted guest's would (metadata, the platform deny list,
+# the allowlist, RFC1918), matched on that uid in OUTPUT.
+#
+#   FORWARD  -i br0: anti-spoof DROP, replies to inbound (exposed ports)
+#            RETURN, everything else DROP.
+#   nat PREROUTING -i br0: TCP DNS to the bridge RETURN, all other TCP
+#            REDIRECT to the broker.
+#   INPUT    -i br0: DHCP, DNS to the bridge and the broker port ACCEPT,
+#            the rest DROP. The broker port is DROPped from any other
+#            interface, so the cluster cannot use it.
+#   OUTPUT   -m owner --uid-owner <uid>: the restricted rules + allowlist.
+#   IPv6     from br0 and from the broker uid DROP.
+apply_proxied_egress() {
+    src_net="$1"
+    guest_if="$2"
+    gw="$3"
+    [ "${KUBESWIFT_SANDBOX_EGRESS:-}" = "proxied" ] || return 0
+    port="${KUBESWIFT_EGRESS_BROKER_PORT:-}"
+    uid="${KUBESWIFT_EGRESS_PROXY_UID:-}"
+    case "$port$uid" in
+        ''|*[!0-9]*) echo "ERROR: mode proxied needs KUBESWIFT_EGRESS_BROKER_PORT and KUBESWIFT_EGRESS_PROXY_UID" >&2; exit 1 ;;
+    esac
+
+    fwd="KUBESWIFT_SBX_EGRESS"
+    iptables -N "$fwd" 2>/dev/null || iptables -F "$fwd"
+    iptables -A "$fwd" ! -s "$src_net" -j DROP
+    iptables -A "$fwd" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+    iptables -A "$fwd" -j DROP
+    iptables -C FORWARD -i "$guest_if" -j "$fwd" 2>/dev/null \
+        || iptables -I FORWARD 1 -i "$guest_if" -j "$fwd"
+
+    redir="KUBESWIFT_SBX_REDIRECT"
+    iptables -t nat -N "$redir" 2>/dev/null || iptables -t nat -F "$redir"
+    iptables -t nat -A "$redir" -p tcp -d "$gw" --dport 53 -j RETURN
+    iptables -t nat -A "$redir" -p tcp -j REDIRECT --to-ports "$port"
+    iptables -t nat -C PREROUTING -i "$guest_if" -j "$redir" 2>/dev/null \
+        || iptables -t nat -I PREROUTING 1 -i "$guest_if" -j "$redir"
+
+    inp="KUBESWIFT_SBX_INPUT"
+    iptables -N "$inp" 2>/dev/null || iptables -F "$inp"
+    iptables -A "$inp" -p udp --dport 67 -j ACCEPT          # DHCP (source 0.0.0.0 before a lease)
+    iptables -A "$inp" ! -s "$src_net" -j DROP
+    iptables -A "$inp" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    iptables -A "$inp" -d "$gw" -p udp --dport 53 -j ACCEPT
+    iptables -A "$inp" -d "$gw" -p tcp --dport 53 -j ACCEPT
+    iptables -A "$inp" -p tcp --dport "$port" -j ACCEPT
+    iptables -A "$inp" -j DROP
+    iptables -C INPUT -i "$guest_if" -j "$inp" 2>/dev/null \
+        || iptables -I INPUT 1 -i "$guest_if" -j "$inp"
+    iptables -C INPUT ! -i "$guest_if" -p tcp --dport "$port" -j DROP 2>/dev/null \
+        || iptables -I INPUT 1 ! -i "$guest_if" -p tcp --dport "$port" -j DROP
+
+    out="KUBESWIFT_SBX_PROXY"
+    iptables -N "$out" 2>/dev/null || iptables -F "$out"
+    iptables -A "$out" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+    for d in $(grep '^nameserver ' /etc/resolv.conf 2>/dev/null | awk '{print $2}'); do
+        iptables -A "$out" -d "$d" -p udp --dport 53 -j RETURN
+        iptables -A "$out" -d "$d" -p tcp --dport 53 -j RETURN
+    done
+    iptables -A "$out" -d 127.0.0.0/8 -j DROP
+    iptables -A "$out" -d 169.254.0.0/16 -j DROP
+    build_deny_chain
+    iptables -A "$out" -j "$deny_chain"
+    allowed=0
+    for rule in ${KUBESWIFT_SANDBOX_EGRESS_ALLOW:-}; do
+        proto="${rule%%,*}"; rest="${rule#*,}"; cidr="${rest%%,*}"; rport="${rest#*,}"
+        case "$proto" in
+            tcp) iptables -A "$out" -d "$cidr" -p tcp --dport "$rport" -j RETURN ;;
+            any) iptables -A "$out" -d "$cidr" -j RETURN ;;
+            *)   echo "ERROR: malformed egress allow rule '$rule' for mode proxied" >&2; exit 1 ;;
+        esac
+        allowed=$((allowed + 1))
+    done
+    iptables -A "$out" -d 10.0.0.0/8     -j DROP
+    iptables -A "$out" -d 172.16.0.0/12  -j DROP
+    iptables -A "$out" -d 192.168.0.0/16 -j DROP
+    iptables -A "$out" -d 100.64.0.0/10  -j DROP
+    iptables -C OUTPUT -m owner --uid-owner "$uid" -j "$out" 2>/dev/null \
+        || iptables -I OUTPUT 1 -m owner --uid-owner "$uid" -j "$out"
+
+    if command -v ip6tables >/dev/null 2>&1; then
+        ip6tables -N "$fwd" 2>/dev/null || ip6tables -F "$fwd"
+        ip6tables -A "$fwd" -j DROP
+        ip6tables -C FORWARD -i "$guest_if" -j "$fwd" 2>/dev/null || ip6tables -I FORWARD 1 -i "$guest_if" -j "$fwd"
+        ip6tables -C INPUT -i "$guest_if" -j "$fwd" 2>/dev/null || ip6tables -I INPUT 1 -i "$guest_if" -j "$fwd"
+        ip6tables -C OUTPUT -m owner --uid-owner "$uid" -j "$fwd" 2>/dev/null \
+            || ip6tables -I OUTPUT 1 -m owner --uid-owner "$uid" -j "$fwd"
+    fi
+
+    echo "Proxied egress: $guest_if ($src_net) TCP -> broker :$port (uid $uid), DNS -> $gw;" \
+         "broker reaches DNS + internet + $allowed allowed rule(s), not 169.254/16, $denied platform address(es), RFC1918, 100.64/10"
+}
+
 apply_restricted_egress() {
     src_net="$1"
     guest_if="${2:-br0}"
@@ -77,18 +193,7 @@ apply_restricted_egress() {
     # swiftletd can replace it when the list changes (a node joins). BEFORE the
     # allow rules: a tenant cannot open these. AFTER the DNS RETURN: a resolver
     # on a node address still answers. A malformed entry fails the pod.
-    deny_chain="KUBESWIFT_SBX_DENY"
-    iptables -N "$deny_chain" 2>/dev/null || iptables -F "$deny_chain"
-    denied=0
-    if [ -r "$EGRESS_DENY_FILE" ]; then
-        for cidr in $(cat "$EGRESS_DENY_FILE"); do
-            case "$cidr" in
-                ''|*[!0-9./]*) echo "ERROR: malformed egress deny entry '$cidr'" >&2; exit 1 ;;
-            esac
-            iptables -A "$deny_chain" -d "$cidr" -j DROP || exit 1
-            denied=$((denied + 1))
-        done
-    fi
+    build_deny_chain
     iptables -A "$chain" -j "$deny_chain"
     # spec.network.egress.allow, resolved by the controller into
     # "<proto>,<cidr>,<port>" rules (proto tcp, udp or any). AFTER the metadata
@@ -183,6 +288,8 @@ setup_primary_nic() {
 
     # Sandbox restricted-egress hardening (no-op unless KUBESWIFT_SANDBOX_EGRESS=restricted).
     apply_restricted_egress "$bridge_net" "$bridge"
+    # Sandbox proxied egress (no-op unless KUBESWIFT_SANDBOX_EGRESS=proxied).
+    apply_proxied_egress "$bridge_net" "$bridge" "$bridge_addr"
 
     echo "Primary NIC: $bridge ($bridge_ip, net $bridge_net) with $tap"
 }

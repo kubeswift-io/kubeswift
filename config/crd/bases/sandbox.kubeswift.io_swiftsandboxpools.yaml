@@ -330,7 +330,8 @@ spec:
                           the listed destinations, after terminating TLS with a certificate
                           authority generated for the launcher, which the guest is made to trust.
                           The value is never written into the guest. Needs mode proxied and a
-                          proxy preset with config Intent.
+                          proxy preset with config Intent. Not available yet: refused until the
+                          proxy runtime ships.
                         items:
                           description: |-
                             SandboxEgressCredential is one secret the proxy adds to requests in place
@@ -413,7 +414,7 @@ spec:
                           Proxy selects the egress proxy of a proxied sandbox. Unset, the built-in
                           broker allows connections that match allow (by TLS server name or HTTP
                           Host for host rules, by address for the others). Only valid with mode
-                          proxied.
+                          proxied. Not available yet: refused until the proxy runtime ships.
                         properties:
                           args:
                             description: Args for an image proxy.

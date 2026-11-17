@@ -41,8 +41,15 @@ func resolveEgress(ctx context.Context, c client.Reader, ns string, n sandboxv1a
 	if n.Egress == nil {
 		return nil, nil, nil
 	}
+	// Mode proxied carries no guest UDP other than DNS: a Service rule without
+	// ports allows only the Service's TCP ports there.
+	proxied := n.Mode == sandboxv1alpha1.SandboxNetworkProxied
 	var out []sandboxv1alpha1.SandboxEgressAllowed
 	for i, r := range n.Egress.Allow {
+		if r.Host != "" {
+			// Matched by name in the broker (egressHostsEnv), not resolved here.
+			continue
+		}
 		if r.CIDR != "" {
 			cidr, err := sandboxwebhook.EgressCIDR(r.CIDR)
 			if err != nil { // validated above
@@ -90,6 +97,9 @@ func resolveEgress(ctx context.Context, c client.Reader, ns string, n sandboxv1a
 		}
 		for _, ip := range ips {
 			for _, p := range ports {
+				if proxied && p.Protocol != corev1.ProtocolTCP {
+					continue
+				}
 				out = append(out, sandboxv1alpha1.SandboxEgressAllowed{CIDR: ip + "/32", Protocol: p.Protocol, Port: p.Port, From: "service " + ref})
 			}
 		}

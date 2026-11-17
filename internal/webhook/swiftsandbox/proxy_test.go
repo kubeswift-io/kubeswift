@@ -12,9 +12,9 @@ import (
 // available turns the proxied runtime switch on for one test.
 func available(t *testing.T) {
 	t.Helper()
-	prev, prevID := ProxiedAvailable, IdentityAvailable
-	ProxiedAvailable, IdentityAvailable = true, true
-	t.Cleanup(func() { ProxiedAvailable, IdentityAvailable = prev, prevID })
+	prev, prevProxy, prevID := ProxiedAvailable, EgressProxyAvailable, IdentityAvailable
+	ProxiedAvailable, EgressProxyAvailable, IdentityAvailable = true, true, true
+	t.Cleanup(func() { ProxiedAvailable, EgressProxyAvailable, IdentityAvailable = prev, prevProxy, prevID })
 }
 
 func proxied(e *sandboxv1alpha1.SandboxEgress) sandboxv1alpha1.SandboxNetwork {
@@ -37,17 +37,27 @@ func preset() *sandboxv1alpha1.SandboxEgressProxy {
 	return &sandboxv1alpha1.SandboxEgressProxy{Preset: "envoy"}
 }
 
-// A valid proxied spec is refused, with that reason only, until the runtime ships.
-func TestProxiedNotAvailableYet(t *testing.T) {
-	n := proxied(&sandboxv1alpha1.SandboxEgress{Allow: []sandboxv1alpha1.SandboxEgressRule{{Host: "api.example.com"}}})
+// Mode proxied with the built-in broker is accepted; a proxy or credentials
+// are refused, with that reason only, until their runtime ships.
+func TestProxyNotAvailableYet(t *testing.T) {
+	broker := proxied(&sandboxv1alpha1.SandboxEgress{Allow: []sandboxv1alpha1.SandboxEgressRule{{Host: "api.example.com"}}})
+	if err := ValidateNetwork(broker); err != nil {
+		t.Fatalf("built-in broker: %v", err)
+	}
+	n := proxied(&sandboxv1alpha1.SandboxEgress{Allow: []sandboxv1alpha1.SandboxEgressRule{{Host: "api.example.com"}}, Proxy: preset()})
 	err := ValidateNetwork(n)
-	if err == nil || !strings.Contains(err.Error(), "proxied is not available") {
+	if err == nil || !strings.Contains(err.Error(), "not available") {
 		t.Fatalf("got %v, want the not-available refusal", err)
 	}
 	// A real error still wins over the availability refusal.
 	n.Egress.Allow[0].Host = "api"
 	if err := ValidateNetwork(n); err == nil || !strings.Contains(err.Error(), "two labels") {
 		t.Fatalf("got %v, want the host error first", err)
+	}
+	exposed := proxied(nil)
+	exposed.Ports = []sandboxv1alpha1.SandboxPort{{Name: "web", Port: EgressBrokerPort}}
+	if err := ValidateNetwork(exposed); err == nil || !strings.Contains(err.Error(), "egress broker") {
+		t.Fatalf("broker port exposed: got %v", err)
 	}
 	id := &sandboxv1alpha1.SandboxIdentity{SPIFFE: sandboxv1alpha1.SandboxIdentitySPIFFEEnabled}
 	if err := ValidateIdentity(id, proxied(nil)); err == nil || !strings.Contains(err.Error(), "not available") {

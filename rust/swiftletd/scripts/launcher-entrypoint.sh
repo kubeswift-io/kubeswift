@@ -210,11 +210,40 @@ if network_enabled; then
     # does not: systemd-networkd derives it from the interface (IAID), so a
     # guest that comes back from an in-guest reboot with another IAID asked for
     # a new lease and got a new address, while status kept the old one (#922).
+    # Mode proxied: the guest resolves through this dnsmasq (the bridge
+    # address), which forwards only allowed names to the cluster resolver:
+    # each host rule (a "*." rule as its domain) and the cluster name of each
+    # allowed Service. Every other name is answered NXDOMAIN (--address=/#/;
+    # a more specific --server wins), so a guest cannot tunnel through DNS.
+    # NXDOMAIN, not REFUSED: a resolver walking its search list (musl stops at
+    # the first REFUSED) must move on to the next candidate and reach the
+    # allowed absolute name. Queries are logged to the launcher's log. The
+    # values come from the controller, validated to [a-z0-9.*,-].
+    guest_dns="$dns"
+    dns_args=""
+    if [ "${KUBESWIFT_SANDBOX_EGRESS:-}" = "proxied" ]; then
+        guest_dns="$gateway"
+        dns_args="--no-resolv --log-queries --address=/#/"
+        for h in ${KUBESWIFT_SANDBOX_EGRESS_HOSTS:-}; do
+            name="${h%,*}"; name="${name#\*.}"
+            dns_args="$dns_args --server=/$name/$dns"
+        done
+        cluster_domain=""
+        for d in $(grep '^search ' /etc/resolv.conf 2>/dev/null | head -1 | cut -d' ' -f2-); do
+            case "$d" in svc.*) cluster_domain="${d#svc.}"; break ;; esac
+        done
+        for svc in ${KUBESWIFT_SANDBOX_EGRESS_SERVICES:-}; do
+            [ -n "$cluster_domain" ] && dns_args="$dns_args --server=/$svc.svc.$cluster_domain/$dns"
+        done
+        echo "Proxied DNS: guest resolver $gateway, $(echo "$dns_args" | grep -o -- '--server=' | wc -l) allowed name(s) via $dns"
+    fi
+    # shellcheck disable=SC2086 # dns_args is a list of validated words
     dnsmasq --no-daemon --bind-interfaces --interface="$BRIDGE" --no-ping \
         --dhcp-ignore-clid \
         --dhcp-range="$range" \
         --dhcp-option=option:router,"$gateway" \
-        --dhcp-option=option:dns-server,"$dns" \
+        --dhcp-option=option:dns-server,"$guest_dns" \
+        $dns_args \
         ${egress_mtu:+--dhcp-option=option:mtu,"$egress_mtu"} \
         ${search:+--dhcp-option=option:domain-search,"$search"} \
         --dhcp-leasefile="$lease_dir/dnsmasq.leases" \

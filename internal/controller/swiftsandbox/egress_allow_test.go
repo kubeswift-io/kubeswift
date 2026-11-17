@@ -100,9 +100,9 @@ func TestResolveEgress(t *testing.T) {
 		{"a headless Service", "EgressServiceNoClusterIP", false, egressNet(allowSvc("db", ""))},
 		{"a port the Service does not declare", "EgressServicePortNotFound", false, egressNet(allowSvc("llm", "inference", 8080))},
 		{"the metadata address", "InvalidNetwork", true, egressNet(sandboxv1alpha1.SandboxEgressRule{CIDR: "169.254.169.254/32"})},
-		// Refused until the proxy runtime ships, so a proxied sandbox never
-		// gets a launcher that would treat it as another mode.
-		{"mode proxied", "InvalidNetwork", true, sandboxv1alpha1.SandboxNetwork{Mode: sandboxv1alpha1.SandboxNetworkProxied}},
+		// A proxy container is refused until its runtime ships.
+		{"a proxy container", "InvalidNetwork", true, sandboxv1alpha1.SandboxNetwork{Mode: sandboxv1alpha1.SandboxNetworkProxied,
+			Egress: &sandboxv1alpha1.SandboxEgress{Proxy: &sandboxv1alpha1.SandboxEgressProxy{Preset: "envoy"}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, problem, err := resolveEgress(ctx, c, "default", tc.n)

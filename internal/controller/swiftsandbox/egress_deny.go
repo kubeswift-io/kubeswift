@@ -254,9 +254,12 @@ func mergeDeny(list string, extra []string) string {
 	return strings.Join(out, " ")
 }
 
-// restrictedLauncher is whether buildPod gives the sandbox the deny list.
+// restrictedLauncher is whether buildPod gives the sandbox the deny list:
+// mode restricted (for the guest's forwarded traffic) and mode proxied (for
+// the broker's own connections).
 func restrictedLauncher(sb *sandboxv1alpha1.SwiftSandbox) bool {
-	return networked(sb) && egressMode(sb) == sandboxv1alpha1.SandboxNetworkRestricted
+	m := egressMode(sb)
+	return networked(sb) && (m == sandboxv1alpha1.SandboxNetworkRestricted || m == sandboxv1alpha1.SandboxNetworkProxied)
 }
 
 // addEgressDeny stamps the list on a restricted launcher pod and mounts it,

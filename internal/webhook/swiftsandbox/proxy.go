@@ -12,11 +12,19 @@ import (
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 )
 
-// ProxiedAvailable reports whether this build runs proxied sandboxes. Until
-// the proxy runtime ships, mode proxied and its fields are validated in full
-// and then refused, so a spec written against the API fails with its real
-// errors first.
-var ProxiedAvailable = false
+// ProxiedAvailable reports whether this build runs proxied sandboxes (with
+// the built-in broker).
+var ProxiedAvailable = true
+
+// EgressProxyAvailable reports whether this build runs an egress proxy
+// container (spec.network.egress.proxy) and credentials. Until that runtime
+// ships they are validated in full and then refused, so a spec written
+// against the API fails with its real errors first.
+var EgressProxyAvailable = false
+
+// EgressBrokerPort is the built-in broker's transparent listener in the
+// launcher pod. A proxied sandbox without a proxy cannot expose it.
+const EgressBrokerPort = 15001
 
 // IdentityAvailable is the same switch for spec.identity.spiffe.
 var IdentityAvailable = false
