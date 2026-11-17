@@ -102,11 +102,6 @@ func TestProxyNotAvailableYet(t *testing.T) {
 	if err := ValidateIdentity(id, proxied(nil)); err == nil || !strings.Contains(err.Error(), "SPIFFE on the platform") {
 		t.Fatalf("identity: got %v, want the platform refusal", err)
 	}
-	tls := proxied(&sandboxv1alpha1.SandboxEgress{Allow: []sandboxv1alpha1.SandboxEgressRule{{CIDR: "10.0.0.1/32",
-		TLS: &sandboxv1alpha1.SandboxEgressTLS{Originate: sandboxv1alpha1.SandboxEgressTLSSPIFFE}}}})
-	if err := ValidateIdentity(id, tls); err == nil || !strings.Contains(err.Error(), "not available") {
-		t.Fatalf("tls origination: got %v, want the not-available refusal", err)
-	}
 }
 
 func TestValidateNetworkProxied(t *testing.T) {
@@ -279,10 +274,20 @@ func TestValidateIdentity(t *testing.T) {
 	if err := ValidateIdentity(on, proxied(withProxy)); err != nil {
 		t.Errorf("enabled with a proxy: %v", err)
 	}
+	if err := ValidateIdentity(on, proxied(&sandboxv1alpha1.SandboxEgress{Allow: tlsRule})); err != nil {
+		t.Errorf("broker with a tls rule: %v", err)
+	}
+	if err := ValidateIdentity(on, proxied(nil)); err != nil {
+		t.Errorf("broker without tls rules: %v", err)
+	}
 	withTLS := *withProxy
 	withTLS.Allow = tlsRule
-	if err := ValidateIdentity(on, proxied(&withTLS)); err != nil {
-		t.Errorf("enabled with a tls rule: %v", err)
+	if err := ValidateIdentity(on, proxied(&withTLS)); err == nil || !strings.Contains(err.Error(), "built-in broker") {
+		t.Errorf("tls rule with a proxy: got %v", err)
+	}
+	TLSOriginationAvailable = false
+	if err := ValidateIdentity(on, proxied(&sandboxv1alpha1.SandboxEgress{Allow: tlsRule})); err == nil || !strings.Contains(err.Error(), "not available") {
+		t.Errorf("tls switched off: got %v", err)
 	}
 	if err := ValidateIdentity(nil, sandboxv1alpha1.SandboxNetwork{}); err != nil {
 		t.Errorf("unset: %v", err)
@@ -295,7 +300,6 @@ func TestValidateIdentity(t *testing.T) {
 		{"tls without identity", "needs spec.identity.spiffe Enabled", nil, proxied(&sandboxv1alpha1.SandboxEgress{Allow: tlsRule})},
 		{"enabled in restricted", "needs network mode proxied", on, sandboxv1alpha1.SandboxNetwork{}},
 		{"bad value", "not Enabled or Disabled", &sandboxv1alpha1.SandboxIdentity{SPIFFE: "On"}, proxied(nil)},
-		{"no proxy", "needs an egress proxy", on, proxied(nil)},
 	} {
 		if err := ValidateIdentity(tc.id, tc.n); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: got %v, want %q", tc.name, err, tc.want)

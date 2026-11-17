@@ -758,10 +758,13 @@ type SandboxEgressRule struct {
 	// +optional
 	Host string `json:"host,omitempty"`
 
-	// TLS asks the proxy to originate TLS to this destination: the guest
-	// connects in plaintext and the proxy connects over TLS presenting the
-	// sandbox's SPIFFE X.509-SVID. Needs mode proxied and
-	// spec.identity.spiffe Enabled.
+	// TLS asks the built-in egress broker to originate TLS to this
+	// destination: the guest connects in plaintext and the broker connects
+	// over TLS presenting the sandbox's SPIFFE X.509-SVID, and accepts only an
+	// upstream presenting an SVID of the same trust domain. For a host rule
+	// the guest must speak HTTP (the broker reads the Host header) and the
+	// name is sent as SNI. Needs mode proxied, spec.identity.spiffe Enabled
+	// and no egress proxy (a proxy originates TLS in its own configuration).
 	// +optional
 	TLS *SandboxEgressTLS `json:"tls,omitempty"`
 
@@ -969,10 +972,11 @@ type SandboxIdentity struct {
 	// a warm slot the slot's ID,
 	// spiffe://<trust-domain>/ns/<namespace>/pool/<pool>/slot/<slot>, issued
 	// when the slot boots so a checkout waits for nothing (status.identity
-	// records which). The egress proxy holds the SVID through the SPIFFE
-	// Workload API; the guest never sees it. Needs network mode proxied, an
-	// egress proxy, and SPIFFE on the platform (chart
-	// sandboxMaterialize.spiffe). Disabled when unset.
+	// records which). The egress proxy container, or without one the
+	// built-in broker (for allow[].tls), holds the SVID through the SPIFFE
+	// Workload API; the guest never sees it. Needs network mode proxied and
+	// SPIFFE on the platform (chart sandboxMaterialize.spiffe). Disabled when
+	// unset.
 	// +optional
 	SPIFFE SandboxIdentitySPIFFE `json:"spiffe,omitempty"`
 }

@@ -192,7 +192,7 @@ type SPIFFEConfig struct {
 var SPIFFE *SPIFFEConfig
 
 // TLSOriginationAvailable is the switch for spec.network.egress.allow[].tls.
-var TLSOriginationAvailable = false
+var TLSOriginationAvailable = true
 
 var trustDomainRe = regexp.MustCompile(`^[a-z0-9._-]{1,255}$`)
 
@@ -494,6 +494,8 @@ func ValidateIdentity(id *sandboxv1alpha1.SandboxIdentity, n sandboxv1alpha1.San
 				return fmt.Errorf("spec.network.egress.allow[%d].tls needs spec.identity.spiffe Enabled", i)
 			case !TLSOriginationAvailable:
 				return fmt.Errorf("spec.network.egress.allow[%d].tls is not available in this version of KubeSwift yet", i)
+			case n.Egress.Proxy != nil:
+				return fmt.Errorf("spec.network.egress.allow[%d].tls is done by the built-in broker; with an egress proxy, originate TLS in the proxy's own configuration", i)
 			}
 		}
 	}
@@ -505,9 +507,6 @@ func ValidateIdentity(id *sandboxv1alpha1.SandboxIdentity, n sandboxv1alpha1.San
 	}
 	if SPIFFE == nil {
 		return fmt.Errorf("spec.identity.spiffe Enabled needs SPIFFE on the platform (chart sandboxMaterialize.spiffe.enabled)")
-	}
-	if n.Egress == nil || n.Egress.Proxy == nil {
-		return fmt.Errorf("spec.identity.spiffe Enabled needs an egress proxy (spec.network.egress.proxy): the built-in broker does not hold an SVID in this version of KubeSwift")
 	}
 	return nil
 }

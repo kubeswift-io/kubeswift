@@ -83,7 +83,7 @@ Ready-to-edit manifests and notes:
 | `network.egress.allow[]` | list | — | Destinations a `restricted` or `proxied` sandbox may reach: `service: {name, namespace}` or `cidr`, and in `proxied` also `host`, with optional `ports: [{port, protocol}]`. See [Allowing specific destinations](#allowing-specific-destinations-under-restricted) and [Mode proxied](#mode-proxied). |
 | `kernelProfileRef.name` | string | `sandbox` | SwiftKernel to boot. |
 | `nestedVirtualization` | enum | `Disabled` | `Enabled` exposes the host CPU's VMX/SVM so the workload can run its own hypervisor (a CI job that boots VMs, a nested cluster). Off unless set: nested KVM is host attack surface reachable from the guest. The opposite default to SwiftGuest. |
-| `identity.spiffe` | enum | `Disabled` | `Enabled` gives the egress proxy a SPIFFE ID for the sandbox. Mode `proxied` with an egress proxy. See [SPIFFE identity](#spiffe-identity). |
+| `identity.spiffe` | enum | `Disabled` | `Enabled` gives the sandbox a SPIFFE ID, held by the egress proxy or the built-in broker (`allow[].tls`). Mode `proxied`. See [SPIFFE identity](#spiffe-identity). |
 | `nodeSelector` | map[string]string | — | Additional node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
 | `poolRef.name` | string | — | Check out a pre-booted slot from this `SwiftSandboxPool` (sub-second) instead of the cold materialize+boot path; falls back to cold on a miss. Same namespace. See [Warm pools](warm-pool.md). |
 | `gpuResourceClaim` | GPUResourceClaimSpec | — | Pass a GPU through via Kubernetes **DRA**: the scheduler + a DRA driver allocate at pod-schedule time. Mutually exclusive with `gpuProfileRef` and with `poolRef`. See [GPU sandboxes](gpu-sandboxes.md). |
@@ -471,9 +471,37 @@ Requirements and failures:
 #### SPIFFE identity
 
 `spec.identity.spiffe: Enabled` gives a proxied sandbox a SPIFFE ID its egress
-proxy can prove to upstreams (mTLS to a gateway, an MCP server, an internal
-API). The proxy fetches the X.509-SVID from the SPIFFE Workload API; the guest
-never sees the socket or the key.
+path can prove to upstreams (mTLS to a gateway, an MCP server, an internal
+API). The X.509-SVID comes from the SPIFFE Workload API; the guest never sees
+the socket or the key.
+
+With the built-in broker, mark the destinations that want it with
+`tls: {originate: SPIFFE}`. The guest speaks plaintext; the broker connects
+over TLS with the sandbox's SVID and accepts only an upstream that presents an
+SVID of the same trust domain (chained to the trust bundle, one URI SAN
+`spiffe://<trust domain>/...`; host names are not checked):
+
+```yaml
+spec:
+  identity:
+    spiffe: Enabled
+  network:
+    mode: proxied
+    egress:
+      allow:
+      - service: {name: model-gateway, namespace: ai}
+        tls: {originate: SPIFFE}
+      - host: api.example.com          # other destinations as usual
+        ports: [{port: 443}]
+```
+
+The guest then calls `http://model-gateway.ai:8443/` (or the ClusterIP). On a
+`host` rule with `tls` the guest must speak HTTP, since the broker reads the
+`Host` header to match the rule, and the name is sent as SNI. The egress audit
+records each such connection with `tls=spiffe` and the SVID's ID.
+
+With your own egress proxy, the proxy holds the SVID and does the TLS in its
+own configuration:
 
 ```yaml
 spec:
@@ -511,11 +539,13 @@ Requirements:
   creates two `ClusterSPIFFEID` objects that register launcher pods labeled
   `sandbox.kubeswift.io/spiffe=enabled`; set `clusterSPIFFEIDs.create: false`
   to register them yourself.
-- Network mode `proxied` and an egress proxy (an image or a preset). The
+- Network mode `proxied`. With an egress proxy (an image or a preset) the
   proxy gets `SPIFFE_ENDPOINT_SOCKET` and the socket under `/run/spiffe`, and
   with config `Intent` the egress-intent file's `identity.spiffe` (`id`,
-  `workloadAPISocket`). The built-in broker does not hold an SVID yet, and
-  `allow[].tls` (TLS origination by the broker) is still refused.
+  `workloadAPISocket`); `allow[].tls` is refused there (configure the proxy).
+  Without one, the launcher's built-in broker gets them and originates TLS for
+  `allow[].tls` rules. A TLS connection waits up to 10 s for the first SVID,
+  then fails (`connect-failed`, `no-svid` in the egress audit).
 
 The ID is as strong as pod creation in the sandbox's namespace: anyone who may
 create pods there can label one like a launcher, as with any SPIFFE ID derived
