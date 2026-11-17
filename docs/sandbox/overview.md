@@ -72,7 +72,7 @@ Ready-to-edit manifests and notes:
 | `timeout` | Duration | none | Wall-clock run cap. Past `startedAt + timeout` the controller force-terminates the sandbox to `Failed` (`DeadlineExceeded`). |
 | `ttl` | Duration | none | Once the sandbox has been terminal (`Completed`/`Failed`) for at least `ttl`, the controller deletes it and frees the node's rootfs-cache reference. |
 | `rootfsMode` | enum | `block` | How the OCI rootfs is delivered: `block` (read-only ext4 disk) or `virtiofs` (the unpacked tree over virtio-fs, tag `sandboxroot` — skips `mkfs.ext4` and the ext4 size floor, shares the host page cache). Same RO-base + writable tmpfs-overlay either way. |
-| `network.mode` | enum | `restricted` | `restricted`, `open`, or `none`. See [Network modes](#network-modes). |
+| `network.mode` | enum | `restricted` | `restricted`, `open`, `none` or `proxied`. See [Network modes](#network-modes). |
 | `network.ports[]` | list | — | Guest ports exposed on the launcher pod: `name` (IANA service name) and `port` (TCP). See [Exposing ports](#exposing-ports). |
 | `network.ingress.from[]` | list | any source | NetworkPolicy peers allowed to reach `network.ports`. |
 | `artifacts[]` | list | — | OCI artifacts mounted read-only from the node cache. See [OCI artifacts](#oci-artifacts). |
@@ -80,7 +80,7 @@ Ready-to-edit manifests and notes:
 | `readinessProbe` / `livenessProbe` | Probe | — | `httpGet` (HTTP) or `tcpSocket` against the guest. See [Workload probes](#workload-probes). |
 | `readinessStartup` | object | — | `interval` (default 100ms), `window` (default 30s): retry the readiness probe quickly until it first passes. See [Fast first readiness](#fast-first-readiness). |
 | `podMetadata.labels` / `podMetadata.annotations` | map | — | Added to the launcher pod; `*kubeswift.io` keys and pod-network annotations refused. |
-| `network.egress.allow[]` | list | — | Destinations a `restricted` sandbox may reach: `service: {name, namespace}` or `cidr`, with optional `ports: [{port, protocol}]`. See [Allowing specific destinations](#allowing-specific-destinations-under-restricted). |
+| `network.egress.allow[]` | list | — | Destinations a `restricted` or `proxied` sandbox may reach: `service: {name, namespace}` or `cidr`, and in `proxied` also `host`, with optional `ports: [{port, protocol}]`. See [Allowing specific destinations](#allowing-specific-destinations-under-restricted) and [Mode proxied](#mode-proxied). |
 | `kernelProfileRef.name` | string | `sandbox` | SwiftKernel to boot. |
 | `nestedVirtualization` | enum | `Disabled` | `Enabled` exposes the host CPU's VMX/SVM so the workload can run its own hypervisor (a CI job that boots VMs, a nested cluster). Off unless set: nested KVM is host attack surface reachable from the guest. The opposite default to SwiftGuest. |
 | `nodeSelector` | map[string]string | — | Additional node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
@@ -137,6 +137,7 @@ node only. The controller checks again every 10 seconds.
 | `restricted` (default) | Denied — nothing reaches the sandbox | DNS and the public internet are allowed; `169.254.0.0/16` (cloud metadata), RFC1918 cluster/pod/service CIDRs, every node address and the API server are blocked | Untrusted code |
 | `open` | Denied | Unrestricted — the whole cluster and internet | Trusted workloads that must reach in-cluster services |
 | `none` | No network at all | No network at all | Pure compute / detonation |
+| `proxied` | Denied | Nothing is forwarded: every TCP connection goes to an egress broker that allows only `network.egress.allow`, by address or by DNS name; DNS answers only allowed names; no UDP other than DNS, no ICMP, no IPv6 | Agents and other untrusted code that may reach only named services |
 
 Ingress isolation is a NetworkPolicy shared by `restricted` and `open` (deny
 all inbound). The `restricted` vs `open` difference is entirely **in-pod
@@ -209,12 +210,62 @@ spec:
 - `169.254.0.0/16` stays blocked whatever is allowed: its rule comes first. A
   CIDR inside it is refused outright. IPv6 stays blocked. So do node and API
   server addresses and the administrator's list (see above).
-- `egress` is valid with `restricted` only.
+- `egress` is valid with `restricted` and `proxied` only.
 - On a cluster whose CNI replaces kube-proxy, traffic from the guest to a
   ClusterIP may not be translated; allow the backing pods' range with a `cidr`
   instead.
 - The destination's own NetworkPolicies still apply. The guest's traffic leaves
   as the launcher pod's IP.
+
+### Mode proxied
+
+`proxied` keeps the guest's network card but forwards none of its traffic. In
+the launcher pod, every TCP connection the guest opens is redirected to an
+egress broker that swiftletd runs, and the guest's resolver is the launcher's
+dnsmasq. The broker allows a connection when it matches
+`network.egress.allow`:
+
+- `cidr` and `service` rules match the connection's destination address and
+  port, as in `restricted`. Only TCP: a Service rule with no ports allows the
+  Service's TCP ports.
+- `host` rules (proxied only) match the name the client sends, the TLS server
+  name or the HTTP `Host`, and the connection's destination must be an address
+  that name resolves to. `*.example.com` matches every name under
+  `example.com`, not `example.com` itself.
+
+```yaml
+spec:
+  network:
+    mode: proxied
+    egress:
+      allow:
+        - host: api.example.com
+          ports: [{port: 443}]
+        - host: "*.githubusercontent.com"
+          ports: [{port: 443}]
+        - service: {name: llm, namespace: inference}
+          ports: [{port: 8000}]
+```
+
+- DNS answers only allowed names: each `host` (a `*.` rule as its domain) and
+  the cluster name of each allowed Service. Every other name is answered as
+  not existing (NXDOMAIN), so the guest cannot send data out through DNS. The queries appear in the
+  launcher container's log.
+- A connection that matches nothing is closed. Each decision appears in the
+  launcher container's log (`egress_broker_allow`, `egress_broker_deny`).
+- A client that sends no name (an IP literal, a protocol other than TLS or
+  HTTP/1) is matched only by `cidr` and `service` rules.
+- The broker runs under its own uid, and the kernel applies the `restricted`
+  rules to it: the cloud metadata range, node and API server addresses, the
+  administrator's deny list, Services in front of them, and RFC1918 except the
+  `cidr` and `service` rules. No allow rule reaches a node or the API server.
+- No UDP other than DNS (QUIC falls back to TCP), no ICMP, no IPv6.
+- Port 15001 is the broker's; a proxied sandbox cannot expose it in
+  `network.ports`.
+- A broker that does not start fails the sandbox (`EgressBrokerFailed`) before
+  the guest boots.
+- `network.egress.proxy` (your own proxy) and `network.egress.credentials` are
+  part of the API but refused in this release.
 
 ### Exposing ports
 

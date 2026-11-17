@@ -373,8 +373,8 @@ const (
 	// traffic: every guest TCP connection is redirected to an egress proxy in
 	// the launcher pod (spec.network.egress.proxy, or the built-in broker when
 	// unset), DNS answers only allowed names, and UDP other than DNS, ICMP and
-	// IPv6 never leave the guest. Not available yet: refused until the proxy
-	// runtime ships.
+	// IPv6 never leave the guest. The broker runs under its own uid, and the
+	// restricted rules apply to its connections.
 	SandboxNetworkProxied SandboxNetworkMode = "proxied"
 )
 
@@ -709,7 +709,7 @@ type SandboxEgress struct {
 	// Proxy selects the egress proxy of a proxied sandbox. Unset, the built-in
 	// broker allows connections that match allow (by TLS server name or HTTP
 	// Host for host rules, by address for the others). Only valid with mode
-	// proxied.
+	// proxied. Not available yet: refused until the proxy runtime ships.
 	// +optional
 	Proxy *SandboxEgressProxy `json:"proxy,omitempty"`
 
@@ -719,7 +719,8 @@ type SandboxEgress struct {
 	// the listed destinations, after terminating TLS with a certificate
 	// authority generated for the launcher, which the guest is made to trust.
 	// The value is never written into the guest. Needs mode proxied and a
-	// proxy preset with config Intent.
+	// proxy preset with config Intent. Not available yet: refused until the
+	// proxy runtime ships.
 	// +kubebuilder:validation:MaxItems=16
 	// +listType=map
 	// +listMapKey=name

@@ -213,14 +213,17 @@ if network_enabled; then
     # Mode proxied: the guest resolves through this dnsmasq (the bridge
     # address), which forwards only allowed names to the cluster resolver:
     # each host rule (a "*." rule as its domain) and the cluster name of each
-    # allowed Service. Every other name gets no upstream and is refused, so a
-    # guest cannot tunnel through DNS. Queries are logged to the launcher's
-    # log. The values come from the controller, validated to [a-z0-9.*,-].
+    # allowed Service. Every other name is answered NXDOMAIN (--address=/#/;
+    # a more specific --server wins), so a guest cannot tunnel through DNS.
+    # NXDOMAIN, not REFUSED: a resolver walking its search list (musl stops at
+    # the first REFUSED) must move on to the next candidate and reach the
+    # allowed absolute name. Queries are logged to the launcher's log. The
+    # values come from the controller, validated to [a-z0-9.*,-].
     guest_dns="$dns"
     dns_args=""
     if [ "${KUBESWIFT_SANDBOX_EGRESS:-}" = "proxied" ]; then
         guest_dns="$gateway"
-        dns_args="--no-resolv --log-queries"
+        dns_args="--no-resolv --log-queries --address=/#/"
         for h in ${KUBESWIFT_SANDBOX_EGRESS_HOSTS:-}; do
             name="${h%,*}"; name="${name#\*.}"
             dns_args="$dns_args --server=/$name/$dns"

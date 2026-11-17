@@ -48,7 +48,7 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
 	build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-snapshot-oras-image build-dra-driver-image build-gateway-image build-sandbox-materialize-image generate deploy deploy-with-webhook deploy-with-mtls deploy-with-webhook-and-mtls undeploy load-images smoke-test smoke-test-cleanup \
 	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
-	b0-cross-node-tcp-test b0-cross-node-tcp-test-cleanup sandbox-tcp-receive-test sandbox-tcp-receive-test-cleanup sandbox-warm-checkout-test sandbox-warm-checkout-test-cleanup sandbox-hardening-test sandbox-hardening-test-cleanup sandbox-gpu-test sandbox-gpu-test-cleanup sandbox-egress-restricted-test sandbox-egress-restricted-test-cleanup e2e-tests \
+	b0-cross-node-tcp-test b0-cross-node-tcp-test-cleanup sandbox-tcp-receive-test sandbox-tcp-receive-test-cleanup sandbox-warm-checkout-test sandbox-warm-checkout-test-cleanup sandbox-hardening-test sandbox-hardening-test-cleanup sandbox-gpu-test sandbox-gpu-test-cleanup sandbox-egress-restricted-test sandbox-egress-restricted-test-cleanup sandbox-egress-proxied-test sandbox-egress-proxied-test-cleanup e2e-tests \
 	verify-e2e-scripts verify-kustomize-sync verify-base-image-pins \
 	preflight help push-images package-chart push-chart release-dev release-rc release-stable print-version
 
@@ -441,9 +441,18 @@ sandbox-egress-restricted-test:
 sandbox-egress-restricted-test-cleanup:
 	@test/sandbox/egress-restricted.sh cleanup
 
+# Network mode proxied (built-in broker): only the allowlist, by address or
+# by name, never nodes or the API server, warm checkout included. Needs a KVM
+# node and internet egress (PUBLIC_HOST, OTHER_HOST).
+sandbox-egress-proxied-test:
+	@test/sandbox/egress-proxied.sh validate
+
+sandbox-egress-proxied-test-cleanup:
+	@test/sandbox/egress-proxied.sh cleanup
+
 # Every cluster-side e2e in sequence. Each script accepts --no-cleanup;
 # this target opts out so the cluster is clean between scripts.
-e2e-tests: smoke-test snapshot-test clonestrategy-test local-roundtrip-test local-clone-identity-test b0-cross-node-tcp-test sandbox-tcp-receive-test sandbox-warm-checkout-test sandbox-hardening-test sandbox-egress-restricted-test
+e2e-tests: smoke-test snapshot-test clonestrategy-test local-roundtrip-test local-clone-identity-test b0-cross-node-tcp-test sandbox-tcp-receive-test sandbox-warm-checkout-test sandbox-hardening-test sandbox-egress-restricted-test sandbox-egress-proxied-test
 
 # Fast static check: every e2e script parses (bash -n). Catches
 # typos / unclosed quotes without needing a cluster. Designed to run

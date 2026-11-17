@@ -36,7 +36,7 @@
 #      target pod becomes reachable: the broker allows the rest by address and
 #      the kernel drops its connections.
 #   4. Pool "warm" (same allowlist as 2, one warm slot) and sandbox "checkout"
-#      claiming it: https to PUBLIC_HOST works, OTHER_HOST does not, from a
+#      claiming it (same shape, so it must land on the warm slot): https to PUBLIC_HOST works, OTHER_HOST does not, from a
 #      warm slot.
 #   5. Asserts the launcher of "proxied" carries the platform deny list.
 #
@@ -223,12 +223,14 @@ $(network "$allow")
 EOF
 	kubectl -n "$NS" wait --for=jsonpath='{.status.readyReplicas}'=1 swiftsandboxpool/warm --timeout="${TIMEOUT}s" >/dev/null ||
 		die "pool warm has no ready slot: $(kubectl -n "$NS" get swiftsandboxpool warm -o jsonpath='{.status.conditions}')"
-	run checkout "  poolRef: {name: warm}" "http https-allowed reach https://$PUBLIC_HOST/
+	# A checkout claims a slot only with the pool's whole shape, network included.
+	run checkout "$(network "$allow")
+  poolRef: {name: warm}" "http https-allowed reach https://$PUBLIC_HOST/
 http https-other block --resolve $OTHER_HOST:443:$other_ip https://$OTHER_HOST/"
 	local claimed
 	claimed=$(kubectl -n "$NS" get pods -l sandbox.kubeswift.io/sandbox=checkout -o jsonpath='{.items[0].metadata.labels.sandbox\.kubeswift\.io/pool}' 2>/dev/null || true)
-	[ "$claimed" = warm ] || log "note: checkout ran on a launcher without the pool label (cold fallback?): $(kubectl -n "$NS" get swiftsandbox checkout -o jsonpath='{.status.conditions}')"
-	[ "$claimed" = warm ] && log "checkout ran on a warm slot of pool warm"
+	[ "$claimed" = warm ] || die "checkout did not run on a warm slot: $(kubectl -n "$NS" get swiftsandbox checkout -o jsonpath='{.status.conditions}')"
+	log "checkout ran on a warm slot of pool warm"
 
 	log "PASS: proxied egress allows only the allowlist, by name and address, and never nodes or the API server"
 }
