@@ -320,6 +320,9 @@ func TestBuildPod_EgressAudit(t *testing.T) {
 		if c.Name == EgressAuditContainerName {
 			t.Error("a restricted sandbox has an egress-audit container")
 		}
+	}
+}
+
 // listeners.http: network-init and the launcher learn the port, and the
 // workload gets the proxy variables pointing at the bridge, cold and warm;
 // without it nothing changes.
