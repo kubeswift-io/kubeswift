@@ -8,8 +8,8 @@
 //
 // The JSON Schema in egress-intent.schema.json is the contract adapters
 // consume; these Go types generate nothing and are checked against it by
-// tests. This directory is Apache-2.0 (see ../LICENSE), so other projects
-// can implement the contract freely.
+// tests. Like the rest of KubeSwift it is Apache-2.0, so other projects can
+// implement the contract freely.
 //
 // Rules of the file:
 //

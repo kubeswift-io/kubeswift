@@ -82,8 +82,9 @@ separately.
 git commit -s
 ```
 
-This adds a `Signed-off-by:` line certifying that you have the right to submit
-the work under the project's licence. Commits must also be cryptographically
+This adds a `Signed-off-by:` line certifying, under the
+[Developer Certificate of Origin](https://developercertificate.org/), that you
+have the right to submit the work under the project's licence (Apache-2.0). Commits must also be cryptographically
 signed — the repository ruleset requires it.
 
 Write commit messages that explain **why**, not just what. The diff already
@@ -107,7 +108,8 @@ reader trusting the change and re-deriving it from scratch.
    the commit message on `main`. Write them accordingly.
 
 Maintainers may ask for changes; that is normal and not a judgement of the
-work.
+work. [MAINTAINERS.md](MAINTAINERS.md) lists who reviews and merges, and how
+decisions are made.
 
 ## Code conventions
 
@@ -147,6 +149,13 @@ it, as this is deliberate rather than an oversight.
 
 ## Licence
 
-KubeSwift is licensed under the
-[GNU Affero General Public License v3.0](LICENSE). By contributing, you agree
-that your contributions are licensed under the same terms.
+KubeSwift is licensed under the [Apache License, Version 2.0](LICENSE). By
+contributing, you agree that your contributions are licensed under the same
+terms (section 5 of the licence: a contribution intentionally submitted for
+inclusion is under Apache-2.0 unless you state otherwise). The `Signed-off-by`
+line certifies that you have the right to submit it on those terms.
+
+Do not add code copied from another project unless its licence is compatible
+with Apache-2.0 (for example MIT, BSD or Apache-2.0), and keep its copyright
+and licence notices. Code under a copyleft licence such as GPL or AGPL cannot
+be included.

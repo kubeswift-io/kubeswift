@@ -96,4 +96,4 @@ Pre-1.0; the `v1alpha1` API may change between releases.
 
 ## License
 
-Licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
+Licensed under the [Apache License, Version 2.0](LICENSE).
