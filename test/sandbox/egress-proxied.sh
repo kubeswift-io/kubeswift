@@ -31,6 +31,8 @@
 #               (server name spoof), the metadata endpoint, every node's
 #               kubelet, every API server endpoint, the kubernetes ClusterIP,
 #               the target pod's own address
+#      Its egress audit (kubectl logs -c egress-audit) is JSON lines with
+#      the DNS queries, the blocked name and allow and deny decisions.
 #   3. Sandbox "kernel" allows, as cidr rules, every node address, every API
 #      server endpoint, the kubernetes ClusterIP and the target pod. Only the
 #      target pod becomes reachable: the broker allows the rest by address and
@@ -201,6 +203,18 @@ $guarded"
 			grep -qwF "$n" <<<"$deny" || die "egress-deny annotation on $pod lacks $n"
 		done
 		log "launcher of 'proxied' carries the platform deny list"
+		# The egress audit (kubectl logs -c egress-audit): JSON lines for the
+		# guest's DNS queries and the broker's decisions.
+		local audit sel
+		audit=$(kubectl -n "$NS" logs "$pod" -c egress-audit 2>&1 || true)
+		while IFS= read -r line; do
+			[ -z "$line" ] || jq -e . >/dev/null 2>&1 <<<"$line" || die "egress audit line is not JSON: $line"
+		done <<<"$audit"
+		for sel in '.kind=="dns" and .event=="query"' ".kind==\"dns\" and .event==\"blocked\" and .name==\"$OTHER_HOST\"" \
+			'.kind=="connection" and .event=="allow"' '.kind=="connection" and .event=="deny"'; do
+			[ -n "$(jq -c "select($sel)" <<<"$audit")" ] || die "egress audit of $pod has no event with $sel: $(head -c 2000 <<<"$audit")"
+		done
+		log "egress audit of 'proxied': $(grep -c . <<<"$audit") JSON lines (DNS queries, blocked names, allow and deny decisions)"
 	fi
 
 	local cidrs="{cidr: $target/32}

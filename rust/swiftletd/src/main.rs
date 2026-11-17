@@ -1,5 +1,6 @@
 mod action;
 mod agent_ready;
+mod audit;
 mod bridge;
 mod console;
 mod cpuset;
@@ -105,11 +106,17 @@ fn main() {
     if env::args().nth(1).as_deref() == Some(egress_secrets::SUBCOMMAND) {
         egress_secrets::init_main();
     }
+    // `swiftletd egress-audit-dns`: the entrypoint pipes dnsmasq's log into
+    // it, to keep the guest's DNS queries in the egress audit.
+    if env::args().nth(1).as_deref() == Some(audit::DNS_SUBCOMMAND) {
+        audit::dns_main();
+    }
 
     // The console container follows this launcher's life, including
     // an exit before the intent is read (console.rs; only sandbox launchers
     // have a console directory).
     console::hold_alive();
+    audit::hold_alive();
 
     if env::args().any(|a| a == "--version" || a == "-V") {
         log::info!("swiftletd {} (git {})", VERSION, GIT_COMMIT);
@@ -445,6 +452,15 @@ fn main() {
                                 "egress_credentials_delivered count={} guest_files={}",
                                 exec.egress_credentials.len(),
                                 files.len()
+                            );
+                            audit::record(
+                                "credentials",
+                                "delivered",
+                                serde_json::json!({
+                                    "names": exec.egress_credentials.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+                                    "hosts": spec.hosts,
+                                    "serials": m.serials(),
+                                }),
                             );
                             exec.files.extend(files);
                         }

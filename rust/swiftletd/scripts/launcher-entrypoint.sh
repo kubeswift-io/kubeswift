@@ -242,17 +242,26 @@ if network_enabled; then
         done
         echo "Proxied DNS: guest resolver $gateway, $(echo "$dns_args" | grep -o -- '--server=' | wc -l) allowed name(s) via $dns"
     fi
-    # shellcheck disable=SC2086 # dns_args is a list of validated words
-    dnsmasq --no-daemon --bind-interfaces --interface="$BRIDGE" --no-ping \
-        --dhcp-ignore-clid \
-        --dhcp-range="$range" \
-        --dhcp-option=option:router,"$gateway" \
-        --dhcp-option=option:dns-server,"$guest_dns" \
-        $dns_args \
-        ${egress_mtu:+--dhcp-option=option:mtu,"$egress_mtu"} \
-        ${search:+--dhcp-option=option:domain-search,"$search"} \
-        --dhcp-leasefile="$lease_dir/dnsmasq.leases" \
-        --dhcp-authoritative &
+    start_dnsmasq() {
+        # shellcheck disable=SC2086 # dns_args is a list of validated words
+        dnsmasq --no-daemon --bind-interfaces --interface="$BRIDGE" --no-ping \
+            --dhcp-ignore-clid \
+            --dhcp-range="$range" \
+            --dhcp-option=option:router,"$gateway" \
+            --dhcp-option=option:dns-server,"$guest_dns" \
+            $dns_args \
+            ${egress_mtu:+--dhcp-option=option:mtu,"$egress_mtu"} \
+            ${search:+--dhcp-option=option:domain-search,"$search"} \
+            --dhcp-leasefile="$lease_dir/dnsmasq.leases" \
+            --dhcp-authoritative
+    }
+    if [ "${KUBESWIFT_SANDBOX_EGRESS:-}" = "proxied" ] && [ -n "${KUBESWIFT_EGRESS_AUDIT_DIR:-}" ]; then
+        # The guest's DNS queries also go to the egress audit (audit.rs);
+        # every line still reaches this log.
+        start_dnsmasq 2>&1 | /usr/local/bin/swiftletd egress-audit-dns &
+    else
+        start_dnsmasq &
+    fi
     sleep 1
 fi
 
