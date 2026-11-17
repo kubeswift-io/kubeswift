@@ -264,6 +264,12 @@ spec:
   `network.ports`.
 - A broker that does not start fails the sandbox (`EgressBrokerFailed`) before
   the guest boots.
+- The condition `EgressProxyReady` reports the egress path: `True`
+  (`Listening`) once the broker or the egress proxy container listens, `False`
+  with `Starting` before that, and `EgressProxyNotRunning` while a proxy
+  container is not running (crashed or restarting; the message has its state
+  and restart count, and guest connections are refused meanwhile). A warm
+  checkout shows its slot's.
 - The egress audit is `kubectl logs <pod> -c egress-audit`: one JSON object
   per line, with `time`, `kind` and `event`. `kind: dns` is the guest's DNS
   queries (`query`, `reply`, and `blocked` for a name outside the allowlist);

@@ -580,6 +580,7 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 		sb.Status.PodRef = pod.Name
 		applyMaterializeResult(sb, pod)
 		applyGuestAnnotations(sb, pod)
+		applyEgressProxyReady(sb, pod)
 		apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
 			Type: sandboxv1alpha1.SwiftSandboxConditionGuestRunning, Status: metav1.ConditionTrue,
 			Reason: "GuestRunning", Message: guestRunningMessage(sb), ObservedGeneration: sb.Generation,
@@ -681,6 +682,10 @@ func (r *SwiftSandboxReconciler) finishTerminal(ctx context.Context, sb *sandbox
 		if hasEgressProxy(pod) {
 			reason = "EgressProxyNotReady"
 		}
+		apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
+			Type: sandboxv1alpha1.SwiftSandboxConditionEgressProxyReady, Status: metav1.ConditionFalse,
+			Reason: reason, Message: msg, ObservedGeneration: sb.Generation,
+		})
 		return r.fail(ctx, sb, reason, msg)
 	}
 	// swiftletd could not read a secret variable and ended the launcher.

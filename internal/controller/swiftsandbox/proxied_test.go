@@ -1,6 +1,8 @@
 package swiftsandbox
 
 import (
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"strings"
 	"testing"
 
@@ -355,5 +357,51 @@ func TestHTTPListener(t *testing.T) {
 	}
 	if containerEnv(buildPod(plain, "sandbox").Spec.Containers, launcherName)["KUBESWIFT_EGRESS_PROXY_HTTP_PORT"] != "" {
 		t.Error("http port env without listeners.http")
+	}
+}
+
+// EgressProxyReady follows swiftletd's report and the proxy container's live
+// state; it is absent outside mode proxied.
+func TestApplyEgressProxyReady(t *testing.T) {
+	proxyStatus := func(st corev1.ContainerState, restarts int32) []corev1.ContainerStatus {
+		cs := corev1.ContainerStatus{Name: EgressProxyContainerName, State: st, RestartCount: restarts}
+		if restarts > 0 {
+			cs.LastTerminationState = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}}
+		}
+		return []corev1.ContainerStatus{cs}
+	}
+	running := corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
+	for _, tc := range []struct {
+		name, ann     string
+		statuses      []corev1.ContainerStatus
+		status        metav1.ConditionStatus
+		reason, inMsg string
+	}{
+		{"not yet", "", nil, metav1.ConditionFalse, "Starting", "not listening"},
+		{"broker", "broker", nil, metav1.ConditionTrue, "Listening", "broker"},
+		{"proxy running", "proxy", proxyStatus(running, 0), metav1.ConditionTrue, "Listening", "proxy container listens"},
+		{"proxy restarted", "proxy", proxyStatus(running, 2), metav1.ConditionTrue, "Listening", "restarted 2 times, last exit 1 Error"},
+		{"proxy crash looping", "proxy", proxyStatus(corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}, 3),
+			metav1.ConditionFalse, "EgressProxyNotRunning", "waiting: CrashLoopBackOff (restarted 3 times"},
+		{"proxy exited", "proxy", proxyStatus(corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled"}}, 0),
+			metav1.ConditionFalse, "EgressProxyNotRunning", "exited 137 OOMKilled"},
+		{"proxy missing", "proxy", nil, metav1.ConditionFalse, "EgressProxyNotRunning", "no egress-proxy container"},
+	} {
+		sb := proxiedSandbox()
+		pod := &corev1.Pod{}
+		if tc.ann != "" {
+			pod.Annotations = map[string]string{annEgressReady: tc.ann}
+		}
+		pod.Status.InitContainerStatuses = tc.statuses
+		applyEgressProxyReady(sb, pod)
+		c := apimeta.FindStatusCondition(sb.Status.Conditions, sandboxv1alpha1.SwiftSandboxConditionEgressProxyReady)
+		if c == nil || c.Status != tc.status || c.Reason != tc.reason || !strings.Contains(c.Message, tc.inMsg) {
+			t.Errorf("%s: %+v", tc.name, c)
+		}
+	}
+	plain := plainSandbox("busybox:1")
+	applyEgressProxyReady(plain, &corev1.Pod{})
+	if apimeta.FindStatusCondition(plain.Status.Conditions, sandboxv1alpha1.SwiftSandboxConditionEgressProxyReady) != nil {
+		t.Error("EgressProxyReady outside mode proxied")
 	}
 }
