@@ -711,8 +711,8 @@ type SandboxEgress struct {
 	// Host for host rules, by address for the others). Only valid with mode
 	// proxied. An image runs when the administrator allows it (chart
 	// sandboxMaterialize.egressProxyImages), a preset when the administrator
-	// defines it (sandboxMaterialize.egressProxyPresets); service upstreams
-	// and the HTTP listener are not available yet and are refused.
+	// defines it (sandboxMaterialize.egressProxyPresets); the HTTP listener
+	// is not available yet and is refused.
 	// +optional
 	Proxy *SandboxEgressProxy `json:"proxy,omitempty"`
 
@@ -870,8 +870,12 @@ type SandboxEgressProxy struct {
 
 	// Upstreams are what the proxy itself may connect to, in addition to
 	// cluster DNS and the public internet; same rules as allow, without host
-	// and tls. A Service in front of a node or the API server keeps the
-	// sandbox Pending (EgressServiceReachesNode).
+	// and tls, TCP only. A Service is resolved to its ClusterIP like an allow
+	// rule (status.network.proxyUpstreams); a pool replaces warm slots when
+	// the address changes. A missing Service keeps the sandbox Pending, and so
+	// does one in front of a node or the API server
+	// (EgressServiceReachesNode). The guest does not reach an upstream unless
+	// allow allows it too.
 	// +kubebuilder:validation:MaxItems=32
 	// +listType=atomic
 	// +optional
@@ -1113,6 +1117,12 @@ type SandboxNetworkStatus struct {
 	// spec.network.egress.allow with every Service resolved to its address.
 	// +optional
 	EgressAllowed []SandboxEgressAllowed `json:"egressAllowed,omitempty"`
+	// ProxyUpstreams is what the egress proxy container itself may reach
+	// (mode proxied with a proxy), from spec.network.egress.proxy.upstreams
+	// with every Service resolved to its address. The guest cannot reach
+	// these unless the allowlist also allows them.
+	// +optional
+	ProxyUpstreams []SandboxEgressAllowed `json:"proxyUpstreams,omitempty"`
 }
 
 // SwiftSandboxStatus is the observed state.

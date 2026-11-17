@@ -93,7 +93,7 @@ func proxiedEnv(sb *sandboxv1alpha1.SwiftSandbox) []corev1.EnvVar {
 	var extra []corev1.EnvVar
 	if p := egressProxy(sb); p != nil {
 		port = int(p.Listeners.Transparent)
-		allow = upstreamsEnv(p)
+		allow = egressAllowEnv(proxyUpstreams(sb))
 		extra = append(extra, corev1.EnvVar{Name: "KUBESWIFT_EGRESS_PROXY", Value: "container"})
 		if p.Listeners.DNS != 0 {
 			extra = append(extra, corev1.EnvVar{Name: "KUBESWIFT_EGRESS_PROXY_DNS_PORT", Value: strconv.Itoa(int(p.Listeners.DNS))})

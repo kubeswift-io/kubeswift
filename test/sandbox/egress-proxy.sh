@@ -23,6 +23,10 @@
 #      the kernel still blocks every node's kubelet, the API server, the
 #      kubernetes ClusterIP, the metadata endpoint and the target pod.
 #   3. "upstream": "open" plus proxy.upstreams = the target pod: now reachable.
+#      "upstream-svc": the same through a Service upstream (its ClusterIP,
+#      reported in status.network.proxyUpstreams). A Service upstream in
+#      front of the API server keeps the sandbox Pending
+#      (EgressServiceReachesNode).
 #   4. "intent": a stand-in proxy in config Intent prints the
 #      egress-intent.kubeswift.io/v1 file it was given; the test checks it.
 #   5. An image outside the allowlist is refused.
@@ -164,13 +168,19 @@ spec:
     image: $TARGET_IMAGE
     command: [sh, -c, "mkdir -p /tmp/www && echo ok > /tmp/www/index.html && exec httpd -f -p 8080 -h /tmp/www"]
     securityContext: {runAsNonRoot: true, runAsUser: 65534, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: target, namespace: $NS}
+spec: {selector: {app: target}, ports: [{port: 8080, protocol: TCP}]}
 EOF
 	kubectl -n "$NS" wait --for=jsonpath='{.status.phase}'=Ready swiftkernel/sandbox --timeout=300s >/dev/null ||
 		die "SwiftKernel sandbox not Ready in $NS"
 	kubectl -n "$NS" wait --for=condition=Ready pod/target --timeout=120s >/dev/null || die "target pod not Ready"
 
-	local target nodes apis cluster_ip other_ip
+	local target target_svc nodes apis cluster_ip other_ip
 	target=$(kubectl -n "$NS" get pod target -o jsonpath='{.status.podIP}')
+	target_svc=$(kubectl -n "$NS" get service target -o jsonpath='{.spec.clusterIP}')
 	nodes=$(kubectl get nodes -o jsonpath='{range .items[*]}{range .status.addresses[?(@.type=="InternalIP")]}{.address}{"\n"}{end}{range .status.addresses[?(@.type=="ExternalIP")]}{.address}{"\n"}{end}{end}' | grep -E '^[0-9.]+$' | sort -u)
 	apis=$(kubectl get endpointslices -n default -l kubernetes.io/service-name=kubernetes -o jsonpath='{range .items[*].endpoints[*]}{.addresses[0]}{"\n"}{end}' | sort -u)
 	cluster_ip=$(kubectl get service kubernetes -n default -o jsonpath='{.spec.clusterIP}')
@@ -179,7 +189,8 @@ EOF
 
 	local guarded="http metadata block http://169.254.169.254/
 http apiserver-clusterip block -k https://$cluster_ip/
-http target-pod block http://$target:8080/"
+http target-pod block http://$target:8080/
+http target-service block http://$target_svc:8080/"
 	for n in $nodes; do guarded+="
 http node-kubelet-$n block -k https://$n:10250/"; done
 	for a in $apis; do guarded+="
@@ -200,6 +211,23 @@ $guarded"
 	run upstream "$hosts
 $(envoy_proxy "" "        upstreams: [{cidr: $target/32, ports: [{port: 8080}]}]")" "http target-pod-upstream reach http://$target:8080/
 http metadata block http://169.254.169.254/"
+
+	run upstream-svc "$hosts
+$(envoy_proxy "" "        upstreams: [{service: {name: target}}]")" "http target-service-upstream reach http://$target_svc:8080/
+http target-pod block http://$target:8080/
+http metadata block http://169.254.169.254/"
+	kubectl -n "$NS" get swiftsandbox upstream-svc -o jsonpath='{.status.network.proxyUpstreams}' | grep -q "$target_svc/32" ||
+		die "status.network.proxyUpstreams does not show the Service address: $(kubectl -n "$NS" get swiftsandbox upstream-svc -o jsonpath='{.status.network}')"
+	log "upstream-svc: status.network.proxyUpstreams has $target_svc"
+
+	kubectl -n "$NS" delete swiftsandbox upstream-api --ignore-not-found --wait=true >/dev/null
+	sandbox upstream-api "$hosts
+$(envoy_proxy "" "        upstreams: [{service: {name: kubernetes, namespace: default}}]")" "true"
+	kubectl -n "$NS" wait swiftsandbox/upstream-api --timeout=60s \
+		--for=jsonpath='{.status.conditions[?(@.type=="Resolved")].reason}'=EgressServiceReachesNode >/dev/null ||
+		die "an upstream Service in front of the API server: $(kubectl -n "$NS" get swiftsandbox upstream-api -o jsonpath='{.status}')"
+	log "an upstream Service in front of the API server keeps the sandbox Pending (EgressServiceReachesNode)"
+	kubectl -n "$NS" delete swiftsandbox upstream-api --wait=false >/dev/null
 
 	kubectl -n "$NS" delete swiftsandbox intent --ignore-not-found --wait=true >/dev/null
 	sandbox intent "$hosts

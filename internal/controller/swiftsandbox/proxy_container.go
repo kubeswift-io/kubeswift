@@ -2,7 +2,6 @@ package swiftsandbox
 
 import (
 	"encoding/json"
-	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -128,26 +127,6 @@ func proxyKey(n sandboxv1alpha1.SandboxNetwork) string {
 		panic(err)
 	}
 	return string(b)
-}
-
-// upstreamsEnv renders proxy.upstreams for network-init's uid chain, like
-// egressAllowEnv: "<proto>,<cidr>,<port>". Only cidr entries (service
-// entries are refused in this version). Validated, so only [a-z0-9.,/].
-func upstreamsEnv(p *resolvedProxy) string {
-	var out []string
-	for _, r := range p.Upstreams {
-		cidr, err := sandboxwebhook.EgressCIDR(r.CIDR)
-		if err != nil {
-			continue
-		}
-		if len(r.Ports) == 0 {
-			out = append(out, "any,"+cidr+",0")
-		}
-		for _, pt := range r.Ports {
-			out = append(out, "tcp,"+cidr+","+strconv.Itoa(int(pt.Port)))
-		}
-	}
-	return strings.Join(out, " ")
 }
 
 // egressIntentJSON is the egress-intent.kubeswift.io/v1 file for the proxy:

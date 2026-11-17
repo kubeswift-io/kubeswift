@@ -277,6 +277,7 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	}
 	// The slot's network-init enforces the allowlist it was booted with.
 	setEgressAllowed(sb, parseEgressAllowed(slot.Annotations[EgressAllowedAnnotation]))
+	setProxyUpstreams(sb, parseEgressAllowed(slot.Annotations[EgressUpstreamsAnnotation]))
 	sb.Status.User = userString(user)
 	if msg := imageUserIgnored(user, slot); msg != "" {
 		sb.Status.User = "" // the slot's bridge runs it as root

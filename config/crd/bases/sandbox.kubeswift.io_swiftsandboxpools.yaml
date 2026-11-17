@@ -422,8 +422,8 @@ spec:
                           Host for host rules, by address for the others). Only valid with mode
                           proxied. An image runs when the administrator allows it (chart
                           sandboxMaterialize.egressProxyImages), a preset when the administrator
-                          defines it (sandboxMaterialize.egressProxyPresets); service upstreams
-                          and the HTTP listener are not available yet and are refused.
+                          defines it (sandboxMaterialize.egressProxyPresets); the HTTP listener
+                          is not available yet and is refused.
                         properties:
                           args:
                             description: Args for an image proxy.
@@ -654,8 +654,12 @@ spec:
                             description: |-
                               Upstreams are what the proxy itself may connect to, in addition to
                               cluster DNS and the public internet; same rules as allow, without host
-                              and tls. A Service in front of a node or the API server keeps the
-                              sandbox Pending (EgressServiceReachesNode).
+                              and tls, TCP only. A Service is resolved to its ClusterIP like an allow
+                              rule (status.network.proxyUpstreams); a pool replaces warm slots when
+                              the address changes. A missing Service keeps the sandbox Pending, and so
+                              does one in front of a node or the API server
+                              (EgressServiceReachesNode). The guest does not reach an upstream unless
+                              allow allows it too.
                             items:
                               description: |-
                                 SandboxEgressRule allows one destination: a Service, an IPv4 CIDR or (mode

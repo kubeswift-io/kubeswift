@@ -78,7 +78,7 @@ func TestCreateWarmSlot_SlotRunsAsItsOwnAccount(t *testing.T) {
 		Spec:       sandboxv1alpha1.SwiftSandboxPoolSpec{Image: "busybox:1"},
 	}
 	r, c := poolReconciler(pool)
-	if err := r.createWarmSlot(ctx, pool, defaultKernelProfile, resolvedImage{RootfsPath: "/cache/x.ext4"}, "", nil); err != nil {
+	if err := r.createWarmSlot(ctx, pool, defaultKernelProfile, resolvedImage{RootfsPath: "/cache/x.ext4"}, "", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	slots := poolSlotPods(t, c, "p")

@@ -99,6 +99,10 @@ func proxySandbox(cfg sandboxv1alpha1.SandboxEgressProxyConfig) *sandboxv1alpha1
 		Config:    cfg,
 		Upstreams: []sandboxv1alpha1.SandboxEgressRule{{CIDR: "10.96.0.50/32", Ports: []sandboxv1alpha1.SandboxEgressPort{{Port: 8080}}}},
 	}
+	// As the controller resolves it before building the pod.
+	setProxyUpstreams(sb, []sandboxv1alpha1.SandboxEgressAllowed{
+		{CIDR: "10.96.0.50/32", Protocol: corev1.ProtocolTCP, Port: 8080, From: "cidr 10.96.0.50/32"},
+	})
 	return sb
 }
 

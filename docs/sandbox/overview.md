@@ -264,8 +264,7 @@ spec:
   `network.ports`.
 - A broker that does not start fails the sandbox (`EgressBrokerFailed`) before
   the guest boots.
-- `network.egress.credentials`, `service` entries in `proxy.upstreams` and
-  `proxy.listeners.http` are part of the API but refused in this release.
+- `proxy.listeners.http` is part of the API but refused in this release.
 
 #### Your own egress proxy
 
@@ -287,8 +286,9 @@ spec:
         args: [--disable-hot-restart, --config-yaml, "..."]
         listeners: {transparent: 15006}        # dns: optional
         config: Self                           # or Intent
-        upstreams:
-          - cidr: 10.96.14.7/32                # in-cluster destinations the proxy may reach
+        upstreams:                             # in-cluster destinations the proxy may reach
+          - service: {name: llm-gateway, namespace: ai}
+          - cidr: 10.96.14.7/32
             ports: [{port: 8080}]
 ```
 
@@ -304,10 +304,17 @@ spec:
 - With `listeners.dns`, every guest DNS query goes to the proxy. Without it,
   the launcher resolves only the `host` rules' names, as with the broker.
 - The proxy decides what the guest reaches. The kernel decides what the proxy
-  reaches: cluster DNS, the public internet and `upstreams` (IPv4 CIDRs), never
+  reaches: cluster DNS, the public internet and `upstreams`, never
   the cloud metadata range, node or API server addresses, the administrator's
   deny list, Services in front of them, or another private address. A proxy
   configured to forward everything still cannot reach them.
+- `upstreams` take `cidr` and `service` entries, TCP only. A Service resolves
+  to its ClusterIP and TCP ports (or the ports you list), shown in
+  `status.network.proxyUpstreams`; a pool replaces warm slots when the
+  address changes. A missing Service keeps the sandbox Pending
+  (`EgressServiceNotFound`), and so does one in front of a node or the API
+  server (`EgressServiceReachesNode`). An upstream is the proxy's reach only:
+  the guest gets there only if `allow` allows it too.
 - `config: Self` (the default for an image) means the proxy is configured by
   its own arguments or control plane. With `config: Intent`, the proxy also
   gets the `egress-intent.kubeswift.io/v1` file at
