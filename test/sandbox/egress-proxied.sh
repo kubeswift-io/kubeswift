@@ -115,9 +115,11 @@ EOF
 run() {
 	kubectl -n "$NS" delete swiftsandbox "$1" --ignore-not-found --wait=true >/dev/null
 	sandbox "$1" "$2" "$(probe_script "$3")"
-	local phase out
+	local phase out pod
 	phase=$(finished "$1")
-	out=$(kubectl -n "$NS" logs "$1" -c console 2>&1 | grep -E '^PROBE-' || true)
+	# A warm checkout runs in the slot's pod, named after the slot.
+	pod=$(kubectl -n "$NS" get pods -l sandbox.kubeswift.io/sandbox="$1" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+	out=$(kubectl -n "$NS" logs "${pod:-$1}" -c console 2>&1 | grep -E '^PROBE-' || true)
 	printf '%s\n' "$out" | sed "s/^/   [$1] /"
 	[ -n "$out" ] || die "sandbox $1 $phase with no probe output: $(kubectl -n "$NS" get swiftsandbox "$1" -o jsonpath='{.status.message}')"
 	if printf '%s\n' "$out" | grep -q '^PROBE-FAIL' || [ "$phase" != Completed ]; then
@@ -221,7 +223,7 @@ spec:
   minWarm: 1
 $(network "$allow")
 EOF
-	kubectl -n "$NS" wait --for=jsonpath='{.status.readyReplicas}'=1 swiftsandboxpool/warm --timeout="${TIMEOUT}s" >/dev/null ||
+	kubectl -n "$NS" wait --for=jsonpath='{.status.phase}'=Ready swiftsandboxpool/warm --timeout="${TIMEOUT}s" >/dev/null ||
 		die "pool warm has no ready slot: $(kubectl -n "$NS" get swiftsandboxpool warm -o jsonpath='{.status.conditions}')"
 	# A checkout claims a slot only with the pool's whole shape, network included.
 	run checkout "$(network "$allow")
