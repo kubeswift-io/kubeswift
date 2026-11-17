@@ -27,8 +27,9 @@
 #      reported in status.network.proxyUpstreams). A Service upstream in
 #      front of the API server keeps the sandbox Pending
 #      (EgressServiceReachesNode).
-#   4. "intent": a stand-in proxy in config Intent prints the
-#      egress-intent.kubeswift.io/v1 file it was given; the test checks it.
+#   4. "intent": a proxy image in config Intent without the
+#      io.kubeswift.egress-intent.versions label is refused
+#      (EgressIntentUnsupported) before any launcher starts.
 #   5. An image outside the allowlist is refused.
 #
 # Prerequisites:
@@ -229,21 +230,22 @@ $(envoy_proxy "" "        upstreams: [{service: {name: kubernetes, namespace: de
 	log "an upstream Service in front of the API server keeps the sandbox Pending (EgressServiceReachesNode)"
 	kubectl -n "$NS" delete swiftsandbox upstream-api --wait=false >/dev/null
 
+	# config Intent: the image that reads the intent file must declare the
+	# versions it reads (io.kubeswift.egress-intent.versions); an unlabelled
+	# image is refused before any launcher starts. Delivery of the file to a
+	# labelled reader is egress-preset.sh's.
 	kubectl -n "$NS" delete swiftsandbox intent --ignore-not-found --wait=true >/dev/null
 	sandbox intent "$hosts
       proxy:
         image: $STANDIN_IMAGE
         config: Intent
-        listeners: {transparent: 15006}
-        args: [sh, -c, 'cat \"\$KUBESWIFT_EGRESS_INTENT\"; nc -lk -p 15006 -e true || while :; do nc -l -p 15006 </dev/null; done']" "echo intent-ran"
-	local pod logs
-	finished intent >/dev/null
-	pod=$(kubectl -n "$NS" get pods -l sandbox.kubeswift.io/sandbox=intent -o jsonpath='{.items[0].metadata.name}')
-	logs=$(kubectl -n "$NS" logs "$pod" -c egress-proxy 2>&1 || true)
-	for want in '"apiVersion": "egress-intent.kubeswift.io/v1"' "\"host\": \"$PUBLIC_HOST\"" '"transparent": 15006' "\"name\": \"intent\""; do
-		grep -qF "$want" <<<"$logs" || die "intent file lacks $want: $logs"
-	done
-	log "config Intent: the proxy read the egress-intent file"
+        listeners: {transparent: 15006}" "echo intent-ran"
+	local phase
+	phase=$(finished intent)
+	[ "$phase" = Failed ] && kubectl -n "$NS" get swiftsandbox intent -o jsonpath='{.status}' | grep -q EgressIntentUnsupported ||
+		die "an unlabelled config Intent proxy: phase $phase, $(kubectl -n "$NS" get swiftsandbox intent -o jsonpath='{.status.message}')"
+	[ -z "$(kubectl -n "$NS" get pods -l sandbox.kubeswift.io/sandbox=intent -o name)" ] || die "an unlabelled config Intent proxy got a launcher"
+	log "config Intent: an image without io.kubeswift.egress-intent.versions is refused (EgressIntentUnsupported)"
 
 	if kubectl apply -f - >/dev/null 2>"$NS.err" <<EOF; then
 apiVersion: sandbox.kubeswift.io/v1alpha1
@@ -253,7 +255,6 @@ spec:
   image: $IMAGE
   network: {mode: proxied, egress: {proxy: {image: "docker.io/library/nginx:1.27", listeners: {transparent: 15006}}}}
 EOF
-		local phase
 		phase=$(finished not-allowed)
 		[ "$phase" = Failed ] || die "an image outside the allowlist ran (phase $phase)"
 	fi
