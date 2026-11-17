@@ -959,6 +959,10 @@ struct SandboxExecArgs {
     /// into the sandbox root before the workload runs.
     #[serde(default)]
     secret_files: Vec<crate::intent::SecretFileRef>,
+    /// Egress credentials: references; the values go to the egress proxy's
+    /// secrets volume, the CA files to the guest.
+    #[serde(default)]
+    egress_credentials: Vec<crate::intent::EgressCredentialRef>,
     /// Artifacts to project from the node cache into the slot's staging share
     /// and mount in the guest (warm_artifacts.rs).
     #[serde(default)]
@@ -1066,6 +1070,49 @@ async fn dispatch_sandbox_exec(
             mounts.len(),
             started.elapsed().as_millis()
         );
+    }
+    if !args.egress_credentials.is_empty() {
+        // A slot's guest got no CA at boot: fresh material now, so two
+        // checkouts never share a key. The CA files and bundle copies go
+        // through the staging share (an exec request is capped at 64 KiB).
+        crate::bridge::require("warm-mounts", "egress credentials on a warm slot")
+            .map_err(|e| format!("KernelUnsupported: {}", e))?;
+        if let Some(a) = args
+            .artifacts
+            .iter()
+            .find(|a| a.name.starts_with(crate::egress_secrets::STAGE_PREFIX))
+        {
+            return Err(format!("artifact name {} is reserved", a.name));
+        }
+        let spec = match crate::egress_secrets::spec_from_env() {
+            Some(Ok(s)) => s,
+            Some(Err(e)) => return Err(format!("EgressProxyNotReady: {}", e)),
+            None => {
+                return Err(
+                    "EgressProxyNotReady: this slot has no egress secrets volume".to_string(),
+                )
+            }
+        };
+        let m = crate::egress_secrets::deliver(&spec, &args.egress_credentials)
+            .await
+            .map_err(|f| match f {
+                crate::egress_secrets::Failure::Secret(e) => format!("SecretUnavailable: {}", e),
+                crate::egress_secrets::Failure::Proxy(e) => format!("EgressProxyNotReady: {}", e),
+            })?;
+        let staged = crate::egress_secrets::stage_warm(
+            &spec,
+            m.ca_pem(),
+            crate::rootfs_read::get(),
+            Path::new(crate::warm_artifacts::STAGE_DIR),
+        )
+        .map_err(|e| format!("EgressProxyNotReady: staging the CA: {}", e))?;
+        log::info!(
+            "egress_credentials_delivered id={} count={} mounts={}",
+            action.id,
+            args.egress_credentials.len(),
+            staged.len()
+        );
+        mounts.extend(staged);
     }
     // An older agent would ignore the identity and run the workload as root.
     let user = crate::intent::WorkloadUser::gate(args.user, crate::bridge::has("run-as-user"))

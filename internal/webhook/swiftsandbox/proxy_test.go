@@ -14,7 +14,12 @@ func available(t *testing.T) {
 	t.Helper()
 	saved := []bool{ProxiedAvailable, EgressProxyAvailable, IdentityAvailable, PresetsAvailable, CredentialsAvailable, ServiceUpstreamsAvailable, HTTPListenerAvailable}
 	savedImages, savedPresets := AllowedProxyImages, EgressProxyPresets
-	EgressProxyPresets = map[string]EgressProxyPreset{"envoy": {Image: "docker.io/envoyproxy/envoy:v1.36.2"}}
+	ready := &EgressProxyReadiness{}
+	ready.HTTPGet.Port, ready.HTTPGet.Path = 15000, "/certs"
+	EgressProxyPresets = map[string]EgressProxyPreset{
+		"envoy":    {Image: "docker.io/envoyproxy/envoy:v1.36.2", Readiness: ready},
+		"no-probe": {Image: "docker.io/envoyproxy/envoy:v1.36.2"},
+	}
 	ProxiedAvailable, EgressProxyAvailable, IdentityAvailable = true, true, true
 	PresetsAvailable, CredentialsAvailable, ServiceUpstreamsAvailable, HTTPListenerAvailable = true, true, true, true
 	AllowedProxyImages = []string{"*", "*/*", "*/*/*"}
@@ -130,7 +135,7 @@ func TestValidateNetworkProxied(t *testing.T) {
 		{"credential covered by a wildcard rule", proxied(&sandboxv1alpha1.SandboxEgress{
 			Allow:       []sandboxv1alpha1.SandboxEgressRule{{Host: "*.example.com"}},
 			Proxy:       preset(),
-			Credentials: []sandboxv1alpha1.SandboxEgressCredential{cred("a.b.example.com:8443", "*.x.example.com")},
+			Credentials: []sandboxv1alpha1.SandboxEgressCredential{cred("a.b.example.com:8443", "x.example.com")},
 		})},
 	}
 	for _, tc := range ok {
@@ -235,6 +240,16 @@ func TestValidateNetworkProxied(t *testing.T) {
 			c.SecretKeyRef.Key = ""
 			return c
 		}())},
+		{"wildcard destination", "not a wildcard", proxied(&sandboxv1alpha1.SandboxEgress{
+			Allow:       []sandboxv1alpha1.SandboxEgressRule{{Host: "*.example.com"}},
+			Proxy:       preset(),
+			Credentials: []sandboxv1alpha1.SandboxEgressCredential{cred("*.example.com")},
+		})},
+		{"preset without readiness", "no readiness probe", proxied(&sandboxv1alpha1.SandboxEgress{
+			Allow:       []sandboxv1alpha1.SandboxEgressRule{{Host: "api.example.com"}},
+			Proxy:       &sandboxv1alpha1.SandboxEgressProxy{Preset: "no-probe"},
+			Credentials: []sandboxv1alpha1.SandboxEgressCredential{cred("api.example.com")},
+		})},
 	}
 	for _, tc := range bad {
 		err := ValidateNetwork(tc.n)
@@ -279,20 +294,23 @@ func TestValidateIdentity(t *testing.T) {
 func TestParseProxyPresets(t *testing.T) {
 	got, err := ParseProxyPresets(`{"envoy":{"image":"docker.io/envoyproxy/envoy:v1.36.2","args":["-c","/etc/kubeswift/egress-proxy/envoy.json"],
 		"translatorImage":"ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:v0.1.0","translatorArgs":["--out","/etc/kubeswift/egress-proxy/envoy.json"],
-		"listeners":{"transparent":15006}}}`)
-	if err != nil || got["envoy"].Listeners.Transparent != 15006 || got["envoy"].TranslatorImage == "" {
+		"listeners":{"transparent":15006},"readiness":{"httpGet":{"port":15000,"path":"/certs"}}}}`)
+	if err != nil || got["envoy"].Listeners.Transparent != 15006 || got["envoy"].TranslatorImage == "" ||
+		got["envoy"].Readiness == nil || got["envoy"].Readiness.HTTPGet.Port != 15000 {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 	if got, err := ParseProxyPresets(""); err != nil || got != nil {
 		t.Errorf("empty: %v %v", got, err)
 	}
 	for name, in := range map[string]string{
-		"bad name":        `{"Envoy":{"image":"x","listeners":{"transparent":15006}}}`,
-		"no image":        `{"envoy":{"listeners":{"transparent":15006}}}`,
-		"privileged port": `{"envoy":{"image":"x","listeners":{"transparent":80}}}`,
-		"same ports":      `{"envoy":{"image":"x","listeners":{"transparent":15006,"dns":15006}}}`,
-		"unknown field":   `{"envoy":{"image":"x","listeners":{"transparent":15006},"command":["sh"]}}`,
-		"not json":        `envoy`,
+		"bad name":                `{"Envoy":{"image":"x","listeners":{"transparent":15006}}}`,
+		"no image":                `{"envoy":{"listeners":{"transparent":15006}}}`,
+		"privileged port":         `{"envoy":{"image":"x","listeners":{"transparent":80}}}`,
+		"same ports":              `{"envoy":{"image":"x","listeners":{"transparent":15006,"dns":15006}}}`,
+		"unknown field":           `{"envoy":{"image":"x","listeners":{"transparent":15006},"command":["sh"]}}`,
+		"not json":                `envoy`,
+		"readiness on a listener": `{"envoy":{"image":"x","listeners":{"transparent":15006},"readiness":{"httpGet":{"port":15006,"path":"/certs"}}}}`,
+		"readiness relative path": `{"envoy":{"image":"x","listeners":{"transparent":15006},"readiness":{"httpGet":{"port":15000,"path":"certs"}}}}`,
 	} {
 		if _, err := ParseProxyPresets(in); err == nil {
 			t.Errorf("%s: parsed, want an error", name)

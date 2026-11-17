@@ -132,14 +132,17 @@ sandboxMaterialize:
   # into /etc/kubeswift/egress-proxy (read-only for the proxy). The image that
   # reads the intent file must carry the label
   # io.kubeswift.egress-intent.versions listing v1. Preset images need not be
-  # in egressProxyImages. Example, with a translator from
-  # github.com/kubeswift-io/kubeswift-egress-adapters:
+  # in egressProxyImages. `readiness` (an HTTP GET on 127.0.0.1 whose answer
+  # lists the serial numbers of the certificates the proxy serves) is what lets
+  # a preset receive spec.network.egress.credentials. Example, with a
+  # translator from github.com/kubeswift-io/kubeswift-egress-adapters:
   #   envoy:
   #     image: docker.io/envoyproxy/envoy:v1.36.2
   #     args: ["-c", "/etc/kubeswift/egress-proxy/envoy.json", "--disable-hot-restart"]
-  #     translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:v0.1.0
-  #     translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/envoy.json"]
+  #     translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:v0.2.0
+  #     translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/envoy.json", "--admin-port", "15000"]
   #     listeners: {transparent: 15006}
+  #     readiness: {httpGet: {port: 15000, path: /certs}}
   egressProxyPresets: {}
 
 # snapshot-oras: the uploader/downloader image for the oci (OCI registry / ORAS)

@@ -652,6 +652,10 @@ pub struct SandboxExec {
     /// swiftletd reads them into `files` before the config disk is written.
     #[serde(default)]
     pub secret_files: Vec<SecretFileRef>,
+    /// Egress credentials: Secret references whose values go only into the
+    /// egress proxy's secrets volume (egress_secrets.rs), never the guest.
+    #[serde(default)]
+    pub egress_credentials: Vec<EgressCredentialRef>,
     /// Resolved files for the config disk (FILE lines). Never serialized:
     /// the values exist in swiftletd's memory and on the in-memory disk only.
     #[serde(skip)]
@@ -659,6 +663,14 @@ pub struct SandboxExec {
     /// Who the workload runs as (USER / NNP / NONROOT lines).
     #[serde(default)]
     pub user: Option<WorkloadUser>,
+}
+
+/// The Secret key of one egress credential.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct EgressCredentialRef {
+    pub name: String,
+    pub secret: String,
+    pub key: String,
 }
 
 /// Who a sandbox workload runs as: the image USER or spec.securityContext, as
@@ -1166,6 +1178,7 @@ mod tests {
             cwd: String::new(),
             secret_env: vec![],
             secret_files: vec![],
+            egress_credentials: vec![],
             files: vec![GuestFile {
                 path: "/run/secrets/registry/config.json".into(),
                 mode: 0o400,
@@ -1203,6 +1216,7 @@ mod tests {
             cwd: "/work".into(),
             secret_env: vec![],
             secret_files: vec![],
+            egress_credentials: vec![],
             files: vec![],
             user: None,
         };

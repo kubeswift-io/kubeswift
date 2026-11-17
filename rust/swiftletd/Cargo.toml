@@ -12,6 +12,11 @@ libc = "0.2"
 log = "0.4"
 # Intent integrity check (already in the tree through rustls).
 sha2 = "0.11"
+# Egress credentials: the per-launcher intercept CA and its leaf certificates
+# (ECDSA P-256, name-constrained). ring is already in the tree through rustls.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+# Certificate validity for rcgen (already in the tree through it).
+time = "0.3"
 tokio = { version = "1", features = ["rt", "macros", "sync", "signal", "net", "io-util", "time"] }
 # kube + k8s-openapi are version-locked and must move together (a Dependabot
 # group enforces it). Features are only what swiftletd actually uses: a client

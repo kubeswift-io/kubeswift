@@ -809,8 +809,11 @@ spec:
                           the listed destinations, after terminating TLS with a certificate
                           authority generated for the launcher, which the guest is made to trust.
                           The value is never written into the guest. Needs mode proxied and a
-                          proxy preset with config Intent. Not available yet: refused until the
-                          proxy runtime ships.
+                          proxy preset with config Intent and a readiness probe (chart
+                          sandboxMaterialize.egressProxyPresets), and a sandbox kernel whose
+                          bridge writes files. On a pool, the shape (names, placeholders,
+                          destinations, headers) is the slots'; each checkout's Secrets are read
+                          when it claims a slot.
                         items:
                           description: |-
                             SandboxEgressCredential is one secret the proxy adds to requests in place
@@ -819,8 +822,11 @@ spec:
                             destinations:
                               description: |-
                                 Destinations are host or host:port (port 443 when omitted) the value is
-                                sent to. Each must be allowed by a host rule in allow. A request to any
-                                other destination that still contains the placeholder is refused.
+                                sent to: one host each, no wildcard. Each must be allowed by a host rule
+                                in allow. The proxy terminates the guest's TLS for these destinations
+                                (the guest trusts a per-launcher CA KubeSwift adds to its CA bundle),
+                                sets the header, and refuses a request whose Host is another name. The
+                                placeholder means nothing anywhere else.
                               items:
                                 type: string
                               maxItems: 16

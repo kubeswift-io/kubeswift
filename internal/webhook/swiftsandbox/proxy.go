@@ -28,7 +28,7 @@ var EgressProxyAvailable = true
 // with its real errors first.
 var (
 	PresetsAvailable          = true
-	CredentialsAvailable      = false
+	CredentialsAvailable      = true
 	ServiceUpstreamsAvailable = false
 	HTTPListenerAvailable     = false
 )
@@ -57,6 +57,20 @@ type EgressProxyPreset struct {
 		Transparent int32 `json:"transparent"`
 		DNS         int32 `json:"dns,omitempty"`
 	} `json:"listeners"`
+	// Readiness tells swiftletd when the proxy has loaded newly delivered
+	// credentials. Only a preset with it can receive credentials.
+	Readiness *EgressProxyReadiness `json:"readiness,omitempty"`
+}
+
+// EgressProxyReadiness is an HTTP GET swiftletd sends to the proxy on
+// 127.0.0.1 after it replaces the credential files: the proxy has loaded them
+// once the response (200) contains the serial number, in lowercase hex, of
+// every certificate just issued (for Envoy, /certs on its admin port).
+type EgressProxyReadiness struct {
+	HTTPGet struct {
+		Port int32  `json:"port"`
+		Path string `json:"path"`
+	} `json:"httpGet"`
 }
 
 // EgressProxyPresets are the presets this cluster defines, by name.
@@ -84,6 +98,15 @@ func ParseProxyPresets(s string) (map[string]EgressProxyPreset, error) {
 		l := p.Listeners
 		if l.Transparent < 1024 || l.Transparent > 65535 || (l.DNS != 0 && (l.DNS < 1024 || l.DNS > 65535 || l.DNS == l.Transparent)) {
 			return nil, fmt.Errorf("egress proxy preset %q: listeners must be distinct ports in 1024-65535", name)
+		}
+		if r := p.Readiness; r != nil {
+			port := r.HTTPGet.Port
+			if port < 1024 || port > 65535 || port == l.Transparent || port == l.DNS {
+				return nil, fmt.Errorf("egress proxy preset %q: readiness.httpGet.port must be a port in 1024-65535 other than the listeners", name)
+			}
+			if !strings.HasPrefix(r.HTTPGet.Path, "/") || strings.ContainsAny(r.HTTPGet.Path, " \r\n") {
+				return nil, fmt.Errorf("egress proxy preset %q: readiness.httpGet.path must be an absolute path without spaces", name)
+			}
 		}
 	}
 	return out, nil
@@ -214,7 +237,8 @@ func validateProxy(n sandboxv1alpha1.SandboxNetwork) error {
 				return fmt.Errorf("%s.preset %q is not a preset this cluster defines (chart sandboxMaterialize.egressProxyPresets)", f, p.Preset)
 			}
 			for _, pt := range n.Ports {
-				if pt.Port == pr.Listeners.Transparent || (pr.Listeners.DNS != 0 && pt.Port == pr.Listeners.DNS) {
+				if pt.Port == pr.Listeners.Transparent || (pr.Listeners.DNS != 0 && pt.Port == pr.Listeners.DNS) ||
+					(pr.Readiness != nil && pt.Port == pr.Readiness.HTTPGet.Port) {
 					return fmt.Errorf("spec.network.ports %s: port %d is a listener of egress proxy preset %q", pt.Name, pt.Port, p.Preset)
 				}
 			}
@@ -300,6 +324,9 @@ func validateCredentials(n sandboxv1alpha1.SandboxNetwork) error {
 	case p.Config == sandboxv1alpha1.SandboxEgressProxyConfigSelf:
 		return fmt.Errorf("%s need proxy.config Intent; a Self proxy uses its own credential source", f)
 	}
+	if pr, ok := EgressProxyPresets[p.Preset]; ok && pr.Readiness == nil {
+		return fmt.Errorf("%s: egress proxy preset %q has no readiness probe, so swiftletd cannot tell when it has loaded a credential", f, p.Preset)
+	}
 	if len(creds) > 16 {
 		return fmt.Errorf("%s has %d entries, at most 16", f, len(creds))
 	}
@@ -336,6 +363,9 @@ func validateCredentials(n sandboxv1alpha1.SandboxNetwork) error {
 			host, port, err := credentialDestination(d)
 			if err != nil {
 				return fmt.Errorf("%s.destinations: %w", at, err)
+			}
+			if strings.HasPrefix(host, "*.") {
+				return fmt.Errorf("%s.destinations: %s: a credential destination names one host, not a wildcard (its certificate is issued per host)", at, d)
 			}
 			covered := false
 			for _, h := range hosts {

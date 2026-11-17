@@ -5,6 +5,7 @@ mod console;
 mod cpuset;
 mod egress_broker;
 mod egress_deny;
+mod egress_secrets;
 mod hotplug;
 mod intent;
 mod kube_client;
@@ -17,6 +18,7 @@ mod outputs;
 mod podwatch;
 mod probe;
 mod report;
+mod rootfs_read;
 mod secrets;
 mod shutdown;
 mod use_locks;
@@ -97,6 +99,11 @@ fn main() {
     // Before anything else: it is not a launcher.
     if env::args().nth(1).as_deref() == Some(egress_broker::SUBCOMMAND) {
         egress_broker::main();
+    }
+    // `swiftletd egress-secrets-init`: fills the egress proxy's secrets
+    // volume with throwaway material before the proxy starts.
+    if env::args().nth(1).as_deref() == Some(egress_secrets::SUBCOMMAND) {
+        egress_secrets::init_main();
     }
 
     // The console container follows this launcher's life, including
@@ -392,6 +399,57 @@ fn main() {
                             }
                             std::process::exit(1);
                         }
+                    }
+                }
+            }
+            // Egress credentials: read the values, give the proxy fresh
+            // material, wait until it serves it, and add the CA files to the
+            // guest. Before the VM boots, so the workload's first request
+            // can use its placeholder.
+            rootfs_read::set_from_intent(&intent);
+            if let Some(exec) = intent.sandbox_exec.as_mut() {
+                if !exec.egress_credentials.is_empty() {
+                    let fail = |msg: &str, secret: bool| -> ! {
+                        log::error!("{}", msg);
+                        if let (Some(ns), Some(n)) = (&namespace, &name) {
+                            let _ = if secret {
+                                rt.block_on(report::report_secret_error(ns, n, msg))
+                            } else {
+                                rt.block_on(report::report_egress_error(ns, n, msg))
+                            };
+                        }
+                        std::process::exit(1);
+                    };
+                    if let Err(msg) =
+                        bridge::require("files", "egress credentials (the CA certificate)")
+                    {
+                        log::error!("{}", msg);
+                        if let (Some(ns), Some(n)) = (&namespace, &name) {
+                            let _ = rt.block_on(report::report_kernel_error(ns, n, &msg));
+                        }
+                        std::process::exit(1);
+                    }
+                    let spec = match egress_secrets::spec_from_env() {
+                        Some(Ok(s)) => s,
+                        Some(Err(e)) => fail(&e, false),
+                        None => fail(
+                            "egress credentials: this launcher has no egress secrets volume",
+                            false,
+                        ),
+                    };
+                    match rt.block_on(egress_secrets::deliver(&spec, &exec.egress_credentials)) {
+                        Ok(m) => {
+                            let files =
+                                egress_secrets::guest_files(&spec, m.ca_pem(), rootfs_read::get());
+                            log::info!(
+                                "egress_credentials_delivered count={} guest_files={}",
+                                exec.egress_credentials.len(),
+                                files.len()
+                            );
+                            exec.files.extend(files);
+                        }
+                        Err(egress_secrets::Failure::Secret(e)) => fail(&e, true),
+                        Err(egress_secrets::Failure::Proxy(e)) => fail(&e, false),
                     }
                 }
             }

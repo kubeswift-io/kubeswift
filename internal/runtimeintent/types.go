@@ -308,6 +308,17 @@ type SandboxExecSpec struct {
 	// (references only, like SecretEnv). Needs the kernel's bridge feature
 	// "files".
 	SecretFiles []SecretFileRef `json:"secretFiles,omitempty"`
+	// EgressCredentials are the Secret keys behind the sandbox's egress
+	// credentials. swiftletd reads them and writes the values only into the
+	// egress proxy's secrets volume, never into the guest.
+	EgressCredentials []EgressCredentialRef `json:"egressCredentials,omitempty"`
+}
+
+// EgressCredentialRef names the Secret key of one egress credential.
+type EgressCredentialRef struct {
+	Name   string `json:"name"`
+	Secret string `json:"secret"`
+	Key    string `json:"key"`
 }
 
 // SecretFileRef is one Secret key written to one file in the guest.

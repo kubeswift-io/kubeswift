@@ -189,6 +189,11 @@ func egressIntentJSON(sb *sandboxv1alpha1.SwiftSandbox, ownerKind, ownerName str
 			in.Allow[i].Ports = append(in.Allow[i].Ports, egressintentv1.Port{Port: a.Port, Protocol: string(corev1.ProtocolTCP)})
 		}
 	}
+	key := coldPlaceholderKey(sb)
+	if ownerKind == "SwiftSandboxPool" {
+		key = poolPlaceholderKey(sb.Namespace, ownerName)
+	}
+	addCredentialsToIntent(&in, sb.Spec.Network, key)
 	b, err := json.MarshalIndent(in, "", "  ")
 	return string(b), err
 }
