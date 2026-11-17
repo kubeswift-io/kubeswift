@@ -8,6 +8,7 @@ SWIFTLETD_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/swiftletd:$(IMAGE_TAG)
 GPU_DISCOVERY_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/gpu-discovery:$(IMAGE_TAG)
 DRA_DRIVER_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/kubeswift-dra-driver:$(IMAGE_TAG)
 MIGRATION_STUNNEL_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/migration-stunnel:$(IMAGE_TAG)
+EGRESS_CONFORMANCE_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/egress-conformance:$(IMAGE_TAG)
 SNAPSHOT_S3_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/snapshot-s3:$(IMAGE_TAG)
 SNAPSHOT_ORAS_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/snapshot-oras:$(IMAGE_TAG)
 GATEWAY_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/kubeswift-gateway:$(IMAGE_TAG)
@@ -46,7 +47,7 @@ GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
-	build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-snapshot-oras-image build-dra-driver-image build-gateway-image build-sandbox-materialize-image generate deploy deploy-with-webhook deploy-with-mtls deploy-with-webhook-and-mtls undeploy load-images smoke-test smoke-test-cleanup \
+	build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-snapshot-oras-image build-dra-driver-image build-gateway-image build-sandbox-materialize-image build-egress-conformance-image generate deploy deploy-with-webhook deploy-with-mtls deploy-with-webhook-and-mtls undeploy load-images smoke-test smoke-test-cleanup \
 	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
 	b0-cross-node-tcp-test b0-cross-node-tcp-test-cleanup sandbox-tcp-receive-test sandbox-tcp-receive-test-cleanup sandbox-warm-checkout-test sandbox-warm-checkout-test-cleanup sandbox-hardening-test sandbox-hardening-test-cleanup sandbox-gpu-test sandbox-gpu-test-cleanup sandbox-egress-restricted-test sandbox-egress-restricted-test-cleanup sandbox-egress-proxied-test sandbox-egress-proxied-test-cleanup sandbox-egress-proxy-test sandbox-egress-proxy-test-cleanup sandbox-egress-preset-test sandbox-egress-preset-test-cleanup sandbox-credentials-test sandbox-credentials-test-cleanup e2e-tests \
 	verify-e2e-scripts verify-kustomize-sync verify-base-image-pins \
@@ -61,6 +62,7 @@ help:
 	@echo "  build-controller-image  Build controller-manager image"
 	@echo "  build-swiftletd-image Build swiftletd image"
 	@echo "  build-migration-stunnel-image  Build live-migration mTLS stunnel sidecar image (Phase 3c)"
+	@echo "  build-egress-conformance-image Build the egress proxy conformance image (driver + guest)"
 	@echo "  push-images           Push images to registry (requires auth)"
 	@echo "  package-chart         Package Helm chart"
 	@echo "  push-chart            Push chart to OCI registry"
@@ -128,6 +130,10 @@ build-dra-driver-image:
 build-migration-stunnel-image:
 	docker build -f images/migration-stunnel/Containerfile . -t $(MIGRATION_STUNNEL_IMAGE) \
 		--build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT)
+
+build-egress-conformance-image:
+	docker build -f images/egress-conformance/Containerfile . -t $(EGRESS_CONFORMANCE_IMAGE) \
+		--build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg IMAGE_REF=$(EGRESS_CONFORMANCE_IMAGE)
 
 build-gateway-image:
 	docker build -f images/kubeswift-gateway/Containerfile . -t $(GATEWAY_IMAGE) \
