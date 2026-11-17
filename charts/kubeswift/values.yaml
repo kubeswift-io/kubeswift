@@ -117,6 +117,14 @@ sandboxMaterialize:
   # builds, tenants owed dedicated CPU), "0" to request no CPU. Applies to
   # launcher pods created after the change.
   launcherCPUPerVCPU: "250m"
+  # Images a sandbox in network mode `proxied` may run as its egress proxy
+  # (spec.network.egress.proxy.image). Patterns as in Go's path.Match: "*"
+  # does not cross "/", so "docker.io/envoyproxy/envoy:*" allows every tag of
+  # that repository. The proxy is an unprivileged container in the launcher
+  # pod, held to the restricted rules, but it sees all of the sandbox's
+  # egress: list only images you trust. Empty allows none (the built-in
+  # broker still works).
+  egressProxyImages: []
 
 # snapshot-oras: the uploader/downloader image for the oci (OCI registry / ORAS)
 # snapshot backend. The controller passes this to the per-snapshot push Job (and

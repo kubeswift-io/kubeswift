@@ -221,7 +221,12 @@ if network_enabled; then
     # values come from the controller, validated to [a-z0-9.*,-].
     guest_dns="$dns"
     dns_args=""
-    if [ "${KUBESWIFT_SANDBOX_EGRESS:-}" = "proxied" ]; then
+    if [ "${KUBESWIFT_SANDBOX_EGRESS:-}" = "proxied" ] && [ -n "${KUBESWIFT_EGRESS_PROXY_DNS_PORT:-}" ]; then
+        # The egress proxy answers DNS itself: forward every query to it.
+        guest_dns="$gateway"
+        dns_args="--no-resolv --log-queries --server=127.0.0.1#${KUBESWIFT_EGRESS_PROXY_DNS_PORT}"
+        echo "Proxied DNS: guest resolver $gateway, every query to the egress proxy on port $KUBESWIFT_EGRESS_PROXY_DNS_PORT"
+    elif [ "${KUBESWIFT_SANDBOX_EGRESS:-}" = "proxied" ]; then
         guest_dns="$gateway"
         dns_args="--no-resolv --log-queries --address=/#/"
         for h in ${KUBESWIFT_SANDBOX_EGRESS_HOSTS:-}; do

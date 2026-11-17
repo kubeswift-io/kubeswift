@@ -32,9 +32,12 @@ const SlotProfileAnnotation = "sandbox.kubeswift.io/slot-profile"
 // and 1Gi ran in a 1 vCPU, 512Mi slot, and one with a nodeSelector ran on
 // whatever node the slot had, with nothing saying so.
 type slotShape struct {
-	Image      string   `json:"image"`
-	Network    string   `json:"network"`
-	Egress     []string `json:"egress,omitempty"`
+	Image   string   `json:"image"`
+	Network string   `json:"network"`
+	Egress  []string `json:"egress,omitempty"`
+	// The egress proxy container (mode proxied), as JSON; empty for the
+	// built-in broker, so pools without a proxy keep their slots.
+	Proxy      string   `json:"proxy,omitempty"`
 	Ports      []string `json:"ports,omitempty"`
 	Ingress    string   `json:"ingress,omitempty"`
 	VerifyKey  string   `json:"verifyKey,omitempty"`
@@ -59,6 +62,7 @@ func poolShape(pool *sandboxv1alpha1.SwiftSandboxPool) slotShape {
 		Image:      pool.Spec.Image,
 		Network:    networkMode(pool.Spec.Network),
 		Egress:     egressKey(pool.Namespace, pool.Spec.Network),
+		Proxy:      proxyKey(pool.Spec.Network),
 		Ports:      portsKey(pool.Spec.Network),
 		Ingress:    ingressKey(pool.Spec.Network),
 		VerifyKey:  secretName(pool.Spec.VerifyKeySecretRef),
@@ -115,6 +119,7 @@ func slotMismatches(pool *sandboxv1alpha1.SwiftSandboxPool, sb *sandboxv1alpha1.
 	differ("image", p.Image, sb.Spec.Image)
 	differ("network mode", p.Network, networkMode(sb.Spec.Network))
 	differ("network egress", strings.Join(p.Egress, "; "), strings.Join(egressKey(sb.Namespace, sb.Spec.Network), "; "))
+	differ("network egress proxy", p.Proxy, proxyKey(sb.Spec.Network))
 	differ("network ports", strings.Join(p.Ports, ", "), strings.Join(portsKey(sb.Spec.Network), ", "))
 	differ("network ingress", p.Ingress, ingressKey(sb.Spec.Network))
 	differ("verifyKeySecretRef", p.VerifyKey, secretName(sb.Spec.VerifyKeySecretRef))

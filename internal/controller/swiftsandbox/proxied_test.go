@@ -88,3 +88,100 @@ func TestEgressKey_Host(t *testing.T) {
 		}
 	}
 }
+
+func proxySandbox(cfg sandboxv1alpha1.SandboxEgressProxyConfig) *sandboxv1alpha1.SwiftSandbox {
+	sb := proxiedSandbox()
+	sb.Spec.Network.Egress.Proxy = &sandboxv1alpha1.SandboxEgressProxy{
+		Image:     "docker.io/envoyproxy/envoy:v1.36.2",
+		Args:      []string{"--disable-hot-restart"},
+		Listeners: &sandboxv1alpha1.SandboxEgressProxyListeners{Transparent: 15006, DNS: 15053},
+		Config:    cfg,
+		Upstreams: []sandboxv1alpha1.SandboxEgressRule{{CIDR: "10.96.0.50/32", Ports: []sandboxv1alpha1.SandboxEgressPort{{Port: 8080}}}},
+	}
+	return sb
+}
+
+// A proxy container: a native sidecar running as the proxy uid without
+// privileges or the launcher's token; guest TCP goes to its transparent
+// port, its own reach is upstreams; no broker.
+func TestBuildPod_EgressProxy(t *testing.T) {
+	pod := buildPod(proxySandbox(sandboxv1alpha1.SandboxEgressProxyConfigSelf), "sandbox")
+	var proxy *corev1.Container
+	for i := range pod.Spec.InitContainers {
+		if pod.Spec.InitContainers[i].Name == EgressProxyContainerName {
+			proxy = &pod.Spec.InitContainers[i]
+			if i != len(pod.Spec.InitContainers)-1 {
+				t.Errorf("proxy is init container %d of %d; it must come after network-init", i, len(pod.Spec.InitContainers))
+			}
+		}
+	}
+	if proxy == nil {
+		t.Fatal("no egress-proxy container")
+	}
+	sc := proxy.SecurityContext
+	if proxy.RestartPolicy == nil || *proxy.RestartPolicy != corev1.ContainerRestartPolicyAlways {
+		t.Error("proxy is not a native sidecar")
+	}
+	if *sc.RunAsUser != EgressProxyUID || *sc.Privileged || *sc.AllowPrivilegeEscalation || !*sc.ReadOnlyRootFilesystem || len(sc.Capabilities.Drop) != 1 {
+		t.Errorf("proxy security context %+v", sc)
+	}
+	masked := false
+	for _, m := range proxy.VolumeMounts {
+		masked = masked || (m.MountPath == serviceAccountPath && m.Name == egressProxyNoToken)
+		if m.Name == egressIntentVolume {
+			t.Error("config Self mounts the intent file")
+		}
+	}
+	if !masked {
+		t.Error("the launcher's service account token is not masked")
+	}
+	for name, env := range map[string]map[string]string{
+		"network-init": containerEnv(pod.Spec.InitContainers, networkInitName),
+		"launcher":     containerEnv(pod.Spec.Containers, launcherName),
+	} {
+		if env["KUBESWIFT_EGRESS_PROXY"] != "container" || env["KUBESWIFT_EGRESS_BROKER_PORT"] != "15006" ||
+			env["KUBESWIFT_EGRESS_PROXY_DNS_PORT"] != "15053" || env["KUBESWIFT_SANDBOX_EGRESS_ALLOW"] != "tcp,10.96.0.50/32,8080" {
+			t.Errorf("%s env %v", name, env)
+		}
+	}
+
+	// Config Intent mounts the file, from the intent ConfigMap.
+	ipod := buildPod(proxySandbox(sandboxv1alpha1.SandboxEgressProxyConfigIntent), "sandbox")
+	found := false
+	for _, c := range ipod.Spec.InitContainers {
+		for _, m := range c.VolumeMounts {
+			found = found || (c.Name == EgressProxyContainerName && m.Name == egressIntentVolume && m.MountPath == "/etc/kubeswift/egress")
+		}
+	}
+	if !found {
+		t.Error("config Intent: no intent file mount")
+	}
+}
+
+// The egress-intent file carries host rules as written and resolved rules
+// with ports merged, plus the listeners and the owner.
+func TestEgressIntentJSON(t *testing.T) {
+	sb := proxySandbox(sandboxv1alpha1.SandboxEgressProxyConfigIntent)
+	cm := buildIntentConfigMap(sb, []byte("{}"))
+	if err := addEgressIntent(cm, sb, "SwiftSandboxPool", "agents"); err != nil {
+		t.Fatal(err)
+	}
+	js := cm.Data[egressIntentKey]
+	for _, want := range []string{
+		`"apiVersion": "egress-intent.kubeswift.io/v1"`,
+		`"kind": "SwiftSandboxPool"`, `"name": "agents"`,
+		`"transparent": 15006`, `"dns": 15053`,
+		`"host": "api.example.com"`, `"host": "*.example.org"`,
+		`"cidr": "10.96.0.12/32"`, `"from": "service ai/llm"`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("intent lacks %s:\n%s", want, js)
+		}
+	}
+	self := proxySandbox(sandboxv1alpha1.SandboxEgressProxyConfigSelf)
+	cm2 := buildIntentConfigMap(self, []byte("{}"))
+	_ = addEgressIntent(cm2, self, "SwiftSandbox", "sb")
+	if _, ok := cm2.Data[egressIntentKey]; ok {
+		t.Error("config Self got an intent file")
+	}
+}

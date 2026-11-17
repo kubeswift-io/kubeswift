@@ -264,8 +264,59 @@ spec:
   `network.ports`.
 - A broker that does not start fails the sandbox (`EgressBrokerFailed`) before
   the guest boots.
-- `network.egress.proxy` (your own proxy) and `network.egress.credentials` are
-  part of the API but refused in this release.
+- `network.egress.credentials`, proxy presets, `service` entries in
+  `proxy.upstreams` and `proxy.listeners.http` are part of the API but refused
+  in this release.
+
+#### Your own egress proxy
+
+`network.egress.proxy.image` runs a proxy of your choice instead of the
+built-in broker, for example Envoy with its own configuration. The
+administrator lists the images a sandbox may use in the chart value
+`sandboxMaterialize.egressProxyImages`; any other image is refused.
+
+```yaml
+spec:
+  network:
+    mode: proxied
+    egress:
+      allow:
+        - host: api.example.com
+          ports: [{port: 443}]
+      proxy:
+        image: docker.io/envoyproxy/envoy:v1.36.2
+        args: [--disable-hot-restart, --config-yaml, "..."]
+        listeners: {transparent: 15006}        # dns: optional
+        config: Self                           # or Intent
+        upstreams:
+          - cidr: 10.96.14.7/32                # in-cluster destinations the proxy may reach
+            ports: [{port: 8080}]
+```
+
+- The proxy runs as an ordinary container in the launcher pod: uid 65531, no
+  privileges, all capabilities dropped, read-only root filesystem with a
+  writable `/tmp`, no service account token. It starts before the guest and is
+  restarted if it exits. If its listeners do not come up within 60 seconds the
+  sandbox fails with `EgressProxyNotReady`. Its log is
+  `kubectl logs <pod> -c egress-proxy`.
+- Every guest TCP connection arrives on `listeners.transparent`. The proxy
+  reads the original destination with `SO_ORIGINAL_DST` and must listen on
+  all addresses. The listener cannot be reached from outside the pod.
+- With `listeners.dns`, every guest DNS query goes to the proxy. Without it,
+  the launcher resolves only the `host` rules' names, as with the broker.
+- The proxy decides what the guest reaches. The kernel decides what the proxy
+  reaches: cluster DNS, the public internet and `upstreams` (IPv4 CIDRs), never
+  the cloud metadata range, node or API server addresses, the administrator's
+  deny list, Services in front of them, or another private address. A proxy
+  configured to forward everything still cannot reach them.
+- `config: Self` (the default for an image) means the proxy is configured by
+  its own arguments or control plane. With `config: Intent`, the proxy also
+  gets the `egress-intent.kubeswift.io/v1` file at
+  `/etc/kubeswift/egress/intent.json` (path in `$KUBESWIFT_EGRESS_INTENT`): the
+  allowlist, with `host` rules as written and Services resolved to addresses,
+  and the listeners. The format is documented in `api/egressintent/v1`.
+- Pools: slots boot with the pool's proxy, and a sandbox claims a slot only
+  with the same proxy.
 
 ### Exposing ports
 

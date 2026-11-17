@@ -12,9 +12,16 @@ import (
 // available turns the proxied runtime switch on for one test.
 func available(t *testing.T) {
 	t.Helper()
-	prev, prevProxy, prevID := ProxiedAvailable, EgressProxyAvailable, IdentityAvailable
+	saved := []bool{ProxiedAvailable, EgressProxyAvailable, IdentityAvailable, PresetsAvailable, CredentialsAvailable, ServiceUpstreamsAvailable, HTTPListenerAvailable}
+	savedImages := AllowedProxyImages
 	ProxiedAvailable, EgressProxyAvailable, IdentityAvailable = true, true, true
-	t.Cleanup(func() { ProxiedAvailable, EgressProxyAvailable, IdentityAvailable = prev, prevProxy, prevID })
+	PresetsAvailable, CredentialsAvailable, ServiceUpstreamsAvailable, HTTPListenerAvailable = true, true, true, true
+	AllowedProxyImages = []string{"*", "*/*", "*/*/*"}
+	t.Cleanup(func() {
+		ProxiedAvailable, EgressProxyAvailable, IdentityAvailable = saved[0], saved[1], saved[2]
+		PresetsAvailable, CredentialsAvailable, ServiceUpstreamsAvailable, HTTPListenerAvailable = saved[3], saved[4], saved[5], saved[6]
+		AllowedProxyImages = savedImages
+	})
 }
 
 func proxied(e *sandboxv1alpha1.SandboxEgress) sandboxv1alpha1.SandboxNetwork {
@@ -37,21 +44,46 @@ func preset() *sandboxv1alpha1.SandboxEgressProxy {
 	return &sandboxv1alpha1.SandboxEgressProxy{Preset: "envoy"}
 }
 
-// Mode proxied with the built-in broker is accepted; a proxy or credentials
-// are refused, with that reason only, until their runtime ships.
+// Mode proxied with the built-in broker or an allowed proxy image is
+// accepted; presets, credentials, service upstreams and the HTTP listener are
+// refused, with that reason only, until their runtime ships.
 func TestProxyNotAvailableYet(t *testing.T) {
-	broker := proxied(&sandboxv1alpha1.SandboxEgress{Allow: []sandboxv1alpha1.SandboxEgressRule{{Host: "api.example.com"}}})
-	if err := ValidateNetwork(broker); err != nil {
-		t.Fatalf("built-in broker: %v", err)
+	saved := AllowedProxyImages
+	AllowedProxyImages = []string{"docker.io/envoyproxy/envoy:*"}
+	t.Cleanup(func() { AllowedProxyImages = saved })
+	listeners := &sandboxv1alpha1.SandboxEgressProxyListeners{Transparent: 15001}
+	ok := []sandboxv1alpha1.SandboxNetwork{
+		proxied(&sandboxv1alpha1.SandboxEgress{Allow: []sandboxv1alpha1.SandboxEgressRule{{Host: "api.example.com"}}}),
+		proxied(&sandboxv1alpha1.SandboxEgress{Proxy: &sandboxv1alpha1.SandboxEgressProxy{
+			Image: "docker.io/envoyproxy/envoy:v1.36.2", Listeners: listeners,
+			Upstreams: []sandboxv1alpha1.SandboxEgressRule{{CIDR: "10.96.0.12/32"}}}}),
 	}
-	n := proxied(&sandboxv1alpha1.SandboxEgress{Allow: []sandboxv1alpha1.SandboxEgressRule{{Host: "api.example.com"}}, Proxy: preset()})
-	err := ValidateNetwork(n)
-	if err == nil || !strings.Contains(err.Error(), "not available") {
-		t.Fatalf("got %v, want the not-available refusal", err)
+	for i, n := range ok {
+		if err := ValidateNetwork(n); err != nil {
+			t.Errorf("ok[%d]: %v", i, err)
+		}
+	}
+	for _, tc := range []struct {
+		name, want string
+		n          sandboxv1alpha1.SandboxNetwork
+	}{
+		{"preset", "preset (use an image) is not available", proxied(&sandboxv1alpha1.SandboxEgress{Proxy: preset()})},
+		{"image not allowed", "is not an egress proxy image this cluster allows", proxied(&sandboxv1alpha1.SandboxEgress{
+			Proxy: &sandboxv1alpha1.SandboxEgressProxy{Image: "docker.io/library/nginx:1", Listeners: listeners}})},
+		{"http listener", "listeners.http is not available", proxied(&sandboxv1alpha1.SandboxEgress{
+			Proxy: &sandboxv1alpha1.SandboxEgressProxy{Image: "docker.io/envoyproxy/envoy:v1.36.2",
+				Listeners: &sandboxv1alpha1.SandboxEgressProxyListeners{Transparent: 15001, HTTP: 15002}}})},
+		{"service upstream", "service entry in spec.network.egress.proxy.upstreams", proxied(&sandboxv1alpha1.SandboxEgress{
+			Proxy: &sandboxv1alpha1.SandboxEgressProxy{Image: "docker.io/envoyproxy/envoy:v1.36.2", Listeners: listeners,
+				Upstreams: []sandboxv1alpha1.SandboxEgressRule{{Service: svc("llm", "ai")}}}})},
+	} {
+		if err := ValidateNetwork(tc.n); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: got %v, want %q", tc.name, err, tc.want)
+		}
 	}
 	// A real error still wins over the availability refusal.
-	n.Egress.Allow[0].Host = "api"
-	if err := ValidateNetwork(n); err == nil || !strings.Contains(err.Error(), "two labels") {
+	bad := proxied(&sandboxv1alpha1.SandboxEgress{Allow: []sandboxv1alpha1.SandboxEgressRule{{Host: "api"}}, Proxy: preset()})
+	if err := ValidateNetwork(bad); err == nil || !strings.Contains(err.Error(), "two labels") {
 		t.Fatalf("got %v, want the host error first", err)
 	}
 	exposed := proxied(nil)

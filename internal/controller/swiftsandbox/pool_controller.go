@@ -599,6 +599,9 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 	}
 	cm := buildIntentConfigMap(slot, intentJSON)
 	cm.Labels = map[string]string{PoolLabelKey: pool.Name}
+	if err := addEgressIntent(cm, slot, "SwiftSandboxPool", pool.Name); err != nil {
+		return err
+	}
 	if err := controllerutil.SetControllerReference(pool, cm, r.Scheme); err != nil {
 		return err
 	}

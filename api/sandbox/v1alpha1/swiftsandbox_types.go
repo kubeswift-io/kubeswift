@@ -709,7 +709,9 @@ type SandboxEgress struct {
 	// Proxy selects the egress proxy of a proxied sandbox. Unset, the built-in
 	// broker allows connections that match allow (by TLS server name or HTTP
 	// Host for host rules, by address for the others). Only valid with mode
-	// proxied. Not available yet: refused until the proxy runtime ships.
+	// proxied. An image runs when the administrator allows it (chart
+	// sandboxMaterialize.egressProxyImages); presets, service upstreams and
+	// the HTTP listener are not available yet and are refused.
 	// +optional
 	Proxy *SandboxEgressProxy `json:"proxy,omitempty"`
 

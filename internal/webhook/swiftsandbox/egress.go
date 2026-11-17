@@ -27,8 +27,8 @@ func ValidateNetwork(n sandboxv1alpha1.SandboxNetwork) error {
 		if !ProxiedAvailable {
 			return fmt.Errorf("spec.network.mode proxied is not available in this version of KubeSwift yet")
 		}
-		if n.Egress != nil && (n.Egress.Proxy != nil || len(n.Egress.Credentials) > 0) && !EgressProxyAvailable {
-			return fmt.Errorf("spec.network.egress.proxy and spec.network.egress.credentials are not available in this version of KubeSwift yet; mode proxied without them uses the built-in broker")
+		if what := proxyNotAvailable(n); what != "" {
+			return fmt.Errorf("%s is not available in this version of KubeSwift yet", what)
 		}
 		if n.Egress == nil || n.Egress.Proxy == nil {
 			for _, p := range n.Ports {
