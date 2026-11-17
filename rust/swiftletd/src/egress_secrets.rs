@@ -289,20 +289,52 @@ pub fn init_main() -> ! {
 }
 
 /// One readiness probe: Ok(true) once the response is 200 and lists every
-/// serial.
+/// serial; Err with the status line otherwise. HTTP/1.1: Envoy refuses
+/// HTTP/1.0 (426).
 fn probe_once(r: &Readiness, serials: &[String]) -> Result<bool, String> {
     let mut s =
         TcpStream::connect_timeout(&([127, 0, 0, 1], r.port).into(), Duration::from_secs(2))
             .map_err(|e| format!("connect 127.0.0.1:{}: {}", r.port, e))?;
     s.set_read_timeout(Some(Duration::from_secs(2))).ok();
-    write!(s, "GET {} HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n", r.path).map_err(|e| e.to_string())?;
-    let mut body = Vec::new();
+    write!(
+        s,
+        "GET {} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        r.path
+    )
+    .map_err(|e| e.to_string())?;
+    let mut raw = Vec::new();
     s.take(4 << 20)
-        .read_to_end(&mut body)
+        .read_to_end(&mut raw)
         .map_err(|e| e.to_string())?;
-    let text = String::from_utf8_lossy(&body);
-    let ok = text.starts_with("HTTP/1.0 200") || text.starts_with("HTTP/1.1 200");
-    Ok(ok && serials.iter().all(|s| text.contains(s.as_str())))
+    let text = String::from_utf8_lossy(&raw);
+    let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
+    let status = head.lines().next().unwrap_or("");
+    if !(status.starts_with("HTTP/1.1 200") || status.starts_with("HTTP/1.0 200")) {
+        return Err(format!("answered {:?}", status));
+    }
+    let chunked = head
+        .lines()
+        .any(|l| l.to_ascii_lowercase().replace(' ', "") == "transfer-encoding:chunked");
+    let body = if chunked {
+        dechunk(body)
+    } else {
+        body.to_string()
+    };
+    Ok(serials.iter().all(|s| body.contains(s.as_str())))
+}
+
+/// The payload of a chunked HTTP/1.1 body (a serial may span two chunks).
+fn dechunk(mut b: &str) -> String {
+    let mut out = String::new();
+    while let Some((size, rest)) = b.split_once("\r\n") {
+        let n = usize::from_str_radix(size.split(';').next().unwrap_or("").trim(), 16).unwrap_or(0);
+        if n == 0 || rest.len() < n {
+            break;
+        }
+        out.push_str(&rest[..n]);
+        b = rest[n..].trim_start_matches("\r\n");
+    }
+    out
 }
 
 /// Waits until the proxy's readiness probe lists every serial.
@@ -541,22 +573,34 @@ mod tests {
 
     #[test]
     fn readiness_waits_for_every_serial() {
+        // Like Envoy's admin: 426 for HTTP/1.0, chunked bodies for 1.1.
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
         std::thread::spawn(move || {
             for (n, s) in l.incoming().enumerate() {
                 let mut s = s.unwrap();
                 let mut buf = [0u8; 512];
-                let _ = s.read(&mut buf);
-                let body = if n < 2 {
-                    "\"serial_number\": \"aa\""
+                let got = s.read(&mut buf).unwrap_or(0);
+                if !String::from_utf8_lossy(&buf[..got]).contains("HTTP/1.1") {
+                    let _ = write!(
+                        s,
+                        "HTTP/1.1 426 Upgrade Required\r\nContent-Length: 0\r\n\r\n"
+                    );
+                    continue;
+                }
+                // The second serial split across two chunks.
+                let chunks: &[&str] = if n < 2 {
+                    &["\"serial_number\": \"aa\""]
                 } else {
-                    "\"serial_number\": \"aa\" \"serial_number\": \"bb\""
+                    &["\"serial_number\": \"aa\" \"serial_number\": \"b", "b\""]
                 };
+                let mut body = String::new();
+                for c in chunks {
+                    body.push_str(&format!("{:x}\r\n{}\r\n", c.len(), c));
+                }
                 let _ = write!(
                     s,
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
-                    body.len(),
+                    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{}0\r\n\r\n",
                     body
                 );
             }
@@ -568,6 +612,7 @@ mod tests {
         wait_ready(&r, &["aa".into(), "bb".into()], Duration::from_secs(5)).unwrap();
         let err = wait_ready(&r, &["cc".into()], Duration::from_millis(300)).unwrap_err();
         assert!(err.contains("did not load"), "{}", err);
+        assert_eq!(dechunk("3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n"), "abcde");
     }
 
     struct Fake(BTreeMap<String, (Option<String>, Vec<u8>)>);
