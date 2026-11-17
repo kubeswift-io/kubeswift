@@ -594,6 +594,7 @@ func (r *SwiftSandboxReconciler) reconcileClaimedSlot(ctx context.Context, sb *s
 		return r.fail(ctx, sb, "DeadlineExceeded", "sandbox exceeded spec.timeout")
 	}
 	applyGuestAnnotations(sb, &pod) // pid / ip (best-effort)
+	applyEgressProxyReady(sb, &pod)
 
 	// Trust the exec status only once it mirrors OUR action-id. A final status
 	// decides the outcome even if the pod has ended since: swiftletd writes it

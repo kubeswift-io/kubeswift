@@ -754,7 +754,28 @@ fn main() {
                 egress_deny::spawn_if_present();
                 // Mode proxied: the guest's only way out. Without it the
                 // guest would boot with no egress and no explanation.
-                if let Err(e) = egress_broker::spawn_if_proxied() {
+                let proxied = env::var("KUBESWIFT_SANDBOX_EGRESS").as_deref() == Ok("proxied");
+                let spawned = egress_broker::spawn_if_proxied();
+                if spawned.is_ok() && proxied {
+                    // The egress path listens: EgressProxyReady.
+                    let what = if env::var("KUBESWIFT_EGRESS_PROXY").as_deref() == Ok("container") {
+                        "proxy"
+                    } else {
+                        "broker"
+                    };
+                    if let (Ok(ns), Ok(n)) = (env::var("POD_NAMESPACE"), env::var("POD_NAME")) {
+                        if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                        {
+                            if let Err(e) = rt.block_on(report::report_egress_ready(&ns, &n, what))
+                            {
+                                log::warn!("egress_ready_report_failed: {}", e);
+                            }
+                        }
+                    }
+                }
+                if let Err(e) = spawned {
                     log::error!("egress_broker_start_failed: {}", e);
                     if let (Ok(ns), Ok(n)) = (env::var("POD_NAMESPACE"), env::var("POD_NAME")) {
                         if let Ok(rt) = tokio::runtime::Builder::new_current_thread()

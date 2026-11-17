@@ -483,6 +483,21 @@ pub async fn report_egress_error(namespace: &str, name: &str, msg: &str) -> Resu
         .map_err(|e| e.to_string())
 }
 
+/// Tells the controller the egress path of a proxied sandbox listens:
+/// `what` is "broker" (the built-in broker) or "proxy" (the proxy
+/// container). It maps to the EgressProxyReady condition.
+pub async fn report_egress_ready(namespace: &str, name: &str, what: &str) -> Result<(), String> {
+    let client = crate::kube_client::create_client()
+        .await
+        .map_err(|e| e.to_string())?;
+    let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client, namespace);
+    let patch = json!({"metadata": {"annotations": {"kubeswift.io/sandbox-egress-ready": what}}});
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// Tells the controller the kernel's bridge lacks a feature the sandbox needs.
 pub async fn report_kernel_error(namespace: &str, name: &str, msg: &str) -> Result<(), String> {
     let client = crate::kube_client::create_client()

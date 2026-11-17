@@ -1,11 +1,14 @@
 package swiftsandbox
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	sandboxwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsandbox"
@@ -151,5 +154,69 @@ func httpProxyEnv(sb *sandboxv1alpha1.SwiftSandbox) []string {
 	return []string{
 		"HTTP_PROXY=" + url, "HTTPS_PROXY=" + url, "NO_PROXY=" + noProxy,
 		"http_proxy=" + url, "https_proxy=" + url, "no_proxy=" + noProxy,
+	}
+}
+
+// annEgressReady is set by swiftletd once the egress path of a proxied
+// launcher listens: "broker" or "proxy" (report.rs report_egress_ready).
+const annEgressReady = "kubeswift.io/sandbox-egress-ready"
+
+// applyEgressProxyReady maps a proxied launcher's egress path onto the
+// EgressProxyReady condition: swiftletd's report that it listens, and for a
+// proxy container its live state (a native sidecar the kubelet restarts).
+// A warm checkout reads its slot, which listened before the claim.
+func applyEgressProxyReady(sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) {
+	if sb.Spec.Network.Mode != sandboxv1alpha1.SandboxNetworkProxied {
+		return
+	}
+	set := func(status metav1.ConditionStatus, reason, msg string) {
+		apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
+			Type: sandboxv1alpha1.SwiftSandboxConditionEgressProxyReady, Status: status,
+			Reason: reason, Message: msg, ObservedGeneration: sb.Generation,
+		})
+	}
+	what := pod.Annotations[annEgressReady]
+	if what == "" {
+		set(metav1.ConditionFalse, "Starting", "the egress path is not listening yet")
+		return
+	}
+	if what != "proxy" {
+		set(metav1.ConditionTrue, "Listening", "the built-in egress broker listens")
+		return
+	}
+	var cs *corev1.ContainerStatus
+	for i := range pod.Status.InitContainerStatuses {
+		if pod.Status.InitContainerStatuses[i].Name == EgressProxyContainerName {
+			cs = &pod.Status.InitContainerStatuses[i]
+		}
+	}
+	if cs == nil {
+		set(metav1.ConditionFalse, "EgressProxyNotRunning", "the launcher pod reports no egress-proxy container")
+		return
+	}
+	restarts := ""
+	if cs.RestartCount > 0 {
+		times := "times"
+		if cs.RestartCount == 1 {
+			times = "time"
+		}
+		restarts = fmt.Sprintf(" (restarted %d %s", cs.RestartCount, times)
+		if t := cs.LastTerminationState.Terminated; t != nil {
+			restarts += fmt.Sprintf(", last exit %d %s", t.ExitCode, t.Reason)
+		}
+		restarts += ")"
+	}
+	switch {
+	case cs.State.Running != nil:
+		set(metav1.ConditionTrue, "Listening", "the egress proxy container listens"+restarts)
+	case cs.State.Waiting != nil:
+		set(metav1.ConditionFalse, "EgressProxyNotRunning", "the egress proxy container is waiting: "+
+			firstNonEmpty(cs.State.Waiting.Reason, "unknown")+restarts+"; guest connections are refused until it runs")
+	default:
+		msg := "the egress proxy container is not running"
+		if t := cs.State.Terminated; t != nil {
+			msg = fmt.Sprintf("the egress proxy container exited %d %s", t.ExitCode, t.Reason)
+		}
+		set(metav1.ConditionFalse, "EgressProxyNotRunning", msg+restarts+"; guest connections are refused until it runs")
 	}
 }

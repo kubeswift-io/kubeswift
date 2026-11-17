@@ -1030,6 +1030,13 @@ const (
 	// endpoints, Stopping once the drain is over and the microVM is being
 	// stopped, LauncherGone when the launcher pod no longer exists.
 	SwiftSandboxConditionTerminating = "Terminating"
+	// SwiftSandboxConditionEgressProxyReady reports the egress path of a
+	// sandbox in network mode proxied: True (reason Listening) once the
+	// built-in broker or the egress proxy container listens, False with
+	// reason Starting before that, EgressProxyNotRunning while the proxy
+	// container is not running (crashed, restarting), EgressProxyNotReady or
+	// EgressBrokerFailed when it never came up. Absent in other modes.
+	SwiftSandboxConditionEgressProxyReady = "EgressProxyReady"
 )
 
 // Resolved=False reasons, on a SwiftSandbox or a SwiftSandboxPool, while the

@@ -203,6 +203,9 @@ $guarded"
 			grep -qwF "$n" <<<"$deny" || die "egress-deny annotation on $pod lacks $n"
 		done
 		log "launcher of 'proxied' carries the platform deny list"
+	local cond
+	cond=$(kubectl -n "$NS" get swiftsandbox proxied -o jsonpath='{range .status.conditions[?(@.type=="EgressProxyReady")]}{.status} {.reason}: {.message}{end}')
+	case "$cond" in "True Listening: the built-in egress broker listens"*) log "proxied: EgressProxyReady $cond" ;; *) die "proxied: EgressProxyReady is '$cond'" ;; esac
 		# The egress audit (kubectl logs -c egress-audit): JSON lines for the
 		# guest's DNS queries and the broker's decisions.
 		local audit sel
@@ -247,6 +250,8 @@ http https-other block --resolve $OTHER_HOST:443:$other_ip https://$OTHER_HOST/"
 	claimed=$(kubectl -n "$NS" get pods -l sandbox.kubeswift.io/sandbox=checkout -o jsonpath='{.items[0].metadata.labels.sandbox\.kubeswift\.io/pool}' 2>/dev/null || true)
 	[ "$claimed" = warm ] || die "checkout did not run on a warm slot: $(kubectl -n "$NS" get swiftsandbox checkout -o jsonpath='{.status.conditions}')"
 	log "checkout ran on a warm slot of pool warm"
+		cond=$(kubectl -n "$NS" get swiftsandbox checkout -o jsonpath='{range .status.conditions[?(@.type=="EgressProxyReady")]}{.status} {.reason}: {.message}{end}')
+	case "$cond" in "True Listening: the built-in egress broker listens"*) log "checkout: EgressProxyReady $cond" ;; *) die "checkout: EgressProxyReady is '$cond'" ;; esac
 
 	log "PASS: proxied egress allows only the allowlist, by name and address, and never nodes or the API server"
 }

@@ -256,6 +256,10 @@ $(envoy_proxy "server_names: [\"$PUBLIC_HOST\", \"*.$PUBLIC_HOST\"]")" "http htt
 http https-other block --resolve $OTHER_HOST:443:$other_ip https://$OTHER_HOST/
 $guarded"
 
+	local cond
+	cond=$(kubectl -n "$NS" get swiftsandbox strict -o jsonpath='{range .status.conditions[?(@.type=="EgressProxyReady")]}{.status} {.reason}: {.message}{end}')
+	case "$cond" in "True Listening: the egress proxy container listens"*) log "strict: EgressProxyReady $cond" ;; *) die "strict: EgressProxyReady is '$cond'" ;; esac
+
 	run open "$hosts
 $(envoy_proxy "")" "http https-other reach --resolve $OTHER_HOST:443:$other_ip https://$OTHER_HOST/
 $guarded"
