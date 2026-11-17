@@ -27,7 +27,12 @@
 #   5. Sandbox "broker": no proxy; the built-in broker originates the mTLS
 #      for an allow rule with tls: {originate: SPIFFE}: 200, and the egress
 #      audit records tls=spiffe with the SVID. "broker-other": 403.
-#   6. allow[].tls together with an egress proxy is refused.
+#   6. allow[].tls with a Self proxy is refused.
+#   7. With PRESET (a preset whose translator lists tls-originate, such as
+#      envoy-translator v0.3.0): sandbox "preset" claims nothing, its proxy
+#      reads rule.tls from the egress-intent file and originates the mTLS:
+#      200; "preset-other": 403. With OLD_PRESET (a translator without the
+#      label): the sandbox fails with EgressIntentUnsupported.
 #
 # Prerequisites:
 #   - a node labeled kubeswift.io/kernel-node=true with KVM
@@ -46,6 +51,8 @@ CLASS_NAME="${CLASS_NAME:-spire-server-spire}"
 KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.22}"
 IMAGE="${IMAGE:-docker.io/curlimages/curl:8.11.1}"
 PROXY_IMAGE="${PROXY_IMAGE:-docker.io/envoyproxy/envoy:v1.36.2}"
+PRESET="${PRESET:-}"
+OLD_PRESET="${OLD_PRESET:-}"
 SOCKET="${SOCKET:-/run/spiffe/spire-agent.sock}"
 TIMEOUT="${TIMEOUT:-300}"
 
@@ -142,6 +149,7 @@ static_resources:
                     principals:
                     - {authenticated: {principal_name: {exact: "spiffe://$TRUST_DOMAIN/ns/$NS/sandbox/allowed"}}}
                     - {authenticated: {principal_name: {exact: "spiffe://$TRUST_DOMAIN/ns/$NS/sandbox/broker"}}}
+                    - {authenticated: {principal_name: {exact: "spiffe://$TRUST_DOMAIN/ns/$NS/sandbox/preset"}}}
                     - {authenticated: {principal_name: {prefix: "spiffe://$TRUST_DOMAIN/ns/$NS/pool/agents/slot/"}}}
           - name: envoy.filters.http.router
             typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router}
@@ -179,6 +187,21 @@ broker_network() {
       allow:
       - service: {name: target}
         tls: {originate: SPIFFE}
+EOF
+}
+
+# preset_network PRESET: a config-Intent preset proxy that reads rule.tls.
+preset_network() {
+	cat <<EOF
+  network:
+    mode: proxied
+    egress:
+      allow:
+      - service: {name: target}
+        tls: {originate: SPIFFE}
+      proxy:
+        preset: $1
+        upstreams: [{service: {name: target}}]
 EOF
 }
 
@@ -291,8 +314,8 @@ spec:
       proxy: {image: $PROXY_IMAGE, listeners: {transparent: 15006}}
   command: ["true"]
 EOF
-	); then die "allow[].tls with an egress proxy was accepted"; fi
-	case "$out" in *"built-in broker"*) log "allow[].tls with an egress proxy is refused" ;; *) die "unexpected refusal: $out" ;; esac
+	); then die "allow[].tls with a Self proxy was accepted"; fi
+	case "$out" in *"built-in broker"*) log "allow[].tls with a Self proxy is refused" ;; *) die "unexpected refusal: $out" ;; esac
 
 	run allowed 200 "$on" "" "$ip"
 	[ "$(spiffe_id allowed)" = "spiffe://$TRUST_DOMAIN/ns/$NS/sandbox/allowed" ] || die "allowed: status.identity.spiffeID is '$(spiffe_id allowed)'"
@@ -309,6 +332,23 @@ EOF
 	*) die "broker: no tls=spiffe audit line with the sandbox's SVID: '$audit'" ;; esac
 	run broker-other 403 "$on" "" "$ip" "$(broker_network)"
 	log "broker-other: the target saw $(spiffe_id broker-other) and refused it"
+
+	if [ -n "$PRESET" ]; then
+		run preset 200 "$on" "" "$ip" "$(preset_network "$PRESET")"
+		run preset-other 403 "$on" "" "$ip" "$(preset_network "$PRESET")"
+		log "preset $PRESET: the proxy originated the mTLS from rule.tls"
+	fi
+	if [ -n "$OLD_PRESET" ]; then
+		kubectl -n "$NS" delete swiftsandbox old-preset --ignore-not-found --wait=true >/dev/null
+		sandbox old-preset "$on" "" "$ip" "$(preset_network "$OLD_PRESET")"
+		local deadline=$((SECONDS + 120)) reason=""
+		while [ "$reason" != EgressIntentUnsupported ]; do
+			[ "$SECONDS" -lt "$deadline" ] || die "old-preset: reason '$reason', want EgressIntentUnsupported"
+			sleep 2
+			reason=$(kubectl -n "$NS" get swiftsandbox old-preset -o jsonpath='{.status.conditions[?(@.type=="GuestRunning")].reason}')
+		done
+		log "old-preset: $(kubectl -n "$NS" get swiftsandbox old-preset -o jsonpath='{.status.phase} {.status.conditions[?(@.type=="GuestRunning")].reason}: {.status.message}')"
+	fi
 
 	cat <<EOF | kubectl apply -f - >/dev/null
 apiVersion: sandbox.kubeswift.io/v1alpha1
