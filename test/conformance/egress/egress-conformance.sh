@@ -264,7 +264,7 @@ ntp ntp-udp block $ntp_ip
 http ipv6 block -k -g https://[2606:4700:4700::1111]/
 spoof sni-spoof https $PUBLIC_HOST $other_ip
 spoof host-spoof http $PUBLIC_HOST $other_ip
-http target-pod-address block http://$target:8080/
+http target-pod-address block -f http://$target:8080/
 $guarded"
 	proxy_ready battery
 
