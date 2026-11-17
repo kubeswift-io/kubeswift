@@ -144,6 +144,30 @@ sandboxMaterialize:
   #     listeners: {transparent: 15006}
   #     readiness: {httpGet: {port: 15000, path: /certs}}
   egressProxyPresets: {}
+  # SPIFFE identity for proxied sandboxes (spec.identity.spiffe). Needs a
+  # SPIFFE implementation in the cluster: SPIRE with its controller manager
+  # is the reference. When enabled, the chart creates two ClusterSPIFFEIDs
+  # that register sandbox launcher pods: a warm slot as
+  # spiffe://<trustDomain>/ns/<ns>/pool/<pool>/slot/<slot> (issued when the
+  # slot boots, kept at checkout), a cold launcher as
+  # spiffe://<trustDomain>/ns/<ns>[/pool/<poolRef>]/sandbox/<name>. Only the
+  # egress proxy container gets the Workload API socket.
+  spiffe:
+    enabled: false
+    # Must match the SPIFFE implementation's trust domain.
+    trustDomain: ""
+    workloadAPI:
+      # Mount the agent socket directory through this CSI driver (SPIRE's
+      # spiffe-csi-driver). Empty: mount hostPath instead.
+      csiDriver: csi.spiffe.io
+      hostPath: /run/spire/agent-sockets
+      socketName: spire-agent.sock
+    clusterSPIFFEIDs:
+      # Set false to register the launchers with your own entries.
+      create: true
+      # The SPIRE controller manager's class: the SPIRE chart handles only
+      # ClusterSPIFFEIDs carrying it ("<release namespace>-<release name>").
+      className: spire-server-spire
 
 # snapshot-oras: the uploader/downloader image for the oci (OCI registry / ORAS)
 # snapshot backend. The controller passes this to the per-snapshot push Job (and

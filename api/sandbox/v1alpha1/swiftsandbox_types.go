@@ -963,14 +963,28 @@ const (
 
 // SandboxIdentity is the workload identity of a sandbox.
 type SandboxIdentity struct {
-	// SPIFFE gives the sandbox a SPIFFE ID,
-	// spiffe://<trust-domain>/ns/<namespace>/pool/<pool>/sandbox/<name> (without
-	// the pool segment when the sandbox has no poolRef). The egress proxy or
-	// the built-in broker holds the SVID; the guest never sees it. Disabled
-	// when unset. Not available yet: Enabled is refused until the identity
-	// runtime ships.
+	// SPIFFE gives the sandbox a SPIFFE ID: for a cold launcher
+	// spiffe://<trust-domain>/ns/<namespace>/sandbox/<name>, with
+	// /pool/<poolRef> before /sandbox when it has a poolRef; for a checkout of
+	// a warm slot the slot's ID,
+	// spiffe://<trust-domain>/ns/<namespace>/pool/<pool>/slot/<slot>, issued
+	// when the slot boots so a checkout waits for nothing (status.identity
+	// records which). The egress proxy holds the SVID through the SPIFFE
+	// Workload API; the guest never sees it. Needs network mode proxied, an
+	// egress proxy, and SPIFFE on the platform (chart
+	// sandboxMaterialize.spiffe). Disabled when unset.
 	// +optional
 	SPIFFE SandboxIdentitySPIFFE `json:"spiffe,omitempty"`
+}
+
+// SandboxIdentityStatus is the identity registered for a sandbox's launcher.
+type SandboxIdentityStatus struct {
+	// SPIFFEID is the ID the platform's ClusterSPIFFEIDs register for the
+	// launcher pod (see spec.identity.spiffe): the slot's ID after a warm
+	// checkout. The SPIRE agent issues the SVID; this field does not say it
+	// has.
+	// +optional
+	SPIFFEID string `json:"spiffeID,omitempty"`
 }
 
 // SandboxEgressAllowed is one rule the launcher enforces, as resolved.
@@ -1155,6 +1169,10 @@ type SwiftSandboxStatus struct {
 	// poller. Absent for network:none sandboxes.
 	// +optional
 	Network *SandboxNetworkStatus `json:"network,omitempty"`
+	// Identity is the workload identity registered for the sandbox's
+	// launcher. Absent without spec.identity.
+	// +optional
+	Identity *SandboxIdentityStatus `json:"identity,omitempty"`
 	// GPU is the native SwiftGPU allocation (devices, node, NUMA), populated by
 	// the SwiftGPU controller when spec.gpuProfileRef is set. Absent for the DRA
 	// backend (the device identity lives in the pod's ResourceClaim) and for

@@ -103,17 +103,24 @@ spec:
                 x-kubernetes-map-type: atomic
               identity:
                 description: |-
-                  Identity is the workload identity of the pool's sandboxes (SPIFFE). A
-                  warm slot holds no sandbox identity until a sandbox claims it.
+                  Identity is the workload identity of the pool's sandboxes (SPIFFE).
+                  Each warm slot gets its own ID when it boots,
+                  spiffe://<trust-domain>/ns/<namespace>/pool/<pool>/slot/<slot>, and the
+                  sandbox that claims it keeps that ID. A claiming SwiftSandbox must ask
+                  for the same identity.
                 properties:
                   spiffe:
                     description: |-
-                      SPIFFE gives the sandbox a SPIFFE ID,
-                      spiffe://<trust-domain>/ns/<namespace>/pool/<pool>/sandbox/<name> (without
-                      the pool segment when the sandbox has no poolRef). The egress proxy or
-                      the built-in broker holds the SVID; the guest never sees it. Disabled
-                      when unset. Not available yet: Enabled is refused until the identity
-                      runtime ships.
+                      SPIFFE gives the sandbox a SPIFFE ID: for a cold launcher
+                      spiffe://<trust-domain>/ns/<namespace>/sandbox/<name>, with
+                      /pool/<poolRef> before /sandbox when it has a poolRef; for a checkout of
+                      a warm slot the slot's ID,
+                      spiffe://<trust-domain>/ns/<namespace>/pool/<pool>/slot/<slot>, issued
+                      when the slot boots so a checkout waits for nothing (status.identity
+                      records which). The egress proxy holds the SVID through the SPIFFE
+                      Workload API; the guest never sees it. Needs network mode proxied, an
+                      egress proxy, and SPIFFE on the platform (chart
+                      sandboxMaterialize.spiffe). Disabled when unset.
                     enum:
                     - Enabled
                     - Disabled

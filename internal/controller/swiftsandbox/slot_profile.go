@@ -58,6 +58,16 @@ type slotShape struct {
 	GPUProfile   string            `json:"gpuProfile,omitempty"`
 	Model        string            `json:"model,omitempty"`
 	ModelMount   string            `json:"modelMount,omitempty"`
+	// "SPIFFE" when the slots are registered with a SPIFFE ID; empty
+	// otherwise, so other pools keep their slots.
+	Identity string `json:"identity,omitempty"`
+}
+
+func identityKey(id *sandboxv1alpha1.SandboxIdentity) string {
+	if identityEnabled(id) {
+		return "SPIFFE"
+	}
+	return ""
 }
 
 func poolShape(pool *sandboxv1alpha1.SwiftSandboxPool) slotShape {
@@ -81,6 +91,7 @@ func poolShape(pool *sandboxv1alpha1.SwiftSandboxPool) slotShape {
 		CPU:          cpuCount(pool.Spec.CPU),
 		Memory:       pool.Spec.Memory.String(),
 		NodeSelector: pool.Spec.NodeSelector,
+		Identity:     identityKey(pool.Spec.Identity),
 	}
 	if pool.Spec.GPUProfileRef != nil {
 		s.GPUProfile = pool.Spec.GPUProfileRef.Name
@@ -128,6 +139,7 @@ func slotMismatches(pool *sandboxv1alpha1.SwiftSandboxPool, sb *sandboxv1alpha1.
 	differ("network ports", strings.Join(p.Ports, ", "), strings.Join(portsKey(sb.Spec.Network), ", "))
 	differ("network ingress", p.Ingress, ingressKey(sb.Spec.Network))
 	differ("verifyKeySecretRef", p.VerifyKey, secretName(sb.Spec.VerifyKeySecretRef))
+	differ("identity", p.Identity, identityKey(sb.Spec.Identity))
 	differ("rootfsMode", p.RootfsMode, rootfsMode(sb.Spec.RootfsMode))
 	differ("kernel", p.Kernel, checkoutKernel(pool, sb))
 	differ("nestedVirtualization", nestedKey(pool.Spec.NestedVirtualization), nestedKey(sb.Spec.NestedVirtualization))

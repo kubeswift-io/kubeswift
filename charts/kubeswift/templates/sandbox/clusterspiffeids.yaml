@@ -1,0 +1,49 @@
+{{- /*
+SPIFFE IDs for sandbox launcher pods (sandboxMaterialize.spiffe). Only pods
+labeled sandbox.kubeswift.io/spiffe=enabled match: launchers whose sandbox or
+pool has spec.identity.spiffe Enabled.
+*/ -}}
+{{- with .Values.sandboxMaterialize.spiffe }}
+{{- if and .enabled .clusterSPIFFEIDs.create }}
+apiVersion: spire.spiffe.io/v1alpha1
+kind: ClusterSPIFFEID
+metadata:
+  name: kubeswift-sandbox-slot
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: sandbox-identity
+spec:
+  {{- with .clusterSPIFFEIDs.className }}
+  className: {{ . | quote }}
+  {{- end }}
+  # A warm slot: issued when the slot boots; the labels do not change when a
+  # sandbox claims it, so the claiming sandbox keeps this ID.
+  spiffeIDTemplate: 'spiffe://{{ "{{" }} .TrustDomain {{ "}}" }}/ns/{{ "{{" }} .PodMeta.Namespace {{ "}}" }}/pool/{{ "{{" }} index .PodMeta.Labels "sandbox.kubeswift.io/pool" {{ "}}" }}/slot/{{ "{{" }} index .PodMeta.Labels "sandbox.kubeswift.io/slot" {{ "}}" }}'
+  podSelector:
+    matchLabels:
+      sandbox.kubeswift.io/spiffe: enabled
+    matchExpressions:
+    - {key: sandbox.kubeswift.io/pool, operator: Exists}
+    - {key: sandbox.kubeswift.io/slot, operator: Exists}
+---
+apiVersion: spire.spiffe.io/v1alpha1
+kind: ClusterSPIFFEID
+metadata:
+  name: kubeswift-sandbox
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: sandbox-identity
+spec:
+  {{- with .clusterSPIFFEIDs.className }}
+  className: {{ . | quote }}
+  {{- end }}
+  # A cold launcher: the sandbox's name, after its poolRef when it has one.
+  spiffeIDTemplate: 'spiffe://{{ "{{" }} .TrustDomain {{ "}}" }}/ns/{{ "{{" }} .PodMeta.Namespace {{ "}}" }}{{ "{{" }} with index .PodMeta.Labels "sandbox.kubeswift.io/pool-ref" {{ "}}" }}/pool/{{ "{{" }} . {{ "}}" }}{{ "{{" }} end {{ "}}" }}/sandbox/{{ "{{" }} index .PodMeta.Labels "sandbox.kubeswift.io/sandbox" {{ "}}" }}'
+  podSelector:
+    matchLabels:
+      sandbox.kubeswift.io/spiffe: enabled
+    matchExpressions:
+    - {key: sandbox.kubeswift.io/sandbox, operator: Exists}
+    - {key: sandbox.kubeswift.io/pool, operator: DoesNotExist}
+{{- end }}
+{{- end }}

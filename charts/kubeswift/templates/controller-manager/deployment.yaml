@@ -94,6 +94,15 @@ spec:
             - name: KUBESWIFT_SANDBOX_EGRESS_PROXY_PRESETS
               value: {{ toJson . | quote }}
             {{- end }}
+            {{- with .Values.sandboxMaterialize.spiffe }}
+            {{- if .enabled }}
+            {{- if not .trustDomain }}
+            {{- fail "sandboxMaterialize.spiffe.trustDomain is required when sandboxMaterialize.spiffe.enabled is true" }}
+            {{- end }}
+            - name: KUBESWIFT_SANDBOX_SPIFFE
+              value: {{ dict "trustDomain" .trustDomain "csiDriver" (.workloadAPI.csiDriver | default "") "hostPath" (.workloadAPI.hostPath | default "") "socketName" (.workloadAPI.socketName | default "spire-agent.sock") | toJson | quote }}
+            {{- end }}
+            {{- end }}
             - name: KUBESWIFT_SANDBOX_CONSOLE
               value: {{ ne .Values.sandboxMaterialize.console false | quote }}
             - name: POD_NAMESPACE

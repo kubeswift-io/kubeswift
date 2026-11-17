@@ -161,6 +161,14 @@ func main() {
 	} else {
 		swiftsandboxwebhook.EgressProxyPresets = presets
 	}
+	// Sandbox SPIFFE identity (chart sandboxMaterialize.spiffe). Off when
+	// unset; a bad value stops the controller.
+	if c, err := swiftsandboxwebhook.ParseSPIFFE(os.Getenv("KUBESWIFT_SANDBOX_SPIFFE")); err != nil {
+		klog.ErrorS(err, "invalid KUBESWIFT_SANDBOX_SPIFFE")
+		os.Exit(1)
+	} else {
+		swiftsandboxwebhook.SPIFFE = c
+	}
 	if q, err := swiftsandbox.ParseLauncherCPUPerVCPU(os.Getenv("KUBESWIFT_SANDBOX_LAUNCHER_CPU_PER_VCPU")); err != nil {
 		klog.ErrorS(err, "invalid KUBESWIFT_SANDBOX_LAUNCHER_CPU_PER_VCPU")
 		os.Exit(1)

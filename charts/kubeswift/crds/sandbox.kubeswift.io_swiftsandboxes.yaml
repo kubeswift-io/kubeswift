@@ -443,12 +443,16 @@ spec:
                 properties:
                   spiffe:
                     description: |-
-                      SPIFFE gives the sandbox a SPIFFE ID,
-                      spiffe://<trust-domain>/ns/<namespace>/pool/<pool>/sandbox/<name> (without
-                      the pool segment when the sandbox has no poolRef). The egress proxy or
-                      the built-in broker holds the SVID; the guest never sees it. Disabled
-                      when unset. Not available yet: Enabled is refused until the identity
-                      runtime ships.
+                      SPIFFE gives the sandbox a SPIFFE ID: for a cold launcher
+                      spiffe://<trust-domain>/ns/<namespace>/sandbox/<name>, with
+                      /pool/<poolRef> before /sandbox when it has a poolRef; for a checkout of
+                      a warm slot the slot's ID,
+                      spiffe://<trust-domain>/ns/<namespace>/pool/<pool>/slot/<slot>, issued
+                      when the slot boots so a checkout waits for nothing (status.identity
+                      records which). The egress proxy holds the SVID through the SPIFFE
+                      Workload API; the guest never sees it. Needs network mode proxied, an
+                      egress proxy, and SPIFFE on the platform (chart
+                      sandboxMaterialize.spiffe). Disabled when unset.
                     enum:
                     - Enabled
                     - Disabled
@@ -2148,6 +2152,19 @@ spec:
                       PartitionID is the Fabric Manager partition ID for shared NVSwitch mode.
                       -1 means no partition (isolated or full passthrough mode).
                     type: integer
+                type: object
+              identity:
+                description: |-
+                  Identity is the workload identity registered for the sandbox's
+                  launcher. Absent without spec.identity.
+                properties:
+                  spiffeID:
+                    description: |-
+                      SPIFFEID is the ID the platform's ClusterSPIFFEIDs register for the
+                      launcher pod (see spec.identity.spiffe): the slot's ID after a warm
+                      checkout. The SPIRE agent issues the SVID; this field does not say it
+                      has.
+                    type: string
                 type: object
               message:
                 type: string

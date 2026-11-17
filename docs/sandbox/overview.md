@@ -83,6 +83,7 @@ Ready-to-edit manifests and notes:
 | `network.egress.allow[]` | list | — | Destinations a `restricted` or `proxied` sandbox may reach: `service: {name, namespace}` or `cidr`, and in `proxied` also `host`, with optional `ports: [{port, protocol}]`. See [Allowing specific destinations](#allowing-specific-destinations-under-restricted) and [Mode proxied](#mode-proxied). |
 | `kernelProfileRef.name` | string | `sandbox` | SwiftKernel to boot. |
 | `nestedVirtualization` | enum | `Disabled` | `Enabled` exposes the host CPU's VMX/SVM so the workload can run its own hypervisor (a CI job that boots VMs, a nested cluster). Off unless set: nested KVM is host attack surface reachable from the guest. The opposite default to SwiftGuest. |
+| `identity.spiffe` | enum | `Disabled` | `Enabled` gives the egress proxy a SPIFFE ID for the sandbox. Mode `proxied` with an egress proxy. See [SPIFFE identity](#spiffe-identity). |
 | `nodeSelector` | map[string]string | — | Additional node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
 | `poolRef.name` | string | — | Check out a pre-booted slot from this `SwiftSandboxPool` (sub-second) instead of the cold materialize+boot path; falls back to cold on a miss. Same namespace. See [Warm pools](warm-pool.md). |
 | `gpuResourceClaim` | GPUResourceClaimSpec | — | Pass a GPU through via Kubernetes **DRA**: the scheduler + a DRA driver allocate at pod-schedule time. Mutually exclusive with `gpuProfileRef` and with `poolRef`. See [GPU sandboxes](gpu-sandboxes.md). |
@@ -113,6 +114,7 @@ sandbox to change image, resources, command, or network.
 | `artifacts[]` | list | Each `spec.artifacts` entry: `name`, `digest`, `mountPath`, `state` (Resolved, Fetching, Dispatched, Mounted, Skipped), `reason`, `message`. See [OCI artifacts](#oci-artifacts). |
 | `network.egressAllowed[]` | list | The egress allowlist the launcher enforces: `cidr`, `protocol`, `port`, and `from` (the spec entry, e.g. `service inference/llm`). |
 | `gpu.devices[]` / `gpu.nodeName` / `gpu.hypervisor` | []string / string / string | The native backend's allocation (PCI addresses, allocated node, resolved hypervisor). Absent for the DRA backend (the claim's ResourceClaim status carries device identity) and non-GPU sandboxes. |
+| `identity.spiffeID` | string | The SPIFFE ID registered for the launcher: the slot's after a warm checkout. Absent without `spec.identity`. |
 | `scratchDisk.pvcName` / `scratchDisk.devicePath` / `scratchDisk.bound` | string / string / bool | The attached scratch disk once its PVC is Bound. Absent when `spec.scratchDisk` is unset. |
 | `model.digest` / `model.mountPath` / `model.cachePath` | string / string / string | The resolved model artifact once materialized. Absent when `spec.model` is unset. |
 | `startedAt` | Time | When the guest began running. |
@@ -465,6 +467,59 @@ Requirements and failures:
   `SecretUnavailable`.
 - The sandbox kernel's bridge must write files, and for warm pools mount at
   checkout (kernels/sandbox 6.6.15, gpu-sandbox 6.6.4 or later).
+
+#### SPIFFE identity
+
+`spec.identity.spiffe: Enabled` gives a proxied sandbox a SPIFFE ID its egress
+proxy can prove to upstreams (mTLS to a gateway, an MCP server, an internal
+API). The proxy fetches the X.509-SVID from the SPIFFE Workload API; the guest
+never sees the socket or the key.
+
+```yaml
+spec:
+  identity:
+    spiffe: Enabled
+  network:
+    mode: proxied
+    egress:
+      proxy:
+        image: docker.io/envoyproxy/envoy:v1.36.2
+        config: Self
+        # Envoy's SDS can read the SVID straight from the SPIRE agent:
+        # secret name "default", cluster over $SPIFFE_ENDPOINT_SOCKET.
+```
+
+The ID depends on how the sandbox started:
+
+| Launcher | SPIFFE ID |
+|---|---|
+| Cold, no `poolRef` | `spiffe://<td>/ns/<ns>/sandbox/<name>` |
+| Cold fallback of a pooled sandbox | `spiffe://<td>/ns/<ns>/pool/<poolRef>/sandbox/<name>` |
+| Checkout of a warm slot | `spiffe://<td>/ns/<ns>/pool/<pool>/slot/<slot>` |
+
+A warm slot is registered when it boots, so a checkout does not wait for the
+SPIFFE agent (registering the sandbox's own name at checkout took 1.5 to 7 s
+with SPIRE). A slot serves one sandbox, so the ID is still unique to it;
+`status.identity.spiffeID` says which ID the sandbox has, and policies can
+match the `/pool/<pool>/` prefix. A pool and the sandboxes that claim it must
+ask for the same identity.
+
+Requirements:
+
+- SPIFFE on the platform: chart `sandboxMaterialize.spiffe.enabled` and
+  `trustDomain`, with SPIRE (and its controller manager) installed. The chart
+  creates two `ClusterSPIFFEID` objects that register launcher pods labeled
+  `sandbox.kubeswift.io/spiffe=enabled`; set `clusterSPIFFEIDs.create: false`
+  to register them yourself.
+- Network mode `proxied` and an egress proxy (an image or a preset). The
+  proxy gets `SPIFFE_ENDPOINT_SOCKET` and the socket under `/run/spiffe`, and
+  with config `Intent` the egress-intent file's `identity.spiffe` (`id`,
+  `workloadAPISocket`). The built-in broker does not hold an SVID yet, and
+  `allow[].tls` (TLS origination by the broker) is still refused.
+
+The ID is as strong as pod creation in the sandbox's namespace: anyone who may
+create pods there can label one like a launcher, as with any SPIFFE ID derived
+from pod metadata.
 
 ### Exposing ports
 

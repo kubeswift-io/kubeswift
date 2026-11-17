@@ -600,6 +600,7 @@ func (r *SwiftSandboxPoolReconciler) slotTemplate(pool *sandboxv1alpha1.SwiftSan
 			GPUProfileRef:        pool.Spec.GPUProfileRef,
 			NodeSelector:         pool.Spec.NodeSelector,
 			Model:                pool.Spec.Model,
+			Identity:             pool.Spec.Identity,
 		},
 	}
 }
