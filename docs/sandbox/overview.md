@@ -347,7 +347,7 @@ sandboxMaterialize:
     envoy:
       image: docker.io/envoyproxy/envoy:v1.36.2
       args: ["-c", "/etc/kubeswift/egress-proxy/envoy.json", "--disable-hot-restart"]
-      translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:<tag>
+      translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:v0.1.0
       translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/envoy.json"]
       listeners: {transparent: 15006}
 ```
