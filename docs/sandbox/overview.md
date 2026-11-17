@@ -275,7 +275,6 @@ spec:
   it needs `get pods/log`, not exec. It is bounded at 16 MiB per launcher;
   past that a `truncated` line ends it and the launcher log keeps the rest. An
   egress proxy container's own access log is `-c egress-proxy`.
-- `proxy.listeners.http` is part of the API but refused in this release.
 
 #### Your own egress proxy
 
@@ -314,6 +313,13 @@ spec:
   all addresses. The listener cannot be reached from outside the pod.
 - With `listeners.dns`, every guest DNS query goes to the proxy. Without it,
   the launcher resolves only the `host` rules' names, as with the broker.
+- With `listeners.http`, the workload gets `HTTP_PROXY`, `HTTPS_PROXY` and
+  `NO_PROXY` (`localhost,127.0.0.1,::1`), upper and lower case, pointing at
+  `http://192.168.99.1:<http>`: clients that honour them send the proxy the
+  name they want (CONNECT or an absolute URI). A client that ignores them is
+  still redirected to `listeners.transparent`. Only the guest reaches the
+  HTTP port. A preset can declare `listeners.http` too; the Envoy translator
+  does not serve one yet.
 - The proxy decides what the guest reaches. The kernel decides what the proxy
   reaches: cluster DNS, the public internet and `upstreams`, never
   the cloud metadata range, node or API server addresses, the administrator's

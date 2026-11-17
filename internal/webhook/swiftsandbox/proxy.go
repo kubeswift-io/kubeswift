@@ -30,7 +30,7 @@ var (
 	PresetsAvailable          = true
 	CredentialsAvailable      = true
 	ServiceUpstreamsAvailable = true
-	HTTPListenerAvailable     = false
+	HTTPListenerAvailable     = true
 )
 
 // AllowedProxyImages are the image patterns a proxied sandbox may run as its
@@ -56,6 +56,9 @@ type EgressProxyPreset struct {
 	Listeners       struct {
 		Transparent int32 `json:"transparent"`
 		DNS         int32 `json:"dns,omitempty"`
+		// HTTP is an explicit HTTP proxy port the guest's HTTP_PROXY and
+		// HTTPS_PROXY point at.
+		HTTP int32 `json:"http,omitempty"`
 	} `json:"listeners"`
 	// Readiness tells swiftletd when the proxy has loaded newly delivered
 	// credentials. Only a preset with it can receive credentials.
@@ -96,12 +99,13 @@ func ParseProxyPresets(s string) (map[string]EgressProxyPreset, error) {
 			return nil, fmt.Errorf("egress proxy preset %q: image is required", name)
 		}
 		l := p.Listeners
-		if l.Transparent < 1024 || l.Transparent > 65535 || (l.DNS != 0 && (l.DNS < 1024 || l.DNS > 65535 || l.DNS == l.Transparent)) {
+		if l.Transparent < 1024 || l.Transparent > 65535 || (l.DNS != 0 && (l.DNS < 1024 || l.DNS > 65535 || l.DNS == l.Transparent)) ||
+			(l.HTTP != 0 && (l.HTTP < 1024 || l.HTTP > 65535 || l.HTTP == l.Transparent || l.HTTP == l.DNS)) {
 			return nil, fmt.Errorf("egress proxy preset %q: listeners must be distinct ports in 1024-65535", name)
 		}
 		if r := p.Readiness; r != nil {
 			port := r.HTTPGet.Port
-			if port < 1024 || port > 65535 || port == l.Transparent || port == l.DNS {
+			if port < 1024 || port > 65535 || port == l.Transparent || port == l.DNS || port == l.HTTP {
 				return nil, fmt.Errorf("egress proxy preset %q: readiness.httpGet.port must be a port in 1024-65535 other than the listeners", name)
 			}
 			if !strings.HasPrefix(r.HTTPGet.Path, "/") || strings.ContainsAny(r.HTTPGet.Path, " \r\n") {
@@ -238,6 +242,7 @@ func validateProxy(n sandboxv1alpha1.SandboxNetwork) error {
 			}
 			for _, pt := range n.Ports {
 				if pt.Port == pr.Listeners.Transparent || (pr.Listeners.DNS != 0 && pt.Port == pr.Listeners.DNS) ||
+					(pr.Listeners.HTTP != 0 && pt.Port == pr.Listeners.HTTP) ||
 					(pr.Readiness != nil && pt.Port == pr.Readiness.HTTPGet.Port) {
 					return fmt.Errorf("spec.network.ports %s: port %d is a listener of egress proxy preset %q", pt.Name, pt.Port, p.Preset)
 				}

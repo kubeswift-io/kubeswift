@@ -27,10 +27,14 @@
 #      reported in status.network.proxyUpstreams). A Service upstream in
 #      front of the API server keeps the sandbox Pending
 #      (EgressServiceReachesNode).
-#   4. "intent": a proxy image in config Intent without the
+#   4. "http-listener": listeners.http: the guest's proxy variables point
+#      at the proxy's HTTP listener; clients that honour them go through it,
+#      one that ignores them hits the transparent listener; no other pod
+#      reaches the HTTP port.
+#   5. "intent": a proxy image in config Intent without the
 #      io.kubeswift.egress-intent.versions label is refused
 #      (EgressIntentUnsupported) before any launcher starts.
-#   5. An image outside the allowlist is refused.
+#   6. An image outside the allowlist is refused.
 #
 # Prerequisites:
 #   - a node labeled kubeswift.io/kernel-node=true with KVM
@@ -105,6 +109,53 @@ static_resources:
     type: ORIGINAL_DST
     lb_policy: CLUSTER_PROVIDED
     connect_timeout: 5s
+EOF
+}
+
+# envoy_http_config: an Envoy whose transparent listener forwards nothing and
+# whose explicit HTTP listener on 15002 is a forward proxy (CONNECT and
+# absolute URIs) to any name.
+envoy_http_config() {
+	cat <<'EOF'
+static_resources:
+  listeners:
+  - name: transparent
+    address: {socket_address: {address: 0.0.0.0, port_value: 15006}}
+    listener_filters:
+    - name: envoy.filters.listener.tls_inspector
+      typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector}
+    filter_chains:
+    - filter_chain_match: {server_names: ["nothing.invalid"]}
+      filters:
+      - name: envoy.filters.network.tcp_proxy
+        typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy, stat_prefix: none, cluster: dfp}
+  - name: http
+    address: {socket_address: {address: 0.0.0.0, port_value: 15002}}
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: fwd
+          route_config:
+            virtual_hosts:
+            - name: all
+              domains: ["*"]
+              routes:
+              - match: {connect_matcher: {}}
+                route: {cluster: dfp, upgrade_configs: [{upgrade_type: CONNECT, connect_config: {}}]}
+              - match: {prefix: "/"}
+                route: {cluster: dfp}
+          http_filters:
+          - name: envoy.filters.http.dynamic_forward_proxy
+            typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig, dns_cache_config: {name: c, dns_lookup_family: V4_ONLY}}
+          - name: envoy.filters.http.router
+            typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router}
+  clusters:
+  - name: dfp
+    lb_policy: CLUSTER_PROVIDED
+    connect_timeout: 5s
+    cluster_type: {name: envoy.clusters.dynamic_forward_proxy, typed_config: {"@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig, dns_cache_config: {name: c, dns_lookup_family: V4_ONLY}}}
 EOF
 }
 
@@ -229,6 +280,45 @@ $(envoy_proxy "" "        upstreams: [{service: {name: kubernetes, namespace: de
 		die "an upstream Service in front of the API server: $(kubectl -n "$NS" get swiftsandbox upstream-api -o jsonpath='{.status}')"
 	log "an upstream Service in front of the API server keeps the sandbox Pending (EgressServiceReachesNode)"
 	kubectl -n "$NS" delete swiftsandbox upstream-api --wait=false >/dev/null
+
+	# listeners.http: the guest's HTTP_PROXY/HTTPS_PROXY point at the proxy's
+	# HTTP listener on the bridge, so a client that honours them goes there;
+	# one that ignores them still lands on the transparent listener (which
+	# forwards nothing here). The HTTP port is the guest's only: another pod
+	# cannot reach it.
+	kubectl -n "$NS" delete swiftsandbox http-listener --ignore-not-found --wait=true >/dev/null
+	sandbox http-listener "$hosts
+      proxy:
+        image: $PROXY_IMAGE
+        listeners: {transparent: 15006, http: 15002}
+        args:
+        - --disable-hot-restart
+        - --log-level
+        - warn
+        - --config-yaml
+        - |
+$(envoy_http_config | sed 's/^/          /')" "$(probe_script "check() { if [ \"\$2\" = \"\$3\" ]; then echo \"PROBE-OK   \$1\"; else echo \"PROBE-FAIL \$1 got \$2\"; f=\$((f+1)); fi; }
+check https-proxy-env \"\$HTTPS_PROXY\" http://192.168.99.1:15002
+check no-proxy-env \"\$no_proxy\" localhost,127.0.0.1,::1
+http https-via-http-listener reach https://$PUBLIC_HOST/
+http http-via-http-listener reach http://$PUBLIC_HOST/
+http https-ignoring-the-proxy block --noproxy '*' https://$PUBLIC_HOST/
+echo PROBES-DONE; sleep 30")"
+	local deadline=$((SECONDS + TIMEOUT)) out hpod hip
+	until out=$(kubectl -n "$NS" logs http-listener -c console 2>/dev/null | grep -E '^PROBE'); grep -q PROBES-DONE <<<"$out"; do
+		[ "$SECONDS" -lt "$deadline" ] || die "http-listener: no probe output: $(kubectl -n "$NS" get swiftsandbox http-listener -o jsonpath='{.status.message}')"
+		sleep 2
+	done
+	printf '%s\n' "$out" | grep -v PROBES-DONE | sed 's/^/   [http-listener] /'
+	grep -q '^PROBE-FAIL' <<<"$out" && die "http-listener: egress not as expected"
+	hip=$(kubectl -n "$NS" get pod http-listener -o jsonpath='{.status.podIP}')
+	# Positive control: nc from the target pod does reach an open port.
+	kubectl -n "$NS" exec target -- nc -z -w 3 "$target_svc" 8080 || die "nc from the target pod cannot reach its own Service: the next check would prove nothing"
+	if kubectl -n "$NS" exec target -- nc -z -w 3 "$hip" 15002 2>/dev/null; then
+		die "http-listener: another pod reached the proxy's HTTP listener at $hip:15002"
+	fi
+	log "http-listener: another pod cannot reach the HTTP listener"
+	kubectl -n "$NS" delete swiftsandbox http-listener --wait=false >/dev/null
 
 	# config Intent: the image that reads the intent file must declare the
 	# versions it reads (io.kubeswift.egress-intent.versions); an unlabelled

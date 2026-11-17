@@ -152,6 +152,7 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 	if !idle {
 		// Egress credentials: the placeholders and the CA bundle in env.
 		exec.Env = append(append([]string(nil), exec.Env...), credentialEnv(sb, coldPlaceholderKey(sb))...)
+		exec.Env = append(exec.Env, httpProxyEnv(sb)...)
 	}
 	if !idle && exec.nonTrivial() {
 		// The workload argv/env/cwd ride the config disk (kubeswift.config points the

@@ -611,24 +611,33 @@ fn wait_for_proxy() -> Result<(), String> {
     let dns: Option<u16> = std::env::var("KUBESWIFT_EGRESS_PROXY_DNS_PORT")
         .ok()
         .and_then(|p| p.parse().ok());
+    let http: Option<u16> = std::env::var("KUBESWIFT_EGRESS_PROXY_HTTP_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok());
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
     while std::time::Instant::now() < deadline {
-        if listening(port) && dns.map_or(true, udp_bound) {
-            log::info!("egress_proxy_ready port={} dns={:?}", port, dns);
+        if listening(port) && dns.is_none_or(udp_bound) && http.is_none_or(listening) {
+            log::info!(
+                "egress_proxy_ready port={} dns={:?} http={:?}",
+                port,
+                dns,
+                http
+            );
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    Err(match dns {
-        Some(d) => format!(
-            "egress proxy is not listening on TCP port {} and UDP port {} after 60s",
-            port, d
-        ),
-        None => format!(
-            "egress proxy is not listening on TCP port {} after 60s",
-            port
-        ),
-    })
+    let mut want = format!("TCP port {}", port);
+    if let Some(h) = http {
+        want += &format!(" and TCP port {} (http)", h);
+    }
+    if let Some(d) = dns {
+        want += &format!(" and UDP port {} (dns)", d);
+    }
+    Err(format!(
+        "egress proxy is not listening on {} after 60s",
+        want
+    ))
 }
 
 /// Whether something listens on TCP `port` in this network namespace.

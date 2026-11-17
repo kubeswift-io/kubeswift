@@ -322,3 +322,38 @@ func TestBuildPod_EgressAudit(t *testing.T) {
 		}
 	}
 }
+
+// listeners.http: network-init and the launcher learn the port, and the
+// workload gets the proxy variables pointing at the bridge, cold and warm;
+// without it nothing changes.
+func TestHTTPListener(t *testing.T) {
+	sb := proxySandbox(sandboxv1alpha1.SandboxEgressProxyConfigSelf)
+	sb.Spec.Network.Egress.Proxy.Listeners.HTTP = 15002
+	pod := buildPod(sb, "sandbox")
+	for name, env := range map[string]map[string]string{
+		"network-init": containerEnv(pod.Spec.InitContainers, networkInitName),
+		"launcher":     containerEnv(pod.Spec.Containers, launcherName),
+	} {
+		if env["KUBESWIFT_EGRESS_PROXY_HTTP_PORT"] != "15002" {
+			t.Errorf("%s env %v", name, env)
+		}
+	}
+	want := "HTTPS_PROXY=http://192.168.99.1:15002"
+	ri := buildIntent(sb, "sandbox", "/r.ext4", "", execSpec{Argv: []string{"sh"}}, false)
+	if ri.SandboxExec == nil || !contains(ri.SandboxExec.Env, want) || !contains(ri.SandboxExec.Env, "no_proxy=localhost,127.0.0.1,::1") {
+		t.Errorf("cold env %+v", ri.SandboxExec)
+	}
+	slot := &corev1.Pod{}
+	slot.Labels = map[string]string{PoolLabelKey: "p"}
+	ann, err := execActionAnnotations(slot, sb, "id", execInject{argv: []string{"sh"}})
+	if err != nil || !strings.Contains(ann[annSandboxExecActionArgs], want) {
+		t.Errorf("checkout args %v %v", ann, err)
+	}
+	plain := proxySandbox(sandboxv1alpha1.SandboxEgressProxyConfigSelf)
+	if env := httpProxyEnv(plain); env != nil {
+		t.Errorf("no http listener, env %v", env)
+	}
+	if containerEnv(buildPod(plain, "sandbox").Spec.Containers, launcherName)["KUBESWIFT_EGRESS_PROXY_HTTP_PORT"] != "" {
+		t.Error("http port env without listeners.http")
+	}
+}

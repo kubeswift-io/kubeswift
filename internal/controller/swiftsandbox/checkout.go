@@ -516,6 +516,7 @@ func execActionAnnotations(slot *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox, a
 	// Egress credentials: the slot's placeholders (its pool's, as in the
 	// slot's egress-intent file) and the CA bundle.
 	w.env = append(append([]string(nil), w.env...), credentialEnv(sb, poolPlaceholderKey(sb.Namespace, slot.Labels[PoolLabelKey]))...)
+	w.env = append(w.env, httpProxyEnv(sb)...)
 	if len(w.env) > 0 {
 		args["env"] = w.env
 	}
