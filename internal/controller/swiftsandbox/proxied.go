@@ -91,7 +91,7 @@ func proxiedEnv(sb *sandboxv1alpha1.SwiftSandbox) []corev1.EnvVar {
 	port := sandboxwebhook.EgressBrokerPort
 	allow := egressAllowEnv(egressAllowed(sb))
 	var extra []corev1.EnvVar
-	if p := egressProxy(sb); p != nil && p.Listeners != nil {
+	if p := egressProxy(sb); p != nil {
 		port = int(p.Listeners.Transparent)
 		allow = upstreamsEnv(p)
 		extra = append(extra, corev1.EnvVar{Name: "KUBESWIFT_EGRESS_PROXY", Value: "container"})

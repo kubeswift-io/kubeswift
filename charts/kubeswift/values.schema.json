@@ -72,7 +72,27 @@
         "console": { "type": "boolean" },
         "restrictedEgressDeny": { "type": "array", "items": { "type": "string" } },
         "launcherCPUPerVCPU": { "type": ["string", "number"] },
-        "egressProxyImages": { "type": "array", "items": { "type": "string" } }
+        "egressProxyImages": { "type": "array", "items": { "type": "string" } },
+        "egressProxyPresets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["image", "listeners"],
+            "properties": {
+              "image": { "type": "string" },
+              "args": { "type": "array", "items": { "type": "string" } },
+              "translatorImage": { "type": "string" },
+              "translatorArgs": { "type": "array", "items": { "type": "string" } },
+              "listeners": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["transparent"],
+                "properties": { "transparent": { "type": "integer" }, "dns": { "type": "integer" } }
+              }
+            }
+          }
+        }
       }
     },
     "snapshotORAS": {

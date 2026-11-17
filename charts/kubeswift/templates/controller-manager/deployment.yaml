@@ -90,6 +90,10 @@ spec:
             - name: KUBESWIFT_SANDBOX_EGRESS_PROXY_IMAGES
               value: {{ join " " . | quote }}
             {{- end }}
+            {{- with .Values.sandboxMaterialize.egressProxyPresets }}
+            - name: KUBESWIFT_SANDBOX_EGRESS_PROXY_PRESETS
+              value: {{ toJson . | quote }}
+            {{- end }}
             - name: KUBESWIFT_SANDBOX_CONSOLE
               value: {{ ne .Values.sandboxMaterialize.console false | quote }}
             - name: POD_NAMESPACE

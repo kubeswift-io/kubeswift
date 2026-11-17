@@ -285,6 +285,11 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	// and the pass waits for them together.
 	lookup := r.lookup(sb)
 	prime(lookup, imageRequest(sb, auth))
+	// The image that reads the egress-intent file must say it reads v1.
+	irReq, irImage, irWanted := intentReaderRequest(sb)
+	if irWanted {
+		prime(lookup, irReq)
+	}
 	// A GPU sandbox's image must carry kernel modules built for its kernel
 	// (WS1.5): read the kernel artifact's module-abi alongside the image.
 	var abiReq resolveRequest
@@ -324,6 +329,13 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		}
 	}
 	ri, imageReady, imageErr := resolveImage(sb, auth, lookup)
+	var irLabels map[string]string
+	irReady := true
+	var irErr error
+	if irWanted {
+		res, ok := lookup(irReq)
+		irReady, irErr, irLabels = ok, res.err, res.config.Labels
+	}
 	kernelABI, kernelABIFound, kernelABIReady := "", false, true
 	var kernelABIErr error
 	if sb.UsesGPU() {
@@ -355,7 +367,7 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	for _, f := range []struct {
 		reason string
 		err    error
-	}{{"ImageResolveFailed", imageErr}, {reasonKernelResolveFailed, kernelABIErr}, {"ModelResolveFailed", modelErr}, {"ArtifactResolveFailed", artifactsErr}} {
+	}{{"ImageResolveFailed", imageErr}, {reasonKernelResolveFailed, kernelABIErr}, {"ModelResolveFailed", modelErr}, {"ArtifactResolveFailed", artifactsErr}, {"EgressProxyImageResolveFailed", irErr}} {
 		if f.err == nil {
 			continue
 		}
@@ -372,7 +384,7 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		}
 		return r.registryUnavailable(ctx, sb, f.err)
 	}
-	if !imageReady || !kernelABIReady || !modelReady || !artifactsReady {
+	if !imageReady || !kernelABIReady || !modelReady || !artifactsReady || !irReady {
 		res, err := r.waitForRegistry(ctx, sb)
 		// An optional artifact stops being waited for at its deadline, which
 		// no registry answer announces.
@@ -382,6 +394,11 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		return res, err
 	}
 	r.registryFailures.Delete(client.ObjectKeyFromObject(sb))
+	if irWanted {
+		if reason, msg := intentVersionVerdict(irImage, irLabels); reason != "" {
+			return r.fail(ctx, sb, reason, msg)
+		}
+	}
 	if sb.UsesGPU() {
 		switch reason, msg := moduleABIVerdict(kernelName, kernelABI, kernelABIFound, sb.Spec.Image, ri.Labels); reason {
 		case reasonKernelModuleABIMismatch:

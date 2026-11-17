@@ -7,6 +7,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	sandboxwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsandbox"
 )
 
 func containerEnv(cs []corev1.Container, name string) map[string]string {
@@ -183,5 +184,102 @@ func TestEgressIntentJSON(t *testing.T) {
 	_ = addEgressIntent(cm2, self, "SwiftSandbox", "sb")
 	if _, ok := cm2.Data[egressIntentKey]; ok {
 		t.Error("config Self got an intent file")
+	}
+}
+
+func withPreset(t *testing.T, p sandboxwebhook.EgressProxyPreset) {
+	t.Helper()
+	saved := sandboxwebhook.EgressProxyPresets
+	sandboxwebhook.EgressProxyPresets = map[string]sandboxwebhook.EgressProxyPreset{"envoy": p}
+	t.Cleanup(func() { sandboxwebhook.EgressProxyPresets = saved })
+}
+
+func envoyPreset() sandboxwebhook.EgressProxyPreset {
+	p := sandboxwebhook.EgressProxyPreset{
+		Image:           "docker.io/envoyproxy/envoy:v1.36.2",
+		Args:            []string{"-c", "/etc/kubeswift/egress-proxy/envoy.json", "--disable-hot-restart"},
+		TranslatorImage: "ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:v0.1.0",
+		TranslatorArgs:  []string{"--out", "/etc/kubeswift/egress-proxy/envoy.json"},
+	}
+	p.Listeners.Transparent = 15006
+	return p
+}
+
+// A preset runs its translator once, after network-init and before the
+// proxy, with the intent file and a config volume the proxy reads.
+func TestBuildPod_Preset(t *testing.T) {
+	withPreset(t, envoyPreset())
+	sb := proxiedSandbox()
+	sb.Spec.Network.Egress.Proxy = &sandboxv1alpha1.SandboxEgressProxy{Preset: "envoy"}
+	pod := buildPod(sb, "sandbox")
+	n := len(pod.Spec.InitContainers)
+	if n < 2 || pod.Spec.InitContainers[n-2].Name != EgressTranslatorContainerName || pod.Spec.InitContainers[n-1].Name != EgressProxyContainerName {
+		var names []string
+		for _, c := range pod.Spec.InitContainers {
+			names = append(names, c.Name)
+		}
+		t.Fatalf("init containers %v: want ..., egress-translator, egress-proxy", names)
+	}
+	tr, px := pod.Spec.InitContainers[n-2], pod.Spec.InitContainers[n-1]
+	if tr.RestartPolicy != nil {
+		t.Error("the translator is a sidecar; it must run once")
+	}
+	if px.Image != "docker.io/envoyproxy/envoy:v1.36.2" || px.Args[1] != "/etc/kubeswift/egress-proxy/envoy.json" {
+		t.Errorf("proxy %s %v", px.Image, px.Args)
+	}
+	ro := func(c corev1.Container, vol string) (mounted, readOnly bool) {
+		for _, m := range c.VolumeMounts {
+			if m.Name == vol {
+				return true, m.ReadOnly
+			}
+		}
+		return false, false
+	}
+	if m, r := ro(tr, egressProxyConfigVolume); !m || r {
+		t.Error("translator must mount the config volume read-write")
+	}
+	if m, r := ro(px, egressProxyConfigVolume); !m || !r {
+		t.Error("proxy must mount the config volume read-only")
+	}
+	if m, _ := ro(tr, egressIntentVolume); !m {
+		t.Error("translator has no intent file")
+	}
+	if *tr.SecurityContext.RunAsUser != EgressProxyUID || *tr.SecurityContext.Privileged {
+		t.Errorf("translator security context %+v", tr.SecurityContext)
+	}
+	if env := containerEnv(pod.Spec.Containers, launcherName); env["KUBESWIFT_EGRESS_BROKER_PORT"] != "15006" || env["KUBESWIFT_EGRESS_PROXY"] != "container" {
+		t.Errorf("launcher env %v", env)
+	}
+	if _, image, ok := intentReaderRequest(sb); !ok || image != envoyPreset().TranslatorImage {
+		t.Errorf("intent reader %q %v, want the translator", image, ok)
+	}
+}
+
+// A changed preset definition changes the slot shape, so warm slots booted
+// with the old one are recycled.
+func TestProxyKey_PresetDefinition(t *testing.T) {
+	n := proxiedSandbox().Spec.Network
+	n.Egress.Proxy = &sandboxv1alpha1.SandboxEgressProxy{Preset: "envoy"}
+	withPreset(t, envoyPreset())
+	before := proxyKey(n)
+	p := envoyPreset()
+	p.Image = "docker.io/envoyproxy/envoy:v1.36.3"
+	withPreset(t, p)
+	if after := proxyKey(n); after == before || before == "" {
+		t.Errorf("proxy key did not change with the preset image: %q", before)
+	}
+}
+
+func TestIntentVersionVerdict(t *testing.T) {
+	if r, _ := intentVersionVerdict("x", map[string]string{"io.kubeswift.egress-intent.versions": "v1"}); r != "" {
+		t.Errorf("v1: %s", r)
+	}
+	if r, _ := intentVersionVerdict("x", map[string]string{"io.kubeswift.egress-intent.versions": "v0, v1"}); r != "" {
+		t.Errorf("v0, v1: %s", r)
+	}
+	for _, labels := range []map[string]string{nil, {"io.kubeswift.egress-intent.versions": "v2"}} {
+		if r, _ := intentVersionVerdict("x", labels); r != reasonEgressIntentUnsupported {
+			t.Errorf("%v: %q", labels, r)
+		}
 	}
 }

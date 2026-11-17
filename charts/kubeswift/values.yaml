@@ -125,6 +125,22 @@ sandboxMaterialize:
   # egress: list only images you trust. Empty allows none (the built-in
   # broker still works).
   egressProxyImages: []
+  # Named egress proxies a proxied sandbox can ask for with
+  # spec.network.egress.proxy.preset. A preset runs `image` (with `args`) as
+  # the proxy; with `translatorImage` set, that image runs once before the
+  # proxy, reads the egress-intent file and writes the proxy's configuration
+  # into /etc/kubeswift/egress-proxy (read-only for the proxy). The image that
+  # reads the intent file must carry the label
+  # io.kubeswift.egress-intent.versions listing v1. Preset images need not be
+  # in egressProxyImages. Example, with a translator from
+  # github.com/kubeswift-io/kubeswift-egress-adapters:
+  #   envoy:
+  #     image: docker.io/envoyproxy/envoy:v1.36.2
+  #     args: ["-c", "/etc/kubeswift/egress-proxy/envoy.json", "--disable-hot-restart"]
+  #     translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:<tag>
+  #     translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/envoy.json"]
+  #     listeners: {transparent: 15006}
+  egressProxyPresets: {}
 
 # snapshot-oras: the uploader/downloader image for the oci (OCI registry / ORAS)
 # snapshot backend. The controller passes this to the per-snapshot push Job (and

@@ -1,6 +1,7 @@
 package swiftsandbox
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"path"
@@ -26,7 +27,7 @@ var EgressProxyAvailable = true
 // validated in full and then refused, so a spec written against the API fails
 // with its real errors first.
 var (
-	PresetsAvailable          = false
+	PresetsAvailable          = true
 	CredentialsAvailable      = false
 	ServiceUpstreamsAvailable = false
 	HTTPListenerAvailable     = false
@@ -37,6 +38,56 @@ var (
 // patterns where "*" does not cross "/". Empty allows none: the proxy runs in
 // the launcher pod, so the administrator chooses which images may.
 var AllowedProxyImages []string
+
+// EgressProxyPreset is a proxy the administrator defines in the chart
+// (sandboxMaterialize.egressProxyPresets), which a sandbox names with
+// spec.network.egress.proxy.preset. Its images need not be in
+// AllowedProxyImages: the administrator wrote them.
+type EgressProxyPreset struct {
+	// Image is the proxy, run as the egress-proxy container.
+	Image string   `json:"image"`
+	Args  []string `json:"args,omitempty"`
+	// TranslatorImage, when set, runs once before the proxy (config Intent):
+	// it reads the egress-intent file and writes the proxy's configuration
+	// into /etc/kubeswift/egress-proxy, which the proxy reads. Unset, the
+	// proxy reads the egress-intent file itself.
+	TranslatorImage string   `json:"translatorImage,omitempty"`
+	TranslatorArgs  []string `json:"translatorArgs,omitempty"`
+	Listeners       struct {
+		Transparent int32 `json:"transparent"`
+		DNS         int32 `json:"dns,omitempty"`
+	} `json:"listeners"`
+}
+
+// EgressProxyPresets are the presets this cluster defines, by name.
+var EgressProxyPresets map[string]EgressProxyPreset
+
+// ParseProxyPresets reads the presets (JSON object, name -> preset),
+// refusing a malformed one.
+func ParseProxyPresets(s string) (map[string]EgressProxyPreset, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	var out map[string]EgressProxyPreset
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&out); err != nil {
+		return nil, fmt.Errorf("egress proxy presets: %w", err)
+	}
+	for name, p := range out {
+		if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
+			return nil, fmt.Errorf("egress proxy preset %q: %s", name, errs[0])
+		}
+		if p.Image == "" {
+			return nil, fmt.Errorf("egress proxy preset %q: image is required", name)
+		}
+		l := p.Listeners
+		if l.Transparent < 1024 || l.Transparent > 65535 || (l.DNS != 0 && (l.DNS < 1024 || l.DNS > 65535 || l.DNS == l.Transparent)) {
+			return nil, fmt.Errorf("egress proxy preset %q: listeners must be distinct ports in 1024-65535", name)
+		}
+	}
+	return out, nil
+}
 
 // ProxyImageAllowed reports whether image matches AllowedProxyImages.
 func ProxyImageAllowed(image string) bool {
@@ -156,6 +207,17 @@ func validateProxy(n sandboxv1alpha1.SandboxNetwork) error {
 	if p.Preset != "" {
 		if errs := validation.IsDNS1123Label(p.Preset); len(errs) > 0 {
 			return fmt.Errorf("%s.preset %q: %s", f, p.Preset, errs[0])
+		}
+		if PresetsAvailable {
+			pr, ok := EgressProxyPresets[p.Preset]
+			if !ok {
+				return fmt.Errorf("%s.preset %q is not a preset this cluster defines (chart sandboxMaterialize.egressProxyPresets)", f, p.Preset)
+			}
+			for _, pt := range n.Ports {
+				if pt.Port == pr.Listeners.Transparent || (pr.Listeners.DNS != 0 && pt.Port == pr.Listeners.DNS) {
+					return fmt.Errorf("spec.network.ports %s: port %d is a listener of egress proxy preset %q", pt.Name, pt.Port, p.Preset)
+				}
+			}
 		}
 		if len(p.Args) > 0 || len(p.Env) > 0 || p.Listeners != nil {
 			return fmt.Errorf("%s: args, env and listeners apply to an image; a preset supplies them", f)
