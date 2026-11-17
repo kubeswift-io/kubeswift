@@ -894,8 +894,9 @@ spec:
                           broker allows connections that match allow (by TLS server name or HTTP
                           Host for host rules, by address for the others). Only valid with mode
                           proxied. An image runs when the administrator allows it (chart
-                          sandboxMaterialize.egressProxyImages); presets, service upstreams and
-                          the HTTP listener are not available yet and are refused.
+                          sandboxMaterialize.egressProxyImages), a preset when the administrator
+                          defines it (sandboxMaterialize.egressProxyPresets); service upstreams
+                          and the HTTP listener are not available yet and are refused.
                         properties:
                           args:
                             description: Args for an image proxy.
@@ -1117,9 +1118,9 @@ spec:
                             type: object
                           preset:
                             description: |-
-                              Preset names a proxy the administrator configured in the chart (for
-                              example envoy or agentgateway): image, translator and listeners. Exactly
-                              one of preset and image is set.
+                              Preset names a proxy the administrator defines in the chart
+                              (sandboxMaterialize.egressProxyPresets): image, translator and
+                              listeners. Exactly one of preset and image is set.
                             maxLength: 63
                             type: string
                           upstreams:

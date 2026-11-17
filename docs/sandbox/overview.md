@@ -264,9 +264,8 @@ spec:
   `network.ports`.
 - A broker that does not start fails the sandbox (`EgressBrokerFailed`) before
   the guest boots.
-- `network.egress.credentials`, proxy presets, `service` entries in
-  `proxy.upstreams` and `proxy.listeners.http` are part of the API but refused
-  in this release.
+- `network.egress.credentials`, `service` entries in `proxy.upstreams` and
+  `proxy.listeners.http` are part of the API but refused in this release.
 
 #### Your own egress proxy
 
@@ -317,6 +316,56 @@ spec:
   and the listeners. The format is documented in `api/egressintent/v1`.
 - Pools: slots boot with the pool's proxy, and a sandbox claims a slot only
   with the same proxy.
+
+#### Proxy presets
+
+An administrator can define named proxies in the chart value
+`sandboxMaterialize.egressProxyPresets`, and a sandbox asks for one by name:
+
+```yaml
+spec:
+  network:
+    mode: proxied
+    egress:
+      allow:
+        - host: api.example.com
+      proxy:
+        preset: envoy
+```
+
+A preset is the proxy image and its arguments, the listeners, and usually a
+translator image. With `config: Intent` (the default for a preset) the
+translator runs once before the proxy: it reads the egress-intent file and
+writes the proxy's own configuration into `/etc/kubeswift/egress-proxy`, which
+the proxy reads. The proxy image stays the upstream one. Translators for Envoy
+(and later other proxies) are published from
+[kubeswift-egress-adapters](https://github.com/kubeswift-io/kubeswift-egress-adapters):
+
+```yaml
+sandboxMaterialize:
+  egressProxyPresets:
+    envoy:
+      image: docker.io/envoyproxy/envoy:v1.36.2
+      args: ["-c", "/etc/kubeswift/egress-proxy/envoy.json", "--disable-hot-restart"]
+      translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:<tag>
+      translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/envoy.json"]
+      listeners: {transparent: 15006}
+```
+
+- The image that reads the intent file (the translator, else the proxy) must
+  carry the label `io.kubeswift.egress-intent.versions` listing `v1`. The
+  controller checks it before any launcher starts; otherwise the sandbox fails
+  with `EgressIntentUnsupported` and a pool is `Degraded`.
+- The translator runs with the proxy's restrictions (uid 65531, no
+  privileges, no service account token); its output is in
+  `kubectl logs <pod> -c egress-translator`.
+- Preset images need not be in `egressProxyImages`. A sandbox naming a preset
+  the cluster does not define is refused.
+- Changing a preset's definition replaces the warm slots of pools that use it.
+- With the Envoy translator, a `host` rule without ports opens TLS on 443 and
+  HTTP on 80, and Envoy connects to the address the name resolves to (not the
+  address the guest asked for), so a spoofed server name cannot reach another
+  host.
 
 ### Exposing ports
 
