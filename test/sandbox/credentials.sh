@@ -25,7 +25,8 @@
 #      copies of the secret value or of the proxy's leaf private key.
 #   3. Pool "warm" and a checkout on its slot: the credential works there
 #      too (fresh material at checkout).
-#   4. A credential whose Secret does not exist fails with SecretNotFound.
+#   4. A credential whose Secret does not exist keeps the sandbox Pending
+#      (Resolved=False, SecretNotFound) with no launcher.
 #
 # Prerequisites: a KVM node; internet egress; the preset above; DEST answers
 # GET /basic-auth with 200 for "postman:password" and does not echo it.
@@ -200,12 +201,14 @@ EOF
 		die "checkout did not run on a warm slot"
 	log "checkout on a warm slot: credential accepted"
 
-	# 4: a missing Secret.
+	# 4: a missing Secret keeps the sandbox Pending, named (it starts once
+	# the Secret exists), before any launcher is created.
 	sandbox nosecret "$(network missing)" "true"
-	p=$(finished nosecret)
-	[ "$p" = Failed ] && kubectl -n "$NS" get swiftsandbox nosecret -o jsonpath='{.status}' | grep -q SecretNotFound ||
-		die "missing Secret: phase $p"
-	log "a missing credential Secret fails with SecretNotFound"
+	kubectl -n "$NS" wait swiftsandbox/nosecret --timeout=60s \
+		--for=jsonpath='{.status.conditions[?(@.type=="Resolved")].reason}'=SecretNotFound >/dev/null ||
+		die "missing Secret: $(kubectl -n "$NS" get swiftsandbox nosecret -o jsonpath='{.status}')"
+	[ "$(phase nosecret)" = Pending ] && [ -z "$(pod_of nosecret)" ] || die "missing Secret: phase $(phase nosecret), pod $(pod_of nosecret)"
+	log "a missing credential Secret keeps the sandbox Pending (SecretNotFound), no launcher"
 	log "PASS: the guest holds only the placeholder; the proxy sends the real value"
 }
 
