@@ -196,7 +196,11 @@ func applyEgressProxyReady(sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) {
 	}
 	restarts := ""
 	if cs.RestartCount > 0 {
-		restarts = fmt.Sprintf(" (restarted %d times", cs.RestartCount)
+		times := "times"
+		if cs.RestartCount == 1 {
+			times = "time"
+		}
+		restarts = fmt.Sprintf(" (restarted %d %s", cs.RestartCount, times)
 		if t := cs.LastTerminationState.Terminated; t != nil {
 			restarts += fmt.Sprintf(", last exit %d %s", t.ExitCode, t.Reason)
 		}

@@ -381,6 +381,7 @@ func TestApplyEgressProxyReady(t *testing.T) {
 		{"broker", "broker", nil, metav1.ConditionTrue, "Listening", "broker"},
 		{"proxy running", "proxy", proxyStatus(running, 0), metav1.ConditionTrue, "Listening", "proxy container listens"},
 		{"proxy restarted", "proxy", proxyStatus(running, 2), metav1.ConditionTrue, "Listening", "restarted 2 times, last exit 1 Error"},
+		{"proxy restarted once", "proxy", proxyStatus(running, 1), metav1.ConditionTrue, "Listening", "restarted 1 time, last exit"},
 		{"proxy crash looping", "proxy", proxyStatus(corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}, 3),
 			metav1.ConditionFalse, "EgressProxyNotRunning", "waiting: CrashLoopBackOff (restarted 3 times"},
 		{"proxy exited", "proxy", proxyStatus(corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled"}}, 0),
