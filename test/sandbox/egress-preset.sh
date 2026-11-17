@@ -63,6 +63,8 @@ probe_script() {
 f=0
 empty=$(printf '' | md5sum)
 res() { if [ "$1" = "$2" ]; then echo "PROBE-OK   $3 $1"; else echo "PROBE-FAIL $3 got $1, want $2"; f=$((f+1)); fi; }
+# code NAME WANT URL: the HTTP status (000: no response).
+code() { g=$(curl -s -m 8 -o /dev/null -w '%{http_code}' "$3"); res "$g" "$2" "$1"; }
 http() { n=$1; w=$2; shift 2; if curl -sS -m 8 -o /dev/null "$@" 2>/dev/null; then g=reach; else g=block; fi; res $g $w "$n"; }
 # spoof NAME URL HOST IP: the response for URL is the same whether HOST
 # resolves normally or is forced to IP, so the proxy went to HOST's address.
@@ -137,7 +139,9 @@ EOF
 	cluster_ip=$(kubectl get service kubernetes -n default -o jsonpath='{.spec.clusterIP}')
 	other_ip=$(getent ahostsv4 "$OTHER_HOST" | awk 'NR==1{print $1}')
 	[ -n "$other_ip" ] || die "cannot resolve $OTHER_HOST here"
-	guarded="http metadata block http://169.254.169.254/
+	# -f: on port 80 Envoy itself answers a Host it does not allow with 403.
+	guarded="http metadata block -f http://169.254.169.254/
+code metadata-envoy-403 403 http://169.254.169.254/
 http apiserver-clusterip block -k https://$cluster_ip/"
 	for n in $nodes; do guarded+="
 http node-kubelet-$n block -k https://$n:10250/"; done
