@@ -55,16 +55,6 @@ cleanup() {
 	log "deleted namespace $NS"
 }
 
-finished() {
-	local deadline=$((SECONDS + TIMEOUT)) phase
-	while :; do
-		phase=$(kubectl -n "$NS" get swiftsandbox "$1" -o jsonpath='{.status.phase}')
-		case "$phase" in Completed|Failed) echo "$phase"; return ;; esac
-		[ "$SECONDS" -lt "$deadline" ] || die "sandbox $1 still $phase after ${TIMEOUT}s"
-		sleep 1
-	done
-}
-
 # sds NAME: an SDS reference to the SPIRE agent ("default" is the
 # workload's SVID, "ROOTCA" the trust bundle).
 sds() {
@@ -192,20 +182,26 @@ $2
 $3
 $(network "$4" target)
   command: [sh, -c]
-  args: ['for i in 1 2 3 4 5; do c=\$(curl -s -m 5 -o /dev/null -w "%{http_code}" http://$4:8443/) || true; [ "\$c" = 000 ] || break; sleep 2; done; echo "SPIFFE-STATUS \$c"']
+  args: ['for i in 1 2 3 4 5; do c=\$(curl -s -m 5 -o /dev/null -w "%{http_code}" http://$4:8443/) || true; [ "\$c" = 000 ] || break; sleep 2; done; echo "SPIFFE-STATUS \$c"; sleep 300']
 EOF
 }
 
-# run NAME WANT IDENTITY EXTRA TARGET_IP
+# run NAME WANT IDENTITY EXTRA TARGET_IP. The output is read while the
+# workload still runs: a warm checkout's slot pod is deleted once it ends.
 run() {
 	kubectl -n "$NS" delete swiftsandbox "$1" --ignore-not-found --wait=true >/dev/null
 	sandbox "$1" "$3" "$4" "$5"
-	local phase got
-	phase=$(finished "$1")
-	got=$(kubectl -n "$NS" logs "$1" -c console 2>&1 | sed -n 's/.*SPIFFE-STATUS \([0-9]*\).*/\1/p' | tail -1)
-	[ -n "$got" ] || die "sandbox $1 $phase with no output: $(kubectl -n "$NS" get swiftsandbox "$1" -o jsonpath='{.status.reason}: {.status.message}')"
+	local deadline=$((SECONDS + TIMEOUT)) pod got="" phase
+	while [ -z "$got" ]; do
+		phase=$(kubectl -n "$NS" get swiftsandbox "$1" -o jsonpath='{.status.phase}')
+		case "$phase" in Failed|Completed) die "sandbox $1 $phase before any output: $(kubectl -n "$NS" get swiftsandbox "$1" -o jsonpath='{.status.reason}: {.status.message}')" ;; esac
+		[ "$SECONDS" -lt "$deadline" ] || die "sandbox $1 printed nothing after ${TIMEOUT}s ($phase)"
+		pod=$(kubectl -n "$NS" get swiftsandbox "$1" -o jsonpath='{.status.podRef}')
+		[ -z "$pod" ] || got=$(kubectl -n "$NS" logs "$pod" -c console 2>/dev/null | sed -n 's/.*SPIFFE-STATUS \([0-9]*\).*/\1/p' | tail -1 || true)
+		[ -n "$got" ] || sleep 1
+	done
 	[ "$got" = "$2" ] || die "sandbox $1: the target answered $got, want $2"
-	log "$1: the target answered $got"
+	log "$1: the target answered $got (launcher $pod)"
 }
 
 spiffe_id() { kubectl -n "$NS" get swiftsandbox "$1" -o jsonpath='{.status.identity.spiffeID}'; }
@@ -301,17 +297,15 @@ $(network "$ip" target)
 EOF
 	kubectl -n "$NS" wait --for=jsonpath='{.status.phase}'=Ready swiftsandboxpool/agents --timeout="${TIMEOUT}s" >/dev/null ||
 		die "pool agents has no ready slot: $(kubectl -n "$NS" get swiftsandboxpool agents -o jsonpath='{.status.conditions}')"
-	local slot t0 took
-	slot=$(kubectl -n "$NS" get pods -l sandbox.kubeswift.io/pool=agents,sandbox.kubeswift.io/slot-state=warm -o jsonpath='{.items[0].metadata.labels.sandbox\.kubeswift\.io/slot}')
+	local t0 took slot
 	t0=$SECONDS
 	run checkout 200 "$on" "  poolRef: {name: agents}" "$ip"
 	took=$((SECONDS - t0))
-	local claimed
-	claimed=$(kubectl -n "$NS" get pods -l sandbox.kubeswift.io/sandbox=checkout -o jsonpath='{.items[0].metadata.labels.sandbox\.kubeswift\.io/slot}')
-	[ -n "$claimed" ] || die "checkout did not run on a warm slot: $(kubectl -n "$NS" get swiftsandbox checkout -o jsonpath='{.status.conditions}')"
-	[ "$claimed" = "$slot" ] || log "checkout claimed slot $claimed (the warm one seen first was $slot)"
-	[ "$(spiffe_id checkout)" = "spiffe://$TRUST_DOMAIN/ns/$NS/pool/agents/slot/$claimed" ] || die "checkout: status.identity.spiffeID is '$(spiffe_id checkout)'"
-	log "checkout: warm slot $claimed, status.identity.spiffeID $(spiffe_id checkout), create to Completed ${took}s"
+	slot=$(kubectl -n "$NS" get swiftsandbox checkout -o jsonpath='{.status.podRef}')
+	case "$slot" in agents-*) ;; *) die "checkout did not run on a warm slot (launcher '$slot'): $(kubectl -n "$NS" get swiftsandbox checkout -o jsonpath='{.status.conditions}')" ;; esac
+	[ "$(spiffe_id checkout)" = "spiffe://$TRUST_DOMAIN/ns/$NS/pool/agents/slot/$slot" ] || die "checkout: status.identity.spiffeID is '$(spiffe_id checkout)'"
+	log "checkout: warm slot $slot, status.identity.spiffeID $(spiffe_id checkout), create to answer ${took}s"
+	kubectl -n "$NS" delete swiftsandbox --all --wait=false >/dev/null
 
 	log "PASS: the egress proxy proves the sandbox's SPIFFE ID to the upstream; the guest never holds it"
 }
