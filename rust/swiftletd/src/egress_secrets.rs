@@ -418,6 +418,73 @@ const IMAGE_BUNDLES: &[&str] = &[
     "/etc/ssl/ca-bundle.pem",
 ];
 
+/// Where a warm checkout stages its CA files and bundle copies in the slot's
+/// staging share. Artifact names are DNS labels without "--" next to a
+/// prefix like this one's, and the action refuses a clash anyway.
+pub const STAGE_PREFIX: &str = "ks--egress";
+
+/// A warm checkout's trust material, through the staging share instead of
+/// files in the exec request (the guest agent reads at most 64 KiB per
+/// request, and an image's bundle alone is larger). Returns the mounts: the
+/// directory holding spec.ca_cert and spec.ca_bundle, and, for each image
+/// bundle, a copy of its directory (files, and symlinks as symlinks) with the
+/// CA appended to the bundle, bound read-only over the original. The guest
+/// then sees what a cold sandbox sees in its writable layer. A bundle whose
+/// directory has a subdirectory is skipped (the copy would hide it).
+pub fn stage_warm(
+    spec: &Spec,
+    ca_pem: &str,
+    rootfs: &dyn crate::rootfs_read::RootfsReader,
+    stage: &Path,
+) -> Result<Vec<swift_vsock_client::ExecMount>, String> {
+    if let Ok(rd) = std::fs::read_dir(stage) {
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().starts_with(STAGE_PREFIX) {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
+    let files = guest_files(spec, ca_pem, rootfs);
+    let parent = |p: &str| -> String {
+        Path::new(p)
+            .parent()
+            .and_then(Path::to_str)
+            .unwrap_or("/")
+            .to_string()
+    };
+    let own_dir = parent(&spec.ca_cert);
+    let mut dirs: BTreeMap<String, Vec<&crate::intent::GuestFile>> = BTreeMap::new();
+    for f in &files {
+        dirs.entry(parent(&f.path)).or_default().push(f);
+    }
+    let mut mounts = Vec::new();
+    for (i, (dir, fs)) in dirs.iter().enumerate() {
+        let name = format!("{}-{}", STAGE_PREFIX, i);
+        let dest = stage.join(&name);
+        if *dir == own_dir {
+            std::fs::create_dir_all(&dest).map_err(|e| format!("{}: {}", dest.display(), e))?;
+        } else if let Err(e) = rootfs.copy_dir(dir, &dest) {
+            log::warn!("egress_ca_bundle_skipped dir={} reason={}", dir, e);
+            let _ = std::fs::remove_dir_all(&dest);
+            continue;
+        }
+        for f in fs {
+            let to = dest.join(Path::new(&f.path).file_name().unwrap_or_default());
+            let _ = std::fs::remove_file(&to);
+            std::fs::write(&to, &f.data).map_err(|e| format!("{}: {}", to.display(), e))?;
+            std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o444))
+                .map_err(|e| e.to_string())?;
+        }
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| e.to_string())?;
+        mounts.push(swift_vsock_client::ExecMount {
+            name,
+            path: dir.clone(),
+        });
+    }
+    Ok(mounts)
+}
+
 /// The guest files that make the workload trust the intercept CA: the CA
 /// certificate, the bundle at spec.ca_bundle, and each CA bundle the image
 /// has (resolved through its symlinks) with the CA appended. They land in the
@@ -627,6 +694,21 @@ mod tests {
         fn read(&self, p: &str) -> Option<Vec<u8>> {
             self.0.get(p).map(|e| e.1.clone())
         }
+        fn copy_dir(&self, dir: &str, dest: &Path) -> Result<(), String> {
+            std::fs::create_dir(dest).map_err(|e| e.to_string())?;
+            for (p, (link, data)) in &self.0 {
+                if Path::new(p).parent().and_then(Path::to_str) != Some(dir) {
+                    continue;
+                }
+                let to = dest.join(Path::new(p).file_name().unwrap());
+                match link {
+                    Some(t) => std::os::unix::fs::symlink(t, to).unwrap(),
+                    None if !data.is_empty() => std::fs::write(to, data).unwrap(),
+                    None => {}
+                }
+            }
+            Ok(())
+        }
     }
 
     #[test]
@@ -654,5 +736,49 @@ mod tests {
         assert_eq!(by["/etc/kubeswift/egress-ca-bundle.crt"], "ROOTS\nCA\n");
         // The symlink resolves to the same file: written once.
         assert_eq!(files.len(), 3, "{:?}", by.keys());
+    }
+
+    #[test]
+    fn stages_the_bundle_directories_for_a_warm_checkout() {
+        let mut m = BTreeMap::new();
+        m.insert("/etc".to_string(), (None, vec![]));
+        m.insert("/etc/ssl".to_string(), (None, vec![]));
+        m.insert("/etc/ssl/certs".to_string(), (None, vec![]));
+        m.insert(
+            "/etc/ssl/certs/ca-certificates.crt".to_string(),
+            (None, b"ROOTS".to_vec()),
+        );
+        m.insert(
+            "/etc/ssl/certs/abcd.0".to_string(),
+            (Some("ca-certificates.crt".into()), vec![]),
+        );
+        let mut s = spec(Path::new("/x"));
+        s.ca_cert = "/etc/kubeswift/egress/ca.crt".into();
+        s.ca_bundle = "/etc/kubeswift/egress/ca-bundle.crt".into();
+        let stage = tempfile::tempdir().unwrap();
+        // A previous checkout's leftovers go.
+        std::fs::create_dir(stage.path().join(format!("{}-9", STAGE_PREFIX))).unwrap();
+        let mounts = stage_warm(&s, "CA\n", &Fake(m), stage.path()).unwrap();
+        let by: BTreeMap<_, _> = mounts
+            .iter()
+            .map(|m| (m.path.clone(), stage.path().join(&m.name)))
+            .collect();
+        assert_eq!(by.len(), 2, "{:?}", by);
+        let own = &by["/etc/kubeswift/egress"];
+        assert_eq!(std::fs::read_to_string(own.join("ca.crt")).unwrap(), "CA\n");
+        assert_eq!(
+            std::fs::read_to_string(own.join("ca-bundle.crt")).unwrap(),
+            "ROOTS\nCA\n"
+        );
+        let certs = &by["/etc/ssl/certs"];
+        assert_eq!(
+            std::fs::read_to_string(certs.join("ca-certificates.crt")).unwrap(),
+            "ROOTS\nCA\n"
+        );
+        assert_eq!(
+            std::fs::read_link(certs.join("abcd.0")).unwrap(),
+            PathBuf::from("ca-certificates.crt")
+        );
+        assert!(!stage.path().join(format!("{}-9", STAGE_PREFIX)).exists());
     }
 }

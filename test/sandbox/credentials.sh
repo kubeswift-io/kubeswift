@@ -97,7 +97,7 @@ case "\$body" in *'"authenticated":true'*) ok "credential accepted (placeholder 
 code=\$(curl -s -o /dev/null -w '%{http_code}' -m 10 https://$DEST/basic-auth -H "Authorization: Basic \$PM_AUTH" -H "Host: $OTHER")
 [ "\$code" = 403 ] && ok "another Host refused (403)" || bad "another Host: \$code"
 curl -s -o /dev/null -m 10 https://$OTHER/ && ok "passthrough host verifies with the image bundle" || bad "passthrough host"
-last=\$(grep -v -e '-----' /etc/kubeswift/egress-ca.crt | tail -1)
+last=\$(grep -v -e '-----' /etc/kubeswift/egress/ca.crt | tail -1)
 if [ -n "\$last" ] && tail -c 2048 /etc/ssl/certs/ca-certificates.crt | grep -qF "\$last"; then ok "image bundle ends with the sandbox CA"; else bad "image bundle"; fi
 echo "PROBES-DONE \$f"
 EOF

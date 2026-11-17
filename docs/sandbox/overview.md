@@ -402,10 +402,12 @@ How it works:
   proxy and keeps the CA's key in memory; it is never written to a file. The
   guest trusts the CA: it is appended to the image's CA bundle (the files
   under `/etc/ssl` and `/etc/pki` the image has) and written to
-  `/etc/kubeswift/egress-ca.crt` and `/etc/kubeswift/egress-ca-bundle.crt`, and
+  `/etc/kubeswift/egress/ca.crt` and `/etc/kubeswift/egress/ca-bundle.crt`, and
   `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE` and
-  `NODE_EXTRA_CA_CERTS` point at them. The image's own files are not changed:
-  the copies live in the guest's writable layer.
+  `NODE_EXTRA_CA_CERTS` point at them. The image itself is not changed: a cold
+  sandbox gets the copies in its writable layer; a warm checkout gets them as
+  read-only binds of copied directories (a bundle whose directory has a
+  subdirectory is left alone there, and the variables still work).
 - The value is read with the launcher's own service account and written only
   to a memory volume the proxy reads. It never enters the guest: the
   acceptance test (`make sandbox-credentials-test`) greps the guest's whole
@@ -431,8 +433,8 @@ Requirements and failures:
 - A missing Secret or key keeps the sandbox from starting (`SecretNotFound`,
   `SecretKeyNotFound`); an empty value or one with a line break fails it with
   `SecretUnavailable`.
-- The sandbox kernel's bridge must write files (kernels/sandbox 6.6.14 or
-  later).
+- The sandbox kernel's bridge must write files, and for warm pools mount at
+  checkout (kernels/sandbox 6.6.15, gpu-sandbox 6.6.4 or later).
 
 ### Exposing ports
 

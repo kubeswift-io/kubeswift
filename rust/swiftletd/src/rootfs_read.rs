@@ -4,7 +4,7 @@
 //! confined to the rootfs, the way the guest would see them; nothing follows
 //! a link on the host. Used to find the image's CA bundle (egress_secrets.rs).
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
@@ -23,6 +23,10 @@ pub enum Entry {
 pub trait RootfsReader: Send + Sync {
     fn lstat(&self, path: &str) -> Entry;
     fn read(&self, path: &str) -> Option<Vec<u8>>;
+    /// Copies the directory `dir` (one level: regular files, and symlinks as
+    /// symlinks) to `dest`, which must not exist. Refuses a directory with a
+    /// subdirectory: a copy bound over the original would hide it.
+    fn copy_dir(&self, dir: &str, dest: &Path) -> Result<(), String>;
 
     /// The path with every symlink resolved inside the rootfs, when it ends
     /// at a regular file.
@@ -121,7 +125,50 @@ fn parse_stat(out: &str) -> Entry {
     }
 }
 
+/// Refuses a copied directory that holds a subdirectory.
+fn flat(dest: &Path) -> Result<(), String> {
+    let rd = std::fs::read_dir(dest).map_err(|e| format!("{}: {}", dest.display(), e))?;
+    for e in rd.flatten() {
+        if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            return Err(format!(
+                "{} has a subdirectory ({})",
+                dest.display(),
+                e.file_name().to_string_lossy()
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl RootfsReader for Ext4 {
+    fn copy_dir(&self, dir: &str, dest: &Path) -> Result<(), String> {
+        if !plain(dir) || dir == "/" {
+            return Err(format!("{} cannot be copied", dir));
+        }
+        let parent = dest.with_extension("dump");
+        let _ = std::fs::remove_dir_all(&parent);
+        std::fs::create_dir_all(&parent).map_err(|e| format!("{}: {}", parent.display(), e))?;
+        let request = format!("rdump {} {}", dir, parent.display());
+        let ok = Command::new("debugfs")
+            .arg("-R")
+            .arg(&request)
+            .arg(&self.image)
+            .env("DEBUGFS_PAGER", "__none__")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        let base = Path::new(dir).file_name().map(|n| parent.join(n));
+        let result = match base {
+            Some(b) if ok && b.is_dir() => {
+                std::fs::rename(&b, dest).map_err(|e| format!("{}: {}", dest.display(), e))
+            }
+            _ => Err(format!("debugfs could not copy {}", dir)),
+        };
+        let _ = std::fs::remove_dir_all(&parent);
+        result?;
+        flat(dest)
+    }
+
     fn lstat(&self, path: &str) -> Entry {
         if !plain(path) {
             return Entry::Missing;
@@ -155,6 +202,31 @@ impl Tree {
 }
 
 impl RootfsReader for Tree {
+    fn copy_dir(&self, dir: &str, dest: &Path) -> Result<(), String> {
+        if self.lstat(dir) != Entry::Dir {
+            return Err(format!("{} is not a directory", dir));
+        }
+        std::fs::create_dir(dest).map_err(|e| format!("{}: {}", dest.display(), e))?;
+        let rd = std::fs::read_dir(self.host(dir)).map_err(|e| format!("{}: {}", dir, e))?;
+        for e in rd.flatten() {
+            let t = e.file_type().map_err(|e| e.to_string())?;
+            let to = dest.join(e.file_name());
+            if t.is_symlink() {
+                let target = std::fs::read_link(e.path()).map_err(|e| e.to_string())?;
+                std::os::unix::fs::symlink(target, &to).map_err(|e| e.to_string())?;
+            } else if t.is_file() {
+                std::fs::copy(e.path(), &to).map_err(|e| e.to_string())?;
+            } else if t.is_dir() {
+                return Err(format!(
+                    "{} has a subdirectory ({})",
+                    dir,
+                    e.file_name().to_string_lossy()
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn lstat(&self, path: &str) -> Entry {
         match std::fs::symlink_metadata(self.host(path)) {
             Ok(m) if m.file_type().is_symlink() => std::fs::read_link(self.host(path))
@@ -178,6 +250,9 @@ impl RootfsReader for Tree {
 pub struct Empty;
 
 impl RootfsReader for Empty {
+    fn copy_dir(&self, dir: &str, _: &Path) -> Result<(), String> {
+        Err(format!("no rootfs to copy {} from", dir))
+    }
     fn lstat(&self, _: &str) -> Entry {
         Entry::Missing
     }
@@ -274,6 +349,14 @@ mod tests {
         );
         assert_eq!(t.resolve("/etc/ssl/escape"), None);
         assert_eq!(t.resolve("/etc/ssl/certs/missing.crt"), None);
+        let dest = d.path().join("copy");
+        std::os::unix::fs::symlink("ca-bundle.crt", r.join("etc/pki/tls/certs/abcd.0")).unwrap();
+        t.copy_dir("/etc/pki/tls/certs", &dest).unwrap();
+        assert_eq!(
+            std::fs::read_link(dest.join("abcd.0")).unwrap(),
+            PathBuf::from("ca-bundle.crt")
+        );
+        assert!(t.copy_dir("/etc/pki", &d.path().join("copy2")).is_err());
     }
 
     #[test]
@@ -312,5 +395,13 @@ mod tests {
             b"ROOTS\n"
         );
         assert_eq!(e.resolve("/etc/pki/tls/certs/ca-bundle.crt"), None);
+        let dest = d.path().join("copy");
+        e.copy_dir("/etc/ssl/certs", &dest).unwrap();
+        assert_eq!(
+            std::fs::read(dest.join("ca-certificates.crt")).unwrap(),
+            b"ROOTS\n"
+        );
+        // A directory with a subdirectory is refused.
+        assert!(e.copy_dir("/etc/ssl", &d.path().join("copy2")).is_err());
     }
 }
