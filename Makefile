@@ -48,7 +48,7 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
 	build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-snapshot-oras-image build-dra-driver-image build-gateway-image build-sandbox-materialize-image generate deploy deploy-with-webhook deploy-with-mtls deploy-with-webhook-and-mtls undeploy load-images smoke-test smoke-test-cleanup \
 	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
-	b0-cross-node-tcp-test b0-cross-node-tcp-test-cleanup sandbox-tcp-receive-test sandbox-tcp-receive-test-cleanup sandbox-warm-checkout-test sandbox-warm-checkout-test-cleanup sandbox-hardening-test sandbox-hardening-test-cleanup sandbox-gpu-test sandbox-gpu-test-cleanup sandbox-egress-restricted-test sandbox-egress-restricted-test-cleanup sandbox-egress-proxied-test sandbox-egress-proxied-test-cleanup e2e-tests \
+	b0-cross-node-tcp-test b0-cross-node-tcp-test-cleanup sandbox-tcp-receive-test sandbox-tcp-receive-test-cleanup sandbox-warm-checkout-test sandbox-warm-checkout-test-cleanup sandbox-hardening-test sandbox-hardening-test-cleanup sandbox-gpu-test sandbox-gpu-test-cleanup sandbox-egress-restricted-test sandbox-egress-restricted-test-cleanup sandbox-egress-proxied-test sandbox-egress-proxied-test-cleanup sandbox-egress-proxy-test sandbox-egress-proxy-test-cleanup e2e-tests \
 	verify-e2e-scripts verify-kustomize-sync verify-base-image-pins \
 	preflight help push-images package-chart push-chart release-dev release-rc release-stable print-version
 
@@ -449,6 +449,17 @@ sandbox-egress-proxied-test:
 
 sandbox-egress-proxied-test-cleanup:
 	@test/sandbox/egress-proxied.sh cleanup
+
+# A proxied sandbox with its own proxy container (Envoy): the proxy decides
+# the guest's egress, the kernel keeps the proxy off nodes, the API server and
+# private addresses. Needs a KVM node, internet egress, and the controller
+# allowing the Envoy and busybox images (sandboxMaterialize.egressProxyImages).
+# Not part of e2e-tests (needs that chart value).
+sandbox-egress-proxy-test:
+	@test/sandbox/egress-proxy.sh validate
+
+sandbox-egress-proxy-test-cleanup:
+	@test/sandbox/egress-proxy.sh cleanup
 
 # Every cluster-side e2e in sequence. Each script accepts --no-cleanup;
 # this target opts out so the cluster is clean between scripts.
