@@ -61,9 +61,19 @@ jobs:
           IMAGES="controller-manager gpu-discovery snapshot-s3 snapshot-oras
                   kubeswift-dra-driver sandbox-materialize swiftletd
                   migration-stunnel kubeswift-gateway"
+          # egress-conformance is published from the first release after
+          # v0.25.1. At an older tag it does not exist, which is reported, not
+          # failed; at any tag that has it, it must verify like the others.
+          OPTIONAL="egress-conformance"
           fail=0
-          for img in $IMAGES; do
+          count=0
+          for img in $IMAGES $OPTIONAL; do
             ref="${IMAGE_PREFIX}/${img}:${{ inputs.tag }}"
+            if [[ " $OPTIONAL " == *" $img "* ]] && ! docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+              echo "::notice::$img is not published at ${{ inputs.tag }} (added after v0.25.1)"
+              continue
+            fi
+            count=$((count + 1))
 
             # Verify against the release workflow's own OIDC identity, not
             # "anything Sigstore ever signed". release-(stable|rc) because both
@@ -90,4 +100,4 @@ jobs:
             printf '  %-24s signature=%-8s attestation=%s\n' "$img" "$sig" "$att"
           done
           [ "$fail" -eq 0 ] || { echo "::error::${{ inputs.tag }} did not fully verify"; exit 1; }
-          echo "all 9 images verified for ${{ inputs.tag }}"
+          echo "all $count images verified for ${{ inputs.tag }}"

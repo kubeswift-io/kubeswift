@@ -226,6 +226,26 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Egress proxy conformance: driver and guest in one image. IMAGE_REF
+      # makes the image name itself as the guest the suite boots.
+      - name: Build and push egress-conformance
+        id: build-egress-conformance
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./images/egress-conformance/Containerfile
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/egress-conformance:${{ steps.version.outputs.tag }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            GIT_COMMIT=${{ steps.version.outputs.git_commit }}
+            IMAGE_REF=${{ env.IMAGE_PREFIX }}/egress-conformance:${{ steps.version.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Install cosign
         uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:
@@ -245,7 +265,7 @@ jobs:
       #   cosign verify <image>@<digest> \
       #     --certificate-identity-regexp '^https://github\.com/kubeswift-io/kubeswift/\.github/workflows/release-(stable|rc)\.yaml@refs/tags/v.*$' \
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
-      # The nine refs, digest-pinned, shared by the sign and verify steps below
+      # The ten refs, digest-pinned, shared by the sign and verify steps below
       # so the two can never drift. sandbox-materialize used to be missing from
       # the sign list — eight of nine were signed and nothing said so.
       - name: Collect image refs
@@ -262,6 +282,7 @@ jobs:
             echo "${{ env.IMAGE_PREFIX }}/swiftletd@${{ steps.build-swiftletd.outputs.digest }}"
             echo "${{ env.IMAGE_PREFIX }}/migration-stunnel@${{ steps.build-migration-stunnel.outputs.digest }}"
             echo "${{ env.IMAGE_PREFIX }}/kubeswift-gateway@${{ steps.build-gateway.outputs.digest }}"
+            echo "${{ env.IMAGE_PREFIX }}/egress-conformance@${{ steps.build-egress-conformance.outputs.digest }}"
             echo EOF
           } >> "$GITHUB_OUTPUT"
 
@@ -463,7 +484,7 @@ jobs:
 
           ## Images
 
-          All nine are signed, and verified by the release workflow before publishing.
+          All ten are signed, and verified by the release workflow before publishing.
 
           - `ghcr.io/kubeswift-io/kubeswift/controller-manager:${{ needs.build-and-push.outputs.tag }}`
           - `ghcr.io/kubeswift-io/kubeswift/swiftletd:${{ needs.build-and-push.outputs.tag }}`
@@ -474,6 +495,7 @@ jobs:
           - `ghcr.io/kubeswift-io/kubeswift/sandbox-materialize:${{ needs.build-and-push.outputs.tag }}`
           - `ghcr.io/kubeswift-io/kubeswift/snapshot-s3:${{ needs.build-and-push.outputs.tag }}`
           - `ghcr.io/kubeswift-io/kubeswift/snapshot-oras:${{ needs.build-and-push.outputs.tag }}`
+          - `ghcr.io/kubeswift-io/kubeswift/egress-conformance:${{ needs.build-and-push.outputs.tag }}` (egress proxy conformance suite)
 
           ## swiftctl
 

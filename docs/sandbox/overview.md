@@ -379,7 +379,7 @@ sandboxMaterialize:
     envoy:
       image: docker.io/envoyproxy/envoy:v1.36.2
       args: ["-c", "/etc/kubeswift/egress-proxy/envoy.json", "--disable-hot-restart"]
-      translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:v0.2.0
+      translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:v0.3.0
       translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/envoy.json", "--admin-port", "15000"]
       listeners: {transparent: 15006}
       readiness: {httpGet: {port: 15000, path: /certs}}
@@ -399,6 +399,34 @@ sandboxMaterialize:
   HTTP on 80, and Envoy connects to the address the name resolves to (not the
   address the guest asked for), so a spoofed server name cannot reach another
   host.
+
+##### Checking a proxy: the conformance suite
+
+`ghcr.io/kubeswift-io/kubeswift/egress-conformance` (one tag per release)
+checks that a proxy holds the `proxied` guarantees. It creates sandboxes
+against the built-in broker or a preset and probes, as root inside the guest:
+allowed names by TLS server name and `Host`; everything else refused, including
+other names, other ports, DNS through any other resolver or as a TXT query,
+UDP, ICMP, IPv6, the metadata endpoint, node and API server addresses (also
+through a Service in front of them, and as `cidr` allow rules the kernel
+drops); and a spoofed server name or `Host` never reaching another address. It
+then checks `EgressProxyReady`, the egress audit and a warm checkout. The same
+image is the guest the sandboxes boot. With a preset, the in-cluster
+destinations it allows are also listed as `proxy.upstreams`, since a proxy
+reaches private addresses only through those.
+
+```bash
+docker run --rm -v "$KUBECONFIG:/kubeconfig:ro" -e KUBECONFIG=/kubeconfig \
+  -e PROXY=envoy ghcr.io/kubeswift-io/kubeswift/egress-conformance:<version>
+```
+
+`PROXY` is `broker` (default) or a preset name. `CREDENTIALS=1` adds the
+credentials suite (a preset with `readiness`), `SPIFFE=1` the SPIFFE suite
+(SPIRE and `sandboxMaterialize.spiffe`). It needs a node labeled
+`kubeswift.io/kernel-node=true` and internet egress from pods; it works in
+namespace `egress-conformance` (`... cleanup` deletes it). From a checkout:
+`test/conformance/egress/egress-conformance.sh validate` with
+`IMAGE=<the egress-conformance image>`.
 
 #### Egress credentials
 

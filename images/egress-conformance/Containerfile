@@ -1,0 +1,36 @@
+# KubeSwift egress proxy conformance.
+#
+# One image, two uses: the driver (test/conformance/egress) that creates
+# sandboxes against the built-in broker or a proxy preset, and the guest those
+# sandboxes boot. As the guest it runs the probes as root inside the microVM,
+# as a hostile workload would, so it carries the tools for every bypass the
+# suite tries (curl, dig, nc, ping, ntpd).
+#
+#   docker run --rm -v "$KUBECONFIG:/kubeconfig:ro" -e KUBECONFIG=/kubeconfig \
+#     -e PROXY=envoy ghcr.io/kubeswift-io/kubeswift/egress-conformance:<version> validate
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
+
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
+LABEL org.opencontainers.image.title="kubeswift-egress-conformance"
+LABEL org.opencontainers.image.description="Egress proxy conformance suite for KubeSwift sandboxes (driver and guest)"
+
+# apk upgrade first: see images/migration-stunnel/Containerfile.
+RUN apk upgrade --no-cache && \
+    apk add --no-cache bash bind-tools curl iputils-ping jq kubectl netcat-openbsd
+
+COPY test/conformance/egress/ /conformance/
+COPY test/sandbox/credentials.sh test/sandbox/spiffe.sh /conformance/suites/
+RUN chmod 0755 /conformance/*.sh /conformance/suites/*.sh
+
+# The guest image of the suite is this image.
+ARG IMAGE_REF=ghcr.io/kubeswift-io/kubeswift/egress-conformance:dev
+ENV CONFORMANCE_IMAGE=${IMAGE_REF}
+
+# Root on purpose: as a guest the probes need raw sockets (ping) and the
+# clock (ntpd); as a driver it only talks to the API server.
+WORKDIR /conformance
+ENTRYPOINT ["/conformance/egress-conformance.sh"]
+CMD ["validate"]
