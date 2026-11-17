@@ -312,6 +312,8 @@ echo PROBES-DONE; sleep 30")"
 	printf '%s\n' "$out" | grep -v PROBES-DONE | sed 's/^/   [http-listener] /'
 	grep -q '^PROBE-FAIL' <<<"$out" && die "http-listener: egress not as expected"
 	hip=$(kubectl -n "$NS" get pod http-listener -o jsonpath='{.status.podIP}')
+	# Positive control: nc from the target pod does reach an open port.
+	kubectl -n "$NS" exec target -- nc -z -w 3 "$target_svc" 8080 || die "nc from the target pod cannot reach its own Service: the next check would prove nothing"
 	if kubectl -n "$NS" exec target -- nc -z -w 3 "$hip" 15002 2>/dev/null; then
 		die "http-listener: another pod reached the proxy's HTTP listener at $hip:15002"
 	fi
