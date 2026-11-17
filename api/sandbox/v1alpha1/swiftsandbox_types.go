@@ -912,6 +912,16 @@ type SandboxEgressProxyListeners struct {
 	// +kubebuilder:validation:Maximum=65535
 	// +optional
 	HTTP int32 `json:"http,omitempty"`
+
+	// ProxyProtocol is for a proxy that cannot read SO_ORIGINAL_DST: guest
+	// connections then go to a relay in the launcher that connects to
+	// Transparent on 127.0.0.1 and starts each connection with a PROXY
+	// protocol header (v1 text or v2 binary) carrying the original
+	// destination. Only the relay reaches Transparent. The proxy must
+	// refuse a connection without the header.
+	// +kubebuilder:validation:Enum=v1;v2
+	// +optional
+	ProxyProtocol string `json:"proxyProtocol,omitempty"`
 }
 
 // SandboxEgressCredential is one secret the proxy adds to requests in place

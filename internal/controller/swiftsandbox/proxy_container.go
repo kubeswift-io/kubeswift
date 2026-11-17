@@ -65,7 +65,7 @@ func resolveProxySpec(n sandboxv1alpha1.SandboxNetwork) *resolvedProxy {
 		}
 		rp.Image, rp.Args = pr.Image, pr.Args
 		rp.TranslatorImage, rp.TranslatorArgs = pr.TranslatorImage, pr.TranslatorArgs
-		rp.Listeners = sandboxv1alpha1.SandboxEgressProxyListeners{Transparent: pr.Listeners.Transparent, DNS: pr.Listeners.DNS, HTTP: pr.Listeners.HTTP}
+		rp.Listeners = sandboxv1alpha1.SandboxEgressProxyListeners{Transparent: pr.Listeners.Transparent, DNS: pr.Listeners.DNS, HTTP: pr.Listeners.HTTP, ProxyProtocol: pr.Listeners.ProxyProtocol}
 		return rp
 	}
 	if spec.Listeners == nil {
@@ -131,10 +131,20 @@ func proxyKey(n sandboxv1alpha1.SandboxNetwork) string {
 
 // intentFeatures are the optional parts of v1 the sandbox's intent file uses.
 func intentFeatures(sb *sandboxv1alpha1.SwiftSandbox) []string {
+	var out []string
 	if froms, hosts := tlsRules(sb); len(froms) > 0 || len(hosts) > 0 {
-		return []string{egressintentv1.FeatureTLSOriginate}
+		out = append(out, egressintentv1.FeatureTLSOriginate)
 	}
-	return nil
+	if p := egressProxy(sb); p != nil && p.Listeners.ProxyProtocol != "" {
+		out = append(out, egressintentv1.FeatureProxyProtocol)
+	}
+	return out
+}
+
+// featureNeed names what in the spec needs an intent feature.
+var featureNeed = map[string]string{
+	egressintentv1.FeatureTLSOriginate:  "spec.network.egress.allow[].tls",
+	egressintentv1.FeatureProxyProtocol: "the proxy's listeners.proxyProtocol",
 }
 
 // intentFeatureVerdict refuses an intent reader that does not declare a
@@ -147,7 +157,7 @@ func intentFeatureVerdict(image string, labels map[string]string, sb *sandboxv1a
 	for _, f := range intentFeatures(sb) {
 		if !have[f] {
 			return reasonEgressIntentUnsupported, "egress proxy image " + image + " does not list " + f + " in its " +
-				egressintentv1.FeaturesLabel + " label, which spec.network.egress.allow[].tls needs"
+				egressintentv1.FeaturesLabel + " label, which " + featureNeed[f] + " needs"
 		}
 	}
 	return "", ""
@@ -166,7 +176,7 @@ func egressIntentJSON(sb *sandboxv1alpha1.SwiftSandbox, ownerKind, ownerName str
 		Allow:      []egressintentv1.Rule{},
 	}
 	if p != nil {
-		in.Listeners = egressintentv1.Listeners{Transparent: p.Listeners.Transparent, DNS: p.Listeners.DNS, HTTP: p.Listeners.HTTP}
+		in.Listeners = egressintentv1.Listeners{Transparent: p.Listeners.Transparent, DNS: p.Listeners.DNS, HTTP: p.Listeners.HTTP, ProxyProtocol: p.Listeners.ProxyProtocol}
 	}
 	for _, r := range sb.Spec.Network.Egress.Allow {
 		if r.Host == "" {

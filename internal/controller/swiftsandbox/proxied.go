@@ -85,7 +85,9 @@ func egressServicesEnv(ns string, n sandboxv1alpha1.SandboxNetwork) string {
 // mode proxied.
 //
 // KUBESWIFT_EGRESS_BROKER_PORT is the transparent listener guest TCP is
-// redirected to: the built-in broker's, or the proxy container's.
+// redirected to: the built-in broker's, the proxy container's, or, for a
+// proxy with listeners.proxyProtocol, the relay's (the proxy's own port is
+// then KUBESWIFT_EGRESS_PROXY_PORT).
 // KUBESWIFT_SANDBOX_EGRESS_ALLOW is what the uid chain lets the broker or
 // proxy reach besides DNS and the public internet: the resolved allowlist
 // for the broker (which enforces it), proxy.upstreams for a proxy (which
@@ -98,6 +100,15 @@ func proxiedEnv(sb *sandboxv1alpha1.SwiftSandbox) []corev1.EnvVar {
 		port = int(p.Listeners.Transparent)
 		allow = egressAllowEnv(proxyUpstreams(sb))
 		extra = append(extra, corev1.EnvVar{Name: "KUBESWIFT_EGRESS_PROXY", Value: "container"})
+		if v := p.Listeners.ProxyProtocol; v != "" {
+			// The guest is redirected to the relay (swiftletd, proxy uid),
+			// which passes each connection to the proxy on loopback with a
+			// PROXY protocol header.
+			port = sandboxwebhook.EgressBrokerPort
+			extra = append(extra,
+				corev1.EnvVar{Name: "KUBESWIFT_EGRESS_PROXY_PORT", Value: strconv.Itoa(int(p.Listeners.Transparent))},
+				corev1.EnvVar{Name: "KUBESWIFT_EGRESS_PROXY_PROTOCOL", Value: v})
+		}
 		if p.Listeners.DNS != 0 {
 			extra = append(extra, corev1.EnvVar{Name: "KUBESWIFT_EGRESS_PROXY_DNS_PORT", Value: strconv.Itoa(int(p.Listeners.DNS))})
 		}

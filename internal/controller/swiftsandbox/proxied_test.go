@@ -1,6 +1,7 @@
 package swiftsandbox
 
 import (
+	"encoding/json"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	egressintentv1 "github.com/kubeswift-io/kubeswift/api/egressintent/v1"
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	sandboxwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsandbox"
 )
@@ -404,5 +406,56 @@ func TestApplyEgressProxyReady(t *testing.T) {
 	applyEgressProxyReady(plain, &corev1.Pod{})
 	if apimeta.FindStatusCondition(plain.Status.Conditions, sandboxv1alpha1.SwiftSandboxConditionEgressProxyReady) != nil {
 		t.Error("EgressProxyReady outside mode proxied")
+	}
+}
+
+// listeners.proxyProtocol: guest TCP goes to the relay on the broker's port,
+// the proxy's own port and the header version reach the launcher, the intent
+// carries proxyProtocol and the reader must list the proxy-protocol feature.
+func TestProxyProtocolRelay(t *testing.T) {
+	p := envoyPreset()
+	p.Listeners.ProxyProtocol = "v2"
+	withPreset(t, p)
+	sb := proxiedSandbox()
+	sb.Spec.Network.Egress.Proxy = &sandboxv1alpha1.SandboxEgressProxy{Preset: "envoy"}
+	env := map[string]string{}
+	for _, e := range proxiedEnv(sb) {
+		env[e.Name] = e.Value
+	}
+	for k, v := range map[string]string{
+		"KUBESWIFT_EGRESS_BROKER_PORT":    "15001",
+		"KUBESWIFT_EGRESS_PROXY_PORT":     "15006",
+		"KUBESWIFT_EGRESS_PROXY_PROTOCOL": "v2",
+		"KUBESWIFT_EGRESS_PROXY":          "container",
+	} {
+		if env[k] != v {
+			t.Errorf("%s = %q, want %q", k, env[k], v)
+		}
+	}
+	js, err := egressIntentJSON(sb, "SwiftSandbox", sb.Name)
+	var in egressintentv1.EgressIntent
+	if err == nil {
+		err = json.Unmarshal([]byte(js), &in)
+	}
+	if err != nil || in.Listeners.ProxyProtocol != "v2" || in.Listeners.Transparent != 15006 {
+		t.Errorf("intent %s, %v: want listeners transparent 15006, proxyProtocol v2", js, err)
+	}
+	v1 := map[string]string{egressintentv1.ImageLabel: "v1"}
+	if r, msg := intentVersionVerdict("t", v1, sb); r != reasonEgressIntentUnsupported || !strings.Contains(msg, "proxy-protocol") {
+		t.Errorf("reader without the feature: %q %q", r, msg)
+	}
+	v1[egressintentv1.FeaturesLabel] = "proxy-protocol"
+	if r, msg := intentVersionVerdict("t", v1, sb); r != "" {
+		t.Errorf("reader with the feature: %q %q", r, msg)
+	}
+
+	// Without proxyProtocol the guest goes straight to the proxy.
+	withPreset(t, envoyPreset())
+	env = map[string]string{}
+	for _, e := range proxiedEnv(sb) {
+		env[e.Name] = e.Value
+	}
+	if env["KUBESWIFT_EGRESS_BROKER_PORT"] != "15006" || env["KUBESWIFT_EGRESS_PROXY_PORT"] != "" || env["KUBESWIFT_EGRESS_PROXY_PROTOCOL"] != "" {
+		t.Errorf("no relay: %v", env)
 	}
 }

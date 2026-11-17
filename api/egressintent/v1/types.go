@@ -48,6 +48,11 @@ const FeaturesLabel = "io.kubeswift.egress-intent.features"
 // plaintext (for a host rule, HTTP, matched by its Host header).
 const FeatureTLSOriginate = "tls-originate"
 
+// FeatureProxyProtocol: Listeners.ProxyProtocol. The proxy reads a PROXY
+// protocol header at the start of every connection on the transparent
+// listener and takes the original destination from it.
+const FeatureProxyProtocol = "proxy-protocol"
+
 // EgressIntent is the whole file.
 type EgressIntent struct {
 	// APIVersion is APIVersion.
@@ -90,8 +95,8 @@ type Owner struct {
 
 // Listeners are TCP ports in the launcher pod's network namespace. The
 // transparent listener must bind all addresses (the guest's connections are
-// redirected to the bridge address, not to loopback); KubeSwift keeps it
-// unreachable from outside the pod.
+// redirected to the bridge address, not to loopback), except with
+// ProxyProtocol; KubeSwift keeps it unreachable from outside the pod.
 type Listeners struct {
 	// Transparent receives every guest TCP connection. The original
 	// destination is read with getsockopt(SO_ORIGINAL_DST).
@@ -101,6 +106,14 @@ type Listeners struct {
 	// HTTP, when set, is an explicit HTTP proxy (CONNECT and absolute-URI
 	// requests); the guest's HTTP_PROXY and HTTPS_PROXY point at it.
 	HTTP int32 `json:"http,omitempty"`
+	// ProxyProtocol, when set ("v1" or "v2"), means the proxy cannot read
+	// SO_ORIGINAL_DST: KubeSwift redirects guest connections to a relay that
+	// connects to Transparent on 127.0.0.1 and starts each connection with a
+	// PROXY protocol header of this version carrying the guest's address and
+	// the original destination. Transparent then only needs to listen on
+	// loopback, and only the relay reaches it. The proxy must require the
+	// header (refuse a connection without one).
+	ProxyProtocol string `json:"proxyProtocol,omitempty"`
 }
 
 // Rule allows one destination. Exactly one of Host and CIDR is set.
