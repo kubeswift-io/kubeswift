@@ -86,9 +86,13 @@ type Listeners struct {
 //
 // Matching: a Host rule matches a connection whose TLS server name, HTTP Host
 // or CONNECT authority equals Host, or, for "*.example.com", ends in
-// ".example.com" (one or more labels). The connection's original destination
-// must also be an address Host resolves to, so a server name alone cannot
-// reach another address. A CIDR rule matches the original destination. When
+// ".example.com" (one or more labels). A server name alone must never reach
+// another address: a proxy either refuses the connection unless its original
+// destination is one of the addresses the name resolves to (KubeSwift's
+// built-in broker), or connects to the name's own address instead of the
+// original destination (a dynamic forward proxy, such as Envoy's). Either
+// way it never connects to an address the name does not resolve to. A CIDR
+// rule matches the original destination, and the proxy connects to it. When
 // Ports is set the destination port must be one of them.
 type Rule struct {
 	// Host is a DNS name, optionally with a leading "*.".
