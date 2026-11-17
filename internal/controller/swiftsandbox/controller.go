@@ -581,6 +581,7 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 		applyMaterializeResult(sb, pod)
 		applyGuestAnnotations(sb, pod)
 		applyEgressProxyReady(sb, pod)
+		setIdentityStatus(sb, pod)
 		apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
 			Type: sandboxv1alpha1.SwiftSandboxConditionGuestRunning, Status: metav1.ConditionTrue,
 			Reason: "GuestRunning", Message: guestRunningMessage(sb), ObservedGeneration: sb.Generation,

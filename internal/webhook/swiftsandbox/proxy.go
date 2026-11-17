@@ -173,8 +173,48 @@ func proxyNotAvailable(n sandboxv1alpha1.SandboxNetwork) string {
 // launcher pod. A proxied sandbox without a proxy cannot expose it.
 const EgressBrokerPort = 15001
 
-// IdentityAvailable is the same switch for spec.identity.spiffe.
-var IdentityAvailable = false
+// SPIFFEConfig is the platform's SPIFFE setup (chart
+// sandboxMaterialize.spiffe), from KUBESWIFT_SANDBOX_SPIFFE. Nil: off, and
+// spec.identity.spiffe Enabled is refused.
+type SPIFFEConfig struct {
+	// TrustDomain of the IDs the chart's ClusterSPIFFEIDs register.
+	TrustDomain string `json:"trustDomain"`
+	// CSIDriver mounts the Workload API socket directory (csi.spiffe.io);
+	// empty uses HostPath instead.
+	CSIDriver string `json:"csiDriver,omitempty"`
+	// HostPath is the node directory holding the agent socket.
+	HostPath string `json:"hostPath,omitempty"`
+	// SocketName is the socket's file name in that directory.
+	SocketName string `json:"socketName"`
+}
+
+// SPIFFE is the platform's SPIFFE setup; nil when off.
+var SPIFFE *SPIFFEConfig
+
+// TLSOriginationAvailable is the switch for spec.network.egress.allow[].tls.
+var TLSOriginationAvailable = false
+
+var trustDomainRe = regexp.MustCompile(`^[a-z0-9._-]{1,255}$`)
+
+// ParseSPIFFE reads KUBESWIFT_SANDBOX_SPIFFE (JSON). Empty is off.
+func ParseSPIFFE(s string) (*SPIFFEConfig, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	var c SPIFFEConfig
+	if err := json.Unmarshal([]byte(s), &c); err != nil {
+		return nil, fmt.Errorf("spiffe config: %w", err)
+	}
+	switch {
+	case !trustDomainRe.MatchString(c.TrustDomain):
+		return nil, fmt.Errorf("spiffe trustDomain %q is not a SPIFFE trust domain name", c.TrustDomain)
+	case c.SocketName == "" || strings.Contains(c.SocketName, "/"):
+		return nil, fmt.Errorf("spiffe socketName %q must be a file name", c.SocketName)
+	case c.CSIDriver == "" && !strings.HasPrefix(c.HostPath, "/"):
+		return nil, fmt.Errorf("spiffe needs csiDriver or an absolute hostPath")
+	}
+	return &c, nil
+}
 
 var (
 	envNameRe     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -446,10 +486,14 @@ func ValidateIdentity(id *sandboxv1alpha1.SandboxIdentity, n sandboxv1alpha1.San
 			return fmt.Errorf("spec.identity.spiffe %q is not Enabled or Disabled", id.SPIFFE)
 		}
 	}
-	if n.Egress != nil && !enabled {
+	if n.Egress != nil {
 		for i, r := range n.Egress.Allow {
-			if r.TLS != nil {
+			switch {
+			case r.TLS == nil:
+			case !enabled:
 				return fmt.Errorf("spec.network.egress.allow[%d].tls needs spec.identity.spiffe Enabled", i)
+			case !TLSOriginationAvailable:
+				return fmt.Errorf("spec.network.egress.allow[%d].tls is not available in this version of KubeSwift yet", i)
 			}
 		}
 	}
@@ -459,8 +503,11 @@ func ValidateIdentity(id *sandboxv1alpha1.SandboxIdentity, n sandboxv1alpha1.San
 	if n.Mode != sandboxv1alpha1.SandboxNetworkProxied {
 		return fmt.Errorf("spec.identity.spiffe Enabled needs network mode proxied: the egress proxy or the built-in broker holds the identity, never the guest")
 	}
-	if !IdentityAvailable {
-		return fmt.Errorf("spec.identity.spiffe Enabled is not available in this version of KubeSwift yet")
+	if SPIFFE == nil {
+		return fmt.Errorf("spec.identity.spiffe Enabled needs SPIFFE on the platform (chart sandboxMaterialize.spiffe.enabled)")
+	}
+	if n.Egress == nil || n.Egress.Proxy == nil {
+		return fmt.Errorf("spec.identity.spiffe Enabled needs an egress proxy (spec.network.egress.proxy): the built-in broker does not hold an SVID in this version of KubeSwift")
 	}
 	return nil
 }

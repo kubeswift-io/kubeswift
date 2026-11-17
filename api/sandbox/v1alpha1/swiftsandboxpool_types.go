@@ -70,8 +70,11 @@ type SwiftSandboxPoolSpec struct {
 	// +optional
 	NestedVirtualization swiftv1alpha1.NestedVirtualization `json:"nestedVirtualization,omitempty"`
 
-	// Identity is the workload identity of the pool's sandboxes (SPIFFE). A
-	// warm slot holds no sandbox identity until a sandbox claims it.
+	// Identity is the workload identity of the pool's sandboxes (SPIFFE).
+	// Each warm slot gets its own ID when it boots,
+	// spiffe://<trust-domain>/ns/<namespace>/pool/<pool>/slot/<slot>, and the
+	// sandbox that claims it keeps that ID. A claiming SwiftSandbox must ask
+	// for the same identity.
 	// +optional
 	Identity *SandboxIdentity `json:"identity,omitempty"`
 

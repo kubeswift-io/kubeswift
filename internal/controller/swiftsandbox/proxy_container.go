@@ -173,6 +173,13 @@ func egressIntentJSON(sb *sandboxv1alpha1.SwiftSandbox, ownerKind, ownerName str
 		key = poolPlaceholderKey(sb.Namespace, ownerName)
 	}
 	addCredentialsToIntent(&in, sb.Spec.Network, key)
+	if identityEnabled(sb.Spec.Identity) && sandboxwebhook.SPIFFE != nil {
+		id := coldSPIFFEID(sb)
+		if ownerKind == "SwiftSandboxPool" {
+			id = slotSPIFFEID(sb.Namespace, ownerName, sb.Name)
+		}
+		in.Identity = &egressintentv1.Identity{SPIFFE: &egressintentv1.SPIFFE{WorkloadAPISocket: workloadAPISocket(), ID: id}}
+	}
 	b, err := json.MarshalIndent(in, "", "  ")
 	return string(b), err
 }

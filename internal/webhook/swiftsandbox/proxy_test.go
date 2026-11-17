@@ -12,21 +12,22 @@ import (
 // available turns the proxied runtime switch on for one test.
 func available(t *testing.T) {
 	t.Helper()
-	saved := []bool{ProxiedAvailable, EgressProxyAvailable, IdentityAvailable, PresetsAvailable, CredentialsAvailable, ServiceUpstreamsAvailable, HTTPListenerAvailable}
-	savedImages, savedPresets := AllowedProxyImages, EgressProxyPresets
+	saved := []bool{ProxiedAvailable, EgressProxyAvailable, TLSOriginationAvailable, PresetsAvailable, CredentialsAvailable, ServiceUpstreamsAvailable, HTTPListenerAvailable}
+	savedImages, savedPresets, savedSPIFFE := AllowedProxyImages, EgressProxyPresets, SPIFFE
+	SPIFFE = &SPIFFEConfig{TrustDomain: "kubeswift.test", CSIDriver: "csi.spiffe.io", SocketName: "spire-agent.sock"}
 	ready := &EgressProxyReadiness{}
 	ready.HTTPGet.Port, ready.HTTPGet.Path = 15000, "/certs"
 	EgressProxyPresets = map[string]EgressProxyPreset{
 		"envoy":    {Image: "docker.io/envoyproxy/envoy:v1.36.2", Readiness: ready},
 		"no-probe": {Image: "docker.io/envoyproxy/envoy:v1.36.2"},
 	}
-	ProxiedAvailable, EgressProxyAvailable, IdentityAvailable = true, true, true
+	ProxiedAvailable, EgressProxyAvailable, TLSOriginationAvailable = true, true, true
 	PresetsAvailable, CredentialsAvailable, ServiceUpstreamsAvailable, HTTPListenerAvailable = true, true, true, true
 	AllowedProxyImages = []string{"*", "*/*", "*/*/*"}
 	t.Cleanup(func() {
-		ProxiedAvailable, EgressProxyAvailable, IdentityAvailable = saved[0], saved[1], saved[2]
+		ProxiedAvailable, EgressProxyAvailable, TLSOriginationAvailable = saved[0], saved[1], saved[2]
 		PresetsAvailable, CredentialsAvailable, ServiceUpstreamsAvailable, HTTPListenerAvailable = saved[3], saved[4], saved[5], saved[6]
-		AllowedProxyImages, EgressProxyPresets = savedImages, savedPresets
+		AllowedProxyImages, EgressProxyPresets, SPIFFE = savedImages, savedPresets, savedSPIFFE
 	})
 }
 
@@ -98,8 +99,13 @@ func TestProxyNotAvailableYet(t *testing.T) {
 		t.Fatalf("broker port exposed: got %v", err)
 	}
 	id := &sandboxv1alpha1.SandboxIdentity{SPIFFE: sandboxv1alpha1.SandboxIdentitySPIFFEEnabled}
-	if err := ValidateIdentity(id, proxied(nil)); err == nil || !strings.Contains(err.Error(), "not available") {
-		t.Fatalf("identity: got %v, want the not-available refusal", err)
+	if err := ValidateIdentity(id, proxied(nil)); err == nil || !strings.Contains(err.Error(), "SPIFFE on the platform") {
+		t.Fatalf("identity: got %v, want the platform refusal", err)
+	}
+	tls := proxied(&sandboxv1alpha1.SandboxEgress{Allow: []sandboxv1alpha1.SandboxEgressRule{{CIDR: "10.0.0.1/32",
+		TLS: &sandboxv1alpha1.SandboxEgressTLS{Originate: sandboxv1alpha1.SandboxEgressTLSSPIFFE}}}})
+	if err := ValidateIdentity(id, tls); err == nil || !strings.Contains(err.Error(), "not available") {
+		t.Fatalf("tls origination: got %v, want the not-available refusal", err)
 	}
 }
 
@@ -269,7 +275,13 @@ func TestValidateIdentity(t *testing.T) {
 	on := &sandboxv1alpha1.SandboxIdentity{SPIFFE: sandboxv1alpha1.SandboxIdentitySPIFFEEnabled}
 	tlsRule := []sandboxv1alpha1.SandboxEgressRule{{CIDR: "10.0.0.1/32",
 		TLS: &sandboxv1alpha1.SandboxEgressTLS{Originate: sandboxv1alpha1.SandboxEgressTLSSPIFFE}}}
-	if err := ValidateIdentity(on, proxied(&sandboxv1alpha1.SandboxEgress{Allow: tlsRule})); err != nil {
+	withProxy := &sandboxv1alpha1.SandboxEgress{Proxy: &sandboxv1alpha1.SandboxEgressProxy{Image: "docker.io/envoyproxy/envoy:v1.36.2"}}
+	if err := ValidateIdentity(on, proxied(withProxy)); err != nil {
+		t.Errorf("enabled with a proxy: %v", err)
+	}
+	withTLS := *withProxy
+	withTLS.Allow = tlsRule
+	if err := ValidateIdentity(on, proxied(&withTLS)); err != nil {
 		t.Errorf("enabled with a tls rule: %v", err)
 	}
 	if err := ValidateIdentity(nil, sandboxv1alpha1.SandboxNetwork{}); err != nil {
@@ -283,6 +295,7 @@ func TestValidateIdentity(t *testing.T) {
 		{"tls without identity", "needs spec.identity.spiffe Enabled", nil, proxied(&sandboxv1alpha1.SandboxEgress{Allow: tlsRule})},
 		{"enabled in restricted", "needs network mode proxied", on, sandboxv1alpha1.SandboxNetwork{}},
 		{"bad value", "not Enabled or Disabled", &sandboxv1alpha1.SandboxIdentity{SPIFFE: "On"}, proxied(nil)},
+		{"no proxy", "needs an egress proxy", on, proxied(nil)},
 	} {
 		if err := ValidateIdentity(tc.id, tc.n); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: got %v, want %q", tc.name, err, tc.want)
@@ -326,5 +339,38 @@ func TestParseProxyPresets(t *testing.T) {
 	n.Ports = []sandboxv1alpha1.SandboxPort{{Name: "web", Port: 15006}}
 	if err := ValidateNetwork(n); err == nil || !strings.Contains(err.Error(), "listener of egress proxy preset") {
 		t.Errorf("preset listener exposed: got %v", err)
+	}
+}
+
+func TestValidateIdentityPlatformOff(t *testing.T) {
+	available(t)
+	SPIFFE = nil
+	on := &sandboxv1alpha1.SandboxIdentity{SPIFFE: sandboxv1alpha1.SandboxIdentitySPIFFEEnabled}
+	p := proxied(&sandboxv1alpha1.SandboxEgress{Proxy: &sandboxv1alpha1.SandboxEgressProxy{Image: "docker.io/envoyproxy/envoy:v1.36.2"}})
+	if err := ValidateIdentity(on, p); err == nil || !strings.Contains(err.Error(), "sandboxMaterialize.spiffe.enabled") {
+		t.Errorf("got %v, want the platform refusal", err)
+	}
+}
+
+func TestParseSPIFFE(t *testing.T) {
+	if c, err := ParseSPIFFE(""); c != nil || err != nil {
+		t.Errorf("empty: %v %v", c, err)
+	}
+	c, err := ParseSPIFFE(`{"trustDomain":"example.org","csiDriver":"csi.spiffe.io","socketName":"spire-agent.sock"}`)
+	if err != nil || c.TrustDomain != "example.org" {
+		t.Errorf("csi: %+v %v", c, err)
+	}
+	if _, err := ParseSPIFFE(`{"trustDomain":"example.org","hostPath":"/run/spire/agent-sockets","socketName":"spire-agent.sock"}`); err != nil {
+		t.Errorf("hostPath: %v", err)
+	}
+	for _, bad := range []string{
+		`{"trustDomain":"Example.org","csiDriver":"x","socketName":"s"}`,
+		`{"trustDomain":"example.org","csiDriver":"x","socketName":"a/b"}`,
+		`{"trustDomain":"example.org","hostPath":"run/x","socketName":"s"}`,
+		`{`,
+	} {
+		if _, err := ParseSPIFFE(bad); err == nil {
+			t.Errorf("accepted %s", bad)
+		}
 	}
 }

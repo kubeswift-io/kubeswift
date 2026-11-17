@@ -115,7 +115,8 @@
       "type": "object",
       "required": ["workloadAPISocket"],
       "properties": {
-        "workloadAPISocket": {"type": "string", "minLength": 1}
+        "workloadAPISocket": {"type": "string", "minLength": 1},
+        "id": {"type": "string", "pattern": "^spiffe://"}
       }
     }
   }
