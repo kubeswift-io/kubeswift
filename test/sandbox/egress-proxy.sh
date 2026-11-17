@@ -23,8 +23,13 @@
 #      the kernel still blocks every node's kubelet, the API server, the
 #      kubernetes ClusterIP, the metadata endpoint and the target pod.
 #   3. "upstream": "open" plus proxy.upstreams = the target pod: now reachable.
-#   4. "intent": a stand-in proxy in config Intent prints the
-#      egress-intent.kubeswift.io/v1 file it was given; the test checks it.
+#      "upstream-svc": the same through a Service upstream (its ClusterIP,
+#      reported in status.network.proxyUpstreams). A Service upstream in
+#      front of the API server keeps the sandbox Pending
+#      (EgressServiceReachesNode).
+#   4. "intent": a proxy image in config Intent without the
+#      io.kubeswift.egress-intent.versions label is refused
+#      (EgressIntentUnsupported) before any launcher starts.
 #   5. An image outside the allowlist is refused.
 #
 # Prerequisites:
@@ -164,13 +169,19 @@ spec:
     image: $TARGET_IMAGE
     command: [sh, -c, "mkdir -p /tmp/www && echo ok > /tmp/www/index.html && exec httpd -f -p 8080 -h /tmp/www"]
     securityContext: {runAsNonRoot: true, runAsUser: 65534, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: target, namespace: $NS}
+spec: {selector: {app: target}, ports: [{port: 8080, protocol: TCP}]}
 EOF
 	kubectl -n "$NS" wait --for=jsonpath='{.status.phase}'=Ready swiftkernel/sandbox --timeout=300s >/dev/null ||
 		die "SwiftKernel sandbox not Ready in $NS"
 	kubectl -n "$NS" wait --for=condition=Ready pod/target --timeout=120s >/dev/null || die "target pod not Ready"
 
-	local target nodes apis cluster_ip other_ip
+	local target target_svc nodes apis cluster_ip other_ip
 	target=$(kubectl -n "$NS" get pod target -o jsonpath='{.status.podIP}')
+	target_svc=$(kubectl -n "$NS" get service target -o jsonpath='{.spec.clusterIP}')
 	nodes=$(kubectl get nodes -o jsonpath='{range .items[*]}{range .status.addresses[?(@.type=="InternalIP")]}{.address}{"\n"}{end}{range .status.addresses[?(@.type=="ExternalIP")]}{.address}{"\n"}{end}{end}' | grep -E '^[0-9.]+$' | sort -u)
 	apis=$(kubectl get endpointslices -n default -l kubernetes.io/service-name=kubernetes -o jsonpath='{range .items[*].endpoints[*]}{.addresses[0]}{"\n"}{end}' | sort -u)
 	cluster_ip=$(kubectl get service kubernetes -n default -o jsonpath='{.spec.clusterIP}')
@@ -179,7 +190,8 @@ EOF
 
 	local guarded="http metadata block http://169.254.169.254/
 http apiserver-clusterip block -k https://$cluster_ip/
-http target-pod block http://$target:8080/"
+http target-pod block http://$target:8080/
+http target-service block http://$target_svc:8080/"
 	for n in $nodes; do guarded+="
 http node-kubelet-$n block -k https://$n:10250/"; done
 	for a in $apis; do guarded+="
@@ -201,21 +213,39 @@ $guarded"
 $(envoy_proxy "" "        upstreams: [{cidr: $target/32, ports: [{port: 8080}]}]")" "http target-pod-upstream reach http://$target:8080/
 http metadata block http://169.254.169.254/"
 
+	run upstream-svc "$hosts
+$(envoy_proxy "" "        upstreams: [{service: {name: target}}]")" "http target-service-upstream reach http://$target_svc:8080/
+http target-pod block http://$target:8080/
+http metadata block http://169.254.169.254/"
+	kubectl -n "$NS" get swiftsandbox upstream-svc -o jsonpath='{.status.network.proxyUpstreams}' | grep -q "$target_svc/32" ||
+		die "status.network.proxyUpstreams does not show the Service address: $(kubectl -n "$NS" get swiftsandbox upstream-svc -o jsonpath='{.status.network}')"
+	log "upstream-svc: status.network.proxyUpstreams has $target_svc"
+
+	kubectl -n "$NS" delete swiftsandbox upstream-api --ignore-not-found --wait=true >/dev/null
+	sandbox upstream-api "$hosts
+$(envoy_proxy "" "        upstreams: [{service: {name: kubernetes, namespace: default}}]")" "true"
+	kubectl -n "$NS" wait swiftsandbox/upstream-api --timeout=60s \
+		--for=jsonpath='{.status.conditions[?(@.type=="Resolved")].reason}'=EgressServiceReachesNode >/dev/null ||
+		die "an upstream Service in front of the API server: $(kubectl -n "$NS" get swiftsandbox upstream-api -o jsonpath='{.status}')"
+	log "an upstream Service in front of the API server keeps the sandbox Pending (EgressServiceReachesNode)"
+	kubectl -n "$NS" delete swiftsandbox upstream-api --wait=false >/dev/null
+
+	# config Intent: the image that reads the intent file must declare the
+	# versions it reads (io.kubeswift.egress-intent.versions); an unlabelled
+	# image is refused before any launcher starts. Delivery of the file to a
+	# labelled reader is egress-preset.sh's.
 	kubectl -n "$NS" delete swiftsandbox intent --ignore-not-found --wait=true >/dev/null
 	sandbox intent "$hosts
       proxy:
         image: $STANDIN_IMAGE
         config: Intent
-        listeners: {transparent: 15006}
-        args: [sh, -c, 'cat \"\$KUBESWIFT_EGRESS_INTENT\"; nc -lk -p 15006 -e true || while :; do nc -l -p 15006 </dev/null; done']" "echo intent-ran"
-	local pod logs
-	finished intent >/dev/null
-	pod=$(kubectl -n "$NS" get pods -l sandbox.kubeswift.io/sandbox=intent -o jsonpath='{.items[0].metadata.name}')
-	logs=$(kubectl -n "$NS" logs "$pod" -c egress-proxy 2>&1 || true)
-	for want in '"apiVersion": "egress-intent.kubeswift.io/v1"' "\"host\": \"$PUBLIC_HOST\"" '"transparent": 15006' "\"name\": \"intent\""; do
-		grep -qF "$want" <<<"$logs" || die "intent file lacks $want: $logs"
-	done
-	log "config Intent: the proxy read the egress-intent file"
+        listeners: {transparent: 15006}" "echo intent-ran"
+	local phase
+	phase=$(finished intent)
+	[ "$phase" = Failed ] && kubectl -n "$NS" get swiftsandbox intent -o jsonpath='{.status}' | grep -q EgressIntentUnsupported ||
+		die "an unlabelled config Intent proxy: phase $phase, $(kubectl -n "$NS" get swiftsandbox intent -o jsonpath='{.status.message}')"
+	[ -z "$(kubectl -n "$NS" get pods -l sandbox.kubeswift.io/sandbox=intent -o name)" ] || die "an unlabelled config Intent proxy got a launcher"
+	log "config Intent: an image without io.kubeswift.egress-intent.versions is refused (EgressIntentUnsupported)"
 
 	if kubectl apply -f - >/dev/null 2>"$NS.err" <<EOF; then
 apiVersion: sandbox.kubeswift.io/v1alpha1
@@ -225,7 +255,6 @@ spec:
   image: $IMAGE
   network: {mode: proxied, egress: {proxy: {image: "docker.io/library/nginx:1.27", listeners: {transparent: 15006}}}}
 EOF
-		local phase
 		phase=$(finished not-allowed)
 		[ "$phase" = Failed ] || die "an image outside the allowlist ran (phase $phase)"
 	fi

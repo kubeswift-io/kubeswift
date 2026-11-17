@@ -276,6 +276,15 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		return r.waitForReference(ctx, sb, problem.Reason, problem.Message)
 	}
 	setEgressAllowed(sb, allowed)
+	// What the egress proxy itself may reach, resolved the same way.
+	ups, problem, err := resolveUpstreams(ctx, r.APIReader, sb.Namespace, sb.Spec.Network)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if problem != nil {
+		return r.waitForReference(ctx, sb, problem.Reason, problem.Message)
+	}
+	setProxyUpstreams(sb, ups)
 
 	auth, err := pullSecretAuth(ctx, r.APIReader, sb.Namespace, sb.Spec.ImagePullSecret, sb.Spec.Image)
 	if err != nil {
@@ -939,6 +948,7 @@ func applyGuestAnnotations(sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) {
 			PrimaryIPScope: swiftv1alpha1.PrimaryIPScopePod,
 			PodIP:          pod.Status.PodIP,
 			EgressAllowed:  egressAllowed(sb),
+			ProxyUpstreams: proxyUpstreams(sb),
 		}
 	}
 }

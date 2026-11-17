@@ -527,7 +527,7 @@ func TestCreateWarmSlot_PolicyBeforePod(t *testing.T) {
 			},
 		}).Build()
 	pr := &SwiftSandboxPoolReconciler{Client: c, Scheme: scheme.Scheme, Recorder: record.NewFakeRecorder(10)}
-	if err := pr.createWarmSlot(ctx, pool, defaultKernelProfile, resolvedImage{RootfsPath: "/cache/x.ext4"}, "", nil); err != nil {
+	if err := pr.createWarmSlot(ctx, pool, defaultKernelProfile, resolvedImage{RootfsPath: "/cache/x.ext4"}, "", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(order, ",") != "policy,pod" {

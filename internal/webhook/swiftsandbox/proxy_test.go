@@ -64,6 +64,9 @@ func TestProxyNotAvailableYet(t *testing.T) {
 		proxied(&sandboxv1alpha1.SandboxEgress{Proxy: &sandboxv1alpha1.SandboxEgressProxy{
 			Image: "docker.io/envoyproxy/envoy:v1.36.2", Listeners: listeners,
 			Upstreams: []sandboxv1alpha1.SandboxEgressRule{{CIDR: "10.96.0.12/32"}}}}),
+		proxied(&sandboxv1alpha1.SandboxEgress{Proxy: &sandboxv1alpha1.SandboxEgressProxy{
+			Image: "docker.io/envoyproxy/envoy:v1.36.2", Listeners: listeners,
+			Upstreams: []sandboxv1alpha1.SandboxEgressRule{{Service: svc("llm", "ai")}}}}),
 	}
 	for i, n := range ok {
 		if err := ValidateNetwork(n); err != nil {
@@ -80,9 +83,6 @@ func TestProxyNotAvailableYet(t *testing.T) {
 		{"http listener", "listeners.http is not available", proxied(&sandboxv1alpha1.SandboxEgress{
 			Proxy: &sandboxv1alpha1.SandboxEgressProxy{Image: "docker.io/envoyproxy/envoy:v1.36.2",
 				Listeners: &sandboxv1alpha1.SandboxEgressProxyListeners{Transparent: 15001, HTTP: 15002}}})},
-		{"service upstream", "service entry in spec.network.egress.proxy.upstreams", proxied(&sandboxv1alpha1.SandboxEgress{
-			Proxy: &sandboxv1alpha1.SandboxEgressProxy{Image: "docker.io/envoyproxy/envoy:v1.36.2", Listeners: listeners,
-				Upstreams: []sandboxv1alpha1.SandboxEgressRule{{Service: svc("llm", "ai")}}}})},
 	} {
 		if err := ValidateNetwork(tc.n); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: got %v, want %q", tc.name, err, tc.want)

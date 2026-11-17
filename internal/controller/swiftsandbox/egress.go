@@ -24,6 +24,12 @@ import (
 // list no longer matches what its Services resolve to.
 const EgressAllowedAnnotation = "sandbox.kubeswift.io/egress-allowed"
 
+// EgressUpstreamsAnnotation records, on a launcher pod with an egress proxy,
+// what the proxy may reach (JSON of []SandboxEgressAllowed): proxy.upstreams
+// resolved. Like EgressAllowedAnnotation it is copied at checkout and a pool
+// replaces warm slots whose addresses went stale.
+const EgressUpstreamsAnnotation = "sandbox.kubeswift.io/egress-upstreams"
+
 // egressProblem is why an egress allowlist cannot be enforced. Invalid is a
 // spec error; otherwise a Service is not usable yet and the caller waits.
 type egressProblem struct {
@@ -44,8 +50,25 @@ func resolveEgress(ctx context.Context, c client.Reader, ns string, n sandboxv1a
 	// Mode proxied carries no guest UDP other than DNS: a Service rule without
 	// ports allows only the Service's TCP ports there.
 	proxied := n.Mode == sandboxv1alpha1.SandboxNetworkProxied
+	return resolveRules(ctx, c, ns, n.Egress.Allow, "spec.network.egress.allow", proxied)
+}
+
+// resolveUpstreams resolves spec.network.egress.proxy.upstreams, what the
+// proxy container may reach, like the allowlist (TCP only: a proxy relays
+// TCP). nil without a proxy.
+func resolveUpstreams(ctx context.Context, c client.Reader, ns string, n sandboxv1alpha1.SandboxNetwork) ([]sandboxv1alpha1.SandboxEgressAllowed, *egressProblem, error) {
+	if resolveProxySpec(n) == nil {
+		return nil, nil, nil
+	}
+	return resolveRules(ctx, c, ns, n.Egress.Proxy.Upstreams, "spec.network.egress.proxy.upstreams", true)
+}
+
+// resolveRules resolves cidr and service rules (host rules are matched by
+// name elsewhere); tcpOnly drops a Service's UDP ports.
+func resolveRules(ctx context.Context, c client.Reader, ns string, rules []sandboxv1alpha1.SandboxEgressRule, field string, tcpOnly bool) ([]sandboxv1alpha1.SandboxEgressAllowed, *egressProblem, error) {
+	proxied := tcpOnly
 	var out []sandboxv1alpha1.SandboxEgressAllowed
-	for i, r := range n.Egress.Allow {
+	for i, r := range rules {
 		if r.Host != "" {
 			// Matched by name in the broker (egressHostsEnv), not resolved here.
 			continue
@@ -60,6 +83,9 @@ func resolveEgress(ctx context.Context, c client.Reader, ns string, n sandboxv1a
 				out = append(out, sandboxv1alpha1.SandboxEgressAllowed{CIDR: cidr, From: from})
 			}
 			for _, p := range r.Ports {
+				if proxied && protocol(p.Protocol) != corev1.ProtocolTCP {
+					continue
+				}
 				out = append(out, sandboxv1alpha1.SandboxEgressAllowed{CIDR: cidr, Protocol: protocol(p.Protocol), Port: p.Port, From: from})
 			}
 			continue
@@ -70,7 +96,7 @@ func resolveEgress(ctx context.Context, c client.Reader, ns string, n sandboxv1a
 			svcNS = ns
 		}
 		ref := svcNS + "/" + r.Service.Name
-		at := fmt.Sprintf("spec.network.egress.allow[%d]: Service %s", i, ref)
+		at := fmt.Sprintf("%s[%d]: Service %s", field, i, ref)
 		var svc corev1.Service
 		if err := c.Get(ctx, types.NamespacedName{Namespace: svcNS, Name: r.Service.Name}, &svc); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -195,6 +221,27 @@ func parseEgressAllowed(s string) []sandboxv1alpha1.SandboxEgressAllowed {
 		return nil
 	}
 	return out
+}
+
+// proxyUpstreams is what a launch of sb lets its proxy reach.
+func proxyUpstreams(sb *sandboxv1alpha1.SwiftSandbox) []sandboxv1alpha1.SandboxEgressAllowed {
+	if sb.Status.Network == nil {
+		return nil
+	}
+	return sb.Status.Network.ProxyUpstreams
+}
+
+// setProxyUpstreams records what a launch of sb lets its proxy reach;
+// buildPod renders it and the launcher pod carries it
+// (EgressUpstreamsAnnotation).
+func setProxyUpstreams(sb *sandboxv1alpha1.SwiftSandbox, ups []sandboxv1alpha1.SandboxEgressAllowed) {
+	if sb.Status.Network == nil {
+		if len(ups) == 0 {
+			return
+		}
+		sb.Status.Network = &sandboxv1alpha1.SandboxNetworkStatus{}
+	}
+	sb.Status.Network.ProxyUpstreams = ups
 }
 
 // egressAllowed is the allowlist a launch of sb enforces, as stamped into its

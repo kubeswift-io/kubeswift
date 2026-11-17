@@ -29,7 +29,7 @@ var EgressProxyAvailable = true
 var (
 	PresetsAvailable          = true
 	CredentialsAvailable      = true
-	ServiceUpstreamsAvailable = false
+	ServiceUpstreamsAvailable = true
 	HTTPListenerAvailable     = false
 )
 

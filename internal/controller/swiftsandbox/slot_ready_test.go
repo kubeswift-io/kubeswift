@@ -97,7 +97,7 @@ func TestCreateWarmSlot_WaitsForTheGuestAgent(t *testing.T) {
 	pool := testPool(1)
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(pool).Build()
 	pr := &SwiftSandboxPoolReconciler{Client: c, Scheme: scheme.Scheme, Recorder: record.NewFakeRecorder(10)}
-	if err := pr.createWarmSlot(ctx, pool, defaultKernelProfile, resolvedImage{RootfsPath: "/cache/x.ext4"}, "", nil); err != nil {
+	if err := pr.createWarmSlot(ctx, pool, defaultKernelProfile, resolvedImage{RootfsPath: "/cache/x.ext4"}, "", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	var pods corev1.PodList

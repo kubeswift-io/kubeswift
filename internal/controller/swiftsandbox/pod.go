@@ -709,6 +709,12 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		}
 		pod.Annotations[EgressAllowedAnnotation] = allowed
 	}
+	if ups := egressAllowedJSON(proxyUpstreams(sb)); ups != "" && hasEgressProxy(pod) {
+		if pod.Annotations == nil {
+			pod.Annotations = map[string]string{}
+		}
+		pod.Annotations[EgressUpstreamsAnnotation] = ups
+	}
 	addConsole(pod, consoleSerialLog)
 	return pod
 }

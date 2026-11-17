@@ -15,6 +15,7 @@ import (
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/scheme"
+	sandboxwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsandbox"
 )
 
 func clusterIPService(ns, name, ip string, ports ...corev1.ServicePort) *corev1.Service {
@@ -345,5 +346,106 @@ func TestResolveEgress_ServiceInFrontOfANode(t *testing.T) {
 	got, problem, err := resolveEgress(ctx, c, "t", egressNet(allowSvc("app", "")))
 	if err != nil || problem != nil || len(got) != 1 || got[0].CIDR != "10.96.0.60/32" {
 		t.Errorf("app: %v %+v %v", got, problem, err)
+	}
+}
+
+func proxyNet(upstreams ...sandboxv1alpha1.SandboxEgressRule) sandboxv1alpha1.SandboxNetwork {
+	return sandboxv1alpha1.SandboxNetwork{Mode: sandboxv1alpha1.SandboxNetworkProxied, Egress: &sandboxv1alpha1.SandboxEgress{
+		Proxy: &sandboxv1alpha1.SandboxEgressProxy{Image: "docker.io/envoyproxy/envoy:v1.36.2",
+			Listeners: &sandboxv1alpha1.SandboxEgressProxyListeners{Transparent: 15006}, Upstreams: upstreams},
+	}}
+}
+
+// proxy.upstreams resolve like the allowlist: a Service to its ClusterIP and
+// TCP ports only (the proxy chain carries TCP), a cidr's UDP port dropped;
+// a missing Service or one in front of a node waits, naming the field.
+func TestResolveUpstreams(t *testing.T) {
+	base := denyPrefixes("203.0.113.2/32")
+	currentEgressBase.Store(&base)
+	t.Cleanup(func() { currentEgressBase.Store(nil) })
+	ctx := context.Background()
+	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
+		clusterIPService("ai", "llm", "10.96.0.12", tcpPort(8000), corev1.ServicePort{Port: 53, Protocol: corev1.ProtocolUDP}),
+		svcSlice("ai", "llm", "llm-1", "10.244.1.5"),
+		clusterIPService("default", "kubernetes", "10.96.0.1", tcpPort(443)),
+		svcSlice("default", "kubernetes", "kubernetes", "203.0.113.2"),
+	).Build()
+	got, problem, err := resolveUpstreams(ctx, c, "t", proxyNet(allowSvc("llm", "ai"), sandboxv1alpha1.SandboxEgressRule{
+		CIDR: "10.20.0.0/24", Ports: []sandboxv1alpha1.SandboxEgressPort{{Port: 9000}, {Port: 9001, Protocol: corev1.ProtocolUDP}}}))
+	if err != nil || problem != nil {
+		t.Fatalf("err=%v problem=%+v", err, problem)
+	}
+	want := []sandboxv1alpha1.SandboxEgressAllowed{
+		{CIDR: "10.96.0.12/32", Protocol: corev1.ProtocolTCP, Port: 8000, From: "service ai/llm"},
+		{CIDR: "10.20.0.0/24", Protocol: corev1.ProtocolTCP, Port: 9000, From: "cidr 10.20.0.0/24"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+	for name, rule := range map[string]sandboxv1alpha1.SandboxEgressRule{
+		"EgressServiceNotFound":    allowSvc("gone", "ai"),
+		"EgressServiceReachesNode": allowSvc("kubernetes", "default"),
+	} {
+		_, problem, err := resolveUpstreams(ctx, c, "t", proxyNet(rule))
+		if err != nil || problem == nil || problem.Reason != name || problem.Invalid ||
+			!strings.Contains(problem.Message, "spec.network.egress.proxy.upstreams[0]") {
+			t.Errorf("%s: problem %+v err %v", name, problem, err)
+		}
+	}
+	// No proxy (the built-in broker): nothing to resolve.
+	if got, problem, err := resolveUpstreams(ctx, c, "t", egressNet(allowSvc("llm", "ai"))); got != nil || problem != nil || err != nil {
+		t.Errorf("no proxy: %v %+v %v", got, problem, err)
+	}
+}
+
+// The proxy's reach goes to network-init's uid chain and the pod annotation,
+// never to the guest's allowlist; the IP report keeps it in status.
+func TestBuildPod_ServiceUpstreams(t *testing.T) {
+	sb := proxySandbox(sandboxv1alpha1.SandboxEgressProxyConfigSelf)
+	ups := []sandboxv1alpha1.SandboxEgressAllowed{{CIDR: "10.96.7.7/32", Protocol: corev1.ProtocolTCP, Port: 8000, From: "service ai/llm"}}
+	setProxyUpstreams(sb, ups)
+	pod := buildPod(sb, "sandbox")
+	if got := networkInitEnv(pod, "KUBESWIFT_SANDBOX_EGRESS_ALLOW"); got != "tcp,10.96.7.7/32,8000" {
+		t.Errorf("uid chain allow = %q", got)
+	}
+	if got := parseEgressAllowed(pod.Annotations[EgressUpstreamsAnnotation]); !reflect.DeepEqual(got, ups) {
+		t.Errorf("upstreams annotation %+v", got)
+	}
+	if strings.Contains(pod.Annotations[EgressAllowedAnnotation], "10.96.7.7") {
+		t.Error("an upstream leaked into the guest's allowlist")
+	}
+	pod.Annotations["kubeswift.io/guest-ip"] = "192.168.99.10"
+	applyGuestAnnotations(sb, pod)
+	if !reflect.DeepEqual(proxyUpstreams(sb), ups) {
+		t.Errorf("status.network.proxyUpstreams after the IP report = %+v", sb.Status.Network)
+	}
+}
+
+// A pool's slots follow their proxy's upstream Service too: a slot whose
+// proxy may reach an address the Service no longer has is replaced.
+func TestPool_SlotsFollowTheUpstreamServiceAddress(t *testing.T) {
+	ctx := context.Background()
+	llm := clusterIPService("inference", "llm", "10.96.0.12", tcpPort(8000))
+	pool := egressPool(testImage(t))
+	pool.Spec.Network = proxyNet(allowSvc("llm", "inference", 8000))
+	saved := sandboxwebhook.AllowedProxyImages
+	sandboxwebhook.AllowedProxyImages = []string{"docker.io/envoyproxy/envoy:*"}
+	t.Cleanup(func() { sandboxwebhook.AllowedProxyImages = saved })
+	r, c := poolReconciler(pool, llm, readyKernel("default", defaultKernelProfile))
+
+	reconcilePool(t, r, "p")
+	slots := poolSlotPods(t, c, "p")
+	if len(slots) != 1 || networkInitEnv(&slots[0], "KUBESWIFT_SANDBOX_EGRESS_ALLOW") != "tcp,10.96.0.12/32,8000" {
+		t.Fatalf("want one slot whose proxy reaches 10.96.0.12:8000, got %d slots", len(slots))
+	}
+	first := slots[0].Name
+	llm.Spec.ClusterIP, llm.Spec.ClusterIPs = "10.96.0.99", []string{"10.96.0.99"}
+	if err := c.Update(ctx, llm); err != nil {
+		t.Fatal(err)
+	}
+	reconcilePool(t, r, "p")
+	slots = poolSlotPods(t, c, "p")
+	if len(slots) != 1 || slots[0].Name == first || networkInitEnv(&slots[0], "KUBESWIFT_SANDBOX_EGRESS_ALLOW") != "tcp,10.96.0.99/32,8000" {
+		t.Fatalf("want the slot replaced by one reaching 10.96.0.99, got %v", slotNames(slots))
 	}
 }

@@ -235,7 +235,15 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			egressWait = &egressProblem{Reason: "InvalidIdentity", Message: err.Error(), Invalid: true}
 		}
 	}
+	ups, upsWait, err := resolveUpstreams(ctx, r.APIReader, pool.Namespace, pool.Spec.Network)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if egressWait == nil {
+		egressWait = upsWait
+	}
 	egressNow := egressAllowedJSON(egress)
+	upstreamsNow := egressAllowedJSON(ups)
 
 	// Census of the pool's live slots.
 	var pods corev1.PodList
@@ -290,7 +298,8 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 		// egressNow is "" while a Service is not usable, so a slot carrying
 		// rules is replaced then too: its addresses can no longer be confirmed.
-		staleEgress := p.Annotations[EgressAllowedAnnotation] != egressNow
+		staleEgress := p.Annotations[EgressAllowedAnnotation] != egressNow ||
+			(hasEgressProxy(p) && p.Annotations[EgressUpstreamsAnnotation] != upstreamsNow)
 		if p.Labels[SlotStateLabelKey] == slotStateWarm && (p.Annotations[SlotProfileAnnotation] != profile || staleEgress) {
 			// Booted under an earlier pool spec (any slot-shape field changed
 			// since) -- or before slots recorded one -- or allowed egress to
@@ -483,7 +492,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 	for i := 0; i < want; i++ {
-		if err := r.createWarmSlot(ctx, &pool, kernelName, *ri, modelPath, egress); err != nil {
+		if err := r.createWarmSlot(ctx, &pool, kernelName, *ri, modelPath, egress, ups); err != nil {
 			// A GPU pool sized above the free-GPU count stops warming here (holds
 			// what it could) instead of erroring every reconcile — minWarm > GPUs
 			// is an operator sizing choice, surfaced as ready < minWarm.
@@ -597,9 +606,10 @@ func (r *SwiftSandboxPoolReconciler) slotTemplate(pool *sandboxv1alpha1.SwiftSan
 
 // createWarmSlot brings up one warm slot: the intent ConfigMap + launcher pod (+ a
 // deny-ingress NetworkPolicy when networked), all owned by the pool and labeled warm.
-func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, kernelName string, ri resolvedImage, modelPath string, egress []sandboxv1alpha1.SandboxEgressAllowed) error {
+func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, kernelName string, ri resolvedImage, modelPath string, egress, upstreams []sandboxv1alpha1.SandboxEgressAllowed) error {
 	slot := r.slotTemplate(pool, newSlotName(pool))
 	setEgressAllowed(slot, egress)
+	setProxyUpstreams(slot, upstreams)
 
 	// Warm GPU pool: allocate a GPU for this slot and stamp its spec.gpuProfileRef
 	// + status.GPU so the launch builders produce a GPU-aware slot (node pin,
