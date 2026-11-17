@@ -149,6 +149,10 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 		cmdline += " kubeswift.dns-search=" + sb.Namespace + ".svc.cluster.local,svc.cluster.local,cluster.local"
 	}
 	var sandboxExec *runtimeintent.SandboxExecSpec
+	if !idle {
+		// Egress credentials: the placeholders and the CA bundle in env.
+		exec.Env = append(append([]string(nil), exec.Env...), credentialEnv(sb, coldPlaceholderKey(sb))...)
+	}
 	if !idle && exec.nonTrivial() {
 		// The workload argv/env/cwd ride the config disk (kubeswift.config points the
 		// bridge at it) — never the cmdline, so env stays out of /proc/cmdline + logs.
@@ -159,7 +163,7 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 		}
 		cmdline += " kubeswift.config=" + configDev
 		sandboxExec = &runtimeintent.SandboxExecSpec{Argv: exec.Argv, Env: exec.Env, Cwd: exec.Cwd, User: exec.User,
-			SecretEnv: secretEnvRefs(sb), SecretFiles: secretFileRefs(sb)}
+			SecretEnv: secretEnvRefs(sb), SecretFiles: secretFileRefs(sb), EgressCredentials: credentialRefs(sb)}
 	}
 	cpu, memMiB := guestSize(sb)
 	// Rootfs delivery. block: the ext4 rides SandboxRootfs.Path as /dev/vda.
@@ -687,6 +691,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 	addEgressDeny(pod, sb)
 	addProxiedLauncherEnv(pod, sb)
 	addEgressProxy(pod, sb)
+	addEgressSecrets(pod, sb)
 	applyPodMetadata(pod, sb.Spec.PodMetadata)
 	addOutputVolumes(pod, sb)
 	if usesSecrets(sb) {

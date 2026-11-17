@@ -89,6 +89,19 @@
                 "additionalProperties": false,
                 "required": ["transparent"],
                 "properties": { "transparent": { "type": "integer" }, "dns": { "type": "integer" } }
+              },
+              "readiness": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["httpGet"],
+                "properties": {
+                  "httpGet": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["port", "path"],
+                    "properties": { "port": { "type": "integer" }, "path": { "type": "string" } }
+                  }
+                }
               }
             }
           }

@@ -347,9 +347,10 @@ sandboxMaterialize:
     envoy:
       image: docker.io/envoyproxy/envoy:v1.36.2
       args: ["-c", "/etc/kubeswift/egress-proxy/envoy.json", "--disable-hot-restart"]
-      translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:v0.1.0
-      translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/envoy.json"]
+      translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:v0.2.0
+      translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/envoy.json", "--admin-port", "15000"]
       listeners: {transparent: 15006}
+      readiness: {httpGet: {port: 15000, path: /certs}}
 ```
 
 - The image that reads the intent file (the translator, else the proxy) must
@@ -366,6 +367,72 @@ sandboxMaterialize:
   HTTP on 80, and Envoy connects to the address the name resolves to (not the
   address the guest asked for), so a spoofed server name cannot reach another
   host.
+
+#### Egress credentials
+
+`network.egress.credentials` gives the workload an API key it never sees. The
+guest gets an environment variable holding a placeholder; the proxy replaces it
+with the Secret's value in a request header, only on requests to the listed
+destinations.
+
+```yaml
+spec:
+  network:
+    mode: proxied
+    egress:
+      allow:
+      - {host: api.openai.com, ports: [{port: 443}]}
+      proxy: {preset: envoy}
+      credentials:
+      - name: OPENAI_API_KEY              # the guest's variable
+        secretKeyRef: {name: openai, key: token}
+        destinations: [api.openai.com]    # host or host:port, 443 by default
+        # header: Authorization           # default
+        # valueTemplate: "Bearer {}"      # default for Authorization, else "{}"
+```
+
+How it works:
+
+- The guest sees `OPENAI_API_KEY=ks-...`, a placeholder that means nothing
+  anywhere else. Set `placeholder` to choose it; otherwise it is derived per
+  sandbox (per pool for a pool's slots).
+- Changing a header inside HTTPS needs the TLS session, so each launcher gets
+  its own certificate authority: ECDSA P-256, valid 24 hours, name-constrained
+  to the credential hosts. swiftletd issues one certificate per host for the
+  proxy and keeps the CA's key in memory; it is never written to a file. The
+  guest trusts the CA: it is appended to the image's CA bundle (the files
+  under `/etc/ssl` and `/etc/pki` the image has) and written to
+  `/etc/kubeswift/egress-ca.crt` and `/etc/kubeswift/egress-ca-bundle.crt`, and
+  `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE` and
+  `NODE_EXTRA_CA_CERTS` point at them. The image's own files are not changed:
+  the copies live in the guest's writable layer.
+- The value is read with the launcher's own service account and written only
+  to a memory volume the proxy reads. It never enters the guest: the
+  acceptance test (`make sandbox-credentials-test`) greps the guest's whole
+  RAM for it and for the proxy's private key.
+- A request to a destination with another `Host` header gets 403 from the
+  proxy. A placeholder sent to any other allowed host goes out unchanged; it is
+  worthless there.
+- On a pool, the credentials' shape (names, placeholders, destinations,
+  headers) is part of the slots' shape, and each checkout reads its own
+  Secrets: the slot gets a fresh CA and the values when it is claimed. Before
+  that, the proxy holds no value and a request with the placeholder gets 401.
+
+Requirements and failures:
+
+- A preset with config `Intent` and a `readiness` probe (an HTTP GET on
+  127.0.0.1 whose answer lists the serial numbers of the certificates the
+  proxy serves, such as Envoy's `/certs`); swiftletd waits for it after each
+  delivery. Envoy needs the kubeswift-egress-adapters translator v0.2.0 or
+  later. A proxy that does not load the new material within 30 s fails the
+  sandbox with `EgressProxyNotReady`.
+- One host per destination, no wildcard (a certificate is issued per host),
+  and each destination must be allowed by a `host` rule.
+- A missing Secret or key keeps the sandbox from starting (`SecretNotFound`,
+  `SecretKeyNotFound`); an empty value or one with a line break fails it with
+  `SecretUnavailable`.
+- The sandbox kernel's bridge must write files (kernels/sandbox 6.6.14 or
+  later).
 
 ### Exposing ports
 

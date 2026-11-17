@@ -37,12 +37,15 @@ type slotShape struct {
 	Egress  []string `json:"egress,omitempty"`
 	// The egress proxy container (mode proxied), as JSON; empty for the
 	// built-in broker, so pools without a proxy keep their slots.
-	Proxy      string   `json:"proxy,omitempty"`
-	Ports      []string `json:"ports,omitempty"`
-	Ingress    string   `json:"ingress,omitempty"`
-	VerifyKey  string   `json:"verifyKey,omitempty"`
-	RootfsMode string   `json:"rootfsMode"`
-	Kernel     string   `json:"kernel"`
+	Proxy string `json:"proxy,omitempty"`
+	// Egress credentials' shape (names, placeholders, destinations,
+	// headers); empty without credentials, so other pools keep their slots.
+	Credentials string   `json:"credentials,omitempty"`
+	Ports       []string `json:"ports,omitempty"`
+	Ingress     string   `json:"ingress,omitempty"`
+	VerifyKey   string   `json:"verifyKey,omitempty"`
+	RootfsMode  string   `json:"rootfsMode"`
+	Kernel      string   `json:"kernel"`
 	// "Disabled", or empty for Enabled. Slots booted before the field
 	// existed ran with nested virtualization on, which is what an empty value
 	// says: a pool set to Enabled keeps them, and one on the default
@@ -59,14 +62,15 @@ type slotShape struct {
 
 func poolShape(pool *sandboxv1alpha1.SwiftSandboxPool) slotShape {
 	s := slotShape{
-		Image:      pool.Spec.Image,
-		Network:    networkMode(pool.Spec.Network),
-		Egress:     egressKey(pool.Namespace, pool.Spec.Network),
-		Proxy:      proxyKey(pool.Spec.Network),
-		Ports:      portsKey(pool.Spec.Network),
-		Ingress:    ingressKey(pool.Spec.Network),
-		VerifyKey:  secretName(pool.Spec.VerifyKeySecretRef),
-		RootfsMode: rootfsMode(pool.Spec.RootfsMode),
+		Image:       pool.Spec.Image,
+		Network:     networkMode(pool.Spec.Network),
+		Egress:      egressKey(pool.Namespace, pool.Spec.Network),
+		Proxy:       proxyKey(pool.Spec.Network),
+		Credentials: credentialsKey(pool.Spec.Network),
+		Ports:       portsKey(pool.Spec.Network),
+		Ingress:     ingressKey(pool.Spec.Network),
+		VerifyKey:   secretName(pool.Spec.VerifyKeySecretRef),
+		RootfsMode:  rootfsMode(pool.Spec.RootfsMode),
 		// As the pool resolves it for its slots: a GPU pool boots the
 		// module-capable kernel unless it names one.
 		Kernel: resolveKernelProfile(&sandboxv1alpha1.SwiftSandbox{Spec: sandboxv1alpha1.SwiftSandboxSpec{
@@ -120,6 +124,7 @@ func slotMismatches(pool *sandboxv1alpha1.SwiftSandboxPool, sb *sandboxv1alpha1.
 	differ("network mode", p.Network, networkMode(sb.Spec.Network))
 	differ("network egress", strings.Join(p.Egress, "; "), strings.Join(egressKey(sb.Namespace, sb.Spec.Network), "; "))
 	differ("network egress proxy", p.Proxy, proxyKey(sb.Spec.Network))
+	differ("network egress credentials", p.Credentials, credentialsKey(sb.Spec.Network))
 	differ("network ports", strings.Join(p.Ports, ", "), strings.Join(portsKey(sb.Spec.Network), ", "))
 	differ("network ingress", p.Ingress, ingressKey(sb.Spec.Network))
 	differ("verifyKeySecretRef", p.VerifyKey, secretName(sb.Spec.VerifyKeySecretRef))

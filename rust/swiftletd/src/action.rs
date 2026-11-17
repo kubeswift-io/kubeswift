@@ -959,6 +959,10 @@ struct SandboxExecArgs {
     /// into the sandbox root before the workload runs.
     #[serde(default)]
     secret_files: Vec<crate::intent::SecretFileRef>,
+    /// Egress credentials: references; the values go to the egress proxy's
+    /// secrets volume, the CA files to the guest.
+    #[serde(default)]
+    egress_credentials: Vec<crate::intent::EgressCredentialRef>,
     /// Artifacts to project from the node cache into the slot's staging share
     /// and mount in the guest (warm_artifacts.rs).
     #[serde(default)]
@@ -1047,6 +1051,40 @@ async fn dispatch_sandbox_exec(
                 data: crate::intent::base64_encode(&f.data),
             })
             .collect();
+    }
+    if !args.egress_credentials.is_empty() {
+        // A slot's guest got no CA at boot: fresh material now, so two
+        // checkouts never share a key, then the CA files with the workload.
+        crate::bridge::require("files", "egress credentials (the CA certificate)")
+            .map_err(|e| format!("KernelUnsupported: {}", e))?;
+        let spec = match crate::egress_secrets::spec_from_env() {
+            Some(Ok(s)) => s,
+            Some(Err(e)) => return Err(format!("EgressProxyNotReady: {}", e)),
+            None => {
+                return Err(
+                    "EgressProxyNotReady: this slot has no egress secrets volume".to_string(),
+                )
+            }
+        };
+        let m = crate::egress_secrets::deliver(&spec, &args.egress_credentials)
+            .await
+            .map_err(|f| match f {
+                crate::egress_secrets::Failure::Secret(e) => format!("SecretUnavailable: {}", e),
+                crate::egress_secrets::Failure::Proxy(e) => format!("EgressProxyNotReady: {}", e),
+            })?;
+        let guest =
+            crate::egress_secrets::guest_files(&spec, m.ca_pem(), crate::rootfs_read::get());
+        log::info!(
+            "egress_credentials_delivered id={} count={} guest_files={}",
+            action.id,
+            args.egress_credentials.len(),
+            guest.len()
+        );
+        files.extend(guest.into_iter().map(|f| swift_vsock_client::ExecFile {
+            path: f.path,
+            mode: f.mode,
+            data: crate::intent::base64_encode(&f.data),
+        }));
     }
     let mut mounts = vec![];
     if !args.artifacts.is_empty() {

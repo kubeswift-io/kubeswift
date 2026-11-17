@@ -512,6 +512,9 @@ func execActionAnnotations(slot *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox, a
 	if len(w.arts) > 0 {
 		args["artifacts"] = w.arts
 	}
+	// Egress credentials: the slot's placeholders (its pool's, as in the
+	// slot's egress-intent file) and the CA bundle.
+	w.env = append(append([]string(nil), w.env...), credentialEnv(sb, poolPlaceholderKey(sb.Namespace, slot.Labels[PoolLabelKey]))...)
 	if len(w.env) > 0 {
 		args["env"] = w.env
 	}
@@ -536,6 +539,9 @@ func execActionAnnotations(slot *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox, a
 	}
 	if refs := secretFileRefs(sb); len(refs) > 0 {
 		args["secretFiles"] = refs
+	}
+	if refs := credentialRefs(sb); len(refs) > 0 {
+		args["egressCredentials"] = refs
 	}
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
@@ -704,7 +710,7 @@ func (r *SwiftSandboxReconciler) adoptSlotObjects(ctx context.Context, sb *sandb
 // It names a refusal it shares with a cold launch ("KernelUnsupported: ...",
 // "SecretUnavailable: ...") by the same reason the cold path uses.
 func checkoutFailure(detail string) (reason, msg string) {
-	for _, known := range []string{"KernelUnsupported", "SecretUnavailable", "ArtifactMissing"} {
+	for _, known := range []string{"KernelUnsupported", "SecretUnavailable", "ArtifactMissing", "EgressProxyNotReady"} {
 		if rest, ok := strings.CutPrefix(detail, known+": "); ok {
 			return known, rest
 		}

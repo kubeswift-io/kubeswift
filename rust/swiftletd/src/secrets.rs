@@ -99,6 +99,40 @@ pub async fn resolve_files(
     Ok(out)
 }
 
+/// Reads each egress credential's value. Every one is required and must be
+/// non-empty text without a line break (it becomes a header value). Errors
+/// name the credential, Secret and key, never a value.
+pub async fn resolve_credentials(
+    client: &Client,
+    namespace: &str,
+    refs: &[crate::intent::EgressCredentialRef],
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let api: Api<Secret> = Api::namespaced(client.clone(), namespace);
+    let mut out = std::collections::BTreeMap::new();
+    for r in refs {
+        let at = format!(
+            "egress credential {}: Secret {} key {}",
+            r.name, r.secret, r.key
+        );
+        let secret = api
+            .get_opt(&r.secret)
+            .await
+            .map_err(|e| format!("{}: cannot read: {}", at, e))?
+            .ok_or_else(|| format!("{}: Secret not found", at))?;
+        let bytes = bytes_of(&secret, &r.key).ok_or_else(|| format!("{}: no such key", at))?;
+        let v =
+            String::from_utf8(bytes).map_err(|_| format!("{}: the value is not UTF-8 text", at))?;
+        if v.is_empty() {
+            return Err(format!("{}: the value is empty", at));
+        }
+        if v.contains(['\r', '\n']) {
+            return Err(format!("{}: the value contains a line break", at));
+        }
+        out.insert(r.name.clone(), v);
+    }
+    Ok(out)
+}
+
 /// Total size of a sandbox's secret files. Base64 on the config disk makes it
 /// ~2.7 MiB, under the 4 MiB the bridge reads.
 const MAX_SECRET_FILE_BYTES: usize = 2 * 1024 * 1024;

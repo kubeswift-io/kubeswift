@@ -62,7 +62,7 @@ func secretFileRefs(sb *sandboxv1alpha1.SwiftSandbox) []runtimeintent.SecretFile
 
 // usesSecrets reports whether sb reads any Secret (env or files).
 func usesSecrets(sb *sandboxv1alpha1.SwiftSandbox) bool {
-	return len(secretEnvRefs(sb)) > 0 || len(sb.Spec.SecretFiles) > 0
+	return len(secretEnvRefs(sb)) > 0 || len(sb.Spec.SecretFiles) > 0 || hasCredentials(sb)
 }
 
 // secretEnvRefs lists the variables whose values come from Secrets.
@@ -89,7 +89,7 @@ func secretNames(sb *sandboxv1alpha1.SwiftSandbox) []string {
 	for _, f := range sb.Spec.SecretFiles {
 		out = append(out, f.SecretName)
 	}
-	return out
+	return append(out, credentialSecretNames(sb)...)
 }
 
 // secretNamesFor is secretNames for sb's launcher pod podName running as
@@ -123,6 +123,21 @@ func checkSecretEnv(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.Sw
 		if _, ok := s.Data[r.Key]; !ok {
 			if _, ok := s.StringData[r.Key]; !ok {
 				return "SecretKeyNotFound", fmt.Sprintf("secret env %s (#%d): Secret %s has no key %s", r.Name, i, r.Secret, r.Key), nil
+			}
+		}
+	}
+	for _, r := range credentialRefs(sb) {
+		var s corev1.Secret
+		err := c.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: r.Secret}, &s)
+		if apierrors.IsNotFound(err) {
+			return "SecretNotFound", fmt.Sprintf("egress credential %s: Secret %s not found", r.Name, r.Secret), nil
+		}
+		if err != nil {
+			return "", "", err
+		}
+		if _, ok := s.Data[r.Key]; !ok {
+			if _, ok := s.StringData[r.Key]; !ok {
+				return "SecretKeyNotFound", fmt.Sprintf("egress credential %s: Secret %s has no key %s", r.Name, r.Secret, r.Key), nil
 			}
 		}
 	}
