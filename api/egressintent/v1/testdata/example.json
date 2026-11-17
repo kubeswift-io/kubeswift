@@ -12,8 +12,11 @@
   "credentials": [
     {"name": "API_KEY", "placeholder": "ks-0123456789abcdef0123456789abcdef",
      "destinations": ["api.example.com:443"], "header": "Authorization", "valueTemplate": "Bearer {}",
-     "file": "/run/kubeswift/egress/credentials/API_KEY"}
+     "file": "/run/kubeswift/egress/secrets/cred-API_KEY",
+     "headerValueFile": "/run/kubeswift/egress/secrets/header-API_KEY"}
   ],
-  "tls": {"interceptCA": {"cert": "/run/kubeswift/egress/ca/ca.crt", "key": "/run/kubeswift/egress/ca/ca.key"}},
+  "tls": {"interceptCA": {"cert": "/run/kubeswift/egress/secrets/ca.crt"},
+          "certificates": [{"hosts": ["api.example.com"], "cert": "/run/kubeswift/egress/secrets/cert-0.crt", "key": "/run/kubeswift/egress/secrets/cert-0.key"}]},
+  "secretsDir": "/run/kubeswift/egress/secrets",
   "identity": {"spiffe": {"workloadAPISocket": "unix:///run/spiffe/agent.sock"}}
 }

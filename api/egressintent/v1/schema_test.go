@@ -74,7 +74,7 @@ func TestSchemaMatchesTypes(t *testing.T) {
 	check("EgressIntent", reflect.TypeOf(EgressIntent{}), root)
 	for _, typ := range []reflect.Type{
 		reflect.TypeOf(Owner{}), reflect.TypeOf(Listeners{}), reflect.TypeOf(Rule{}), reflect.TypeOf(Port{}),
-		reflect.TypeOf(RuleTLS{}), reflect.TypeOf(Credential{}), reflect.TypeOf(TLS{}), reflect.TypeOf(CA{}),
+		reflect.TypeOf(RuleTLS{}), reflect.TypeOf(Credential{}), reflect.TypeOf(TLS{}), reflect.TypeOf(CA{}), reflect.TypeOf(Certificate{}),
 		reflect.TypeOf(Identity{}), reflect.TypeOf(SPIFFE{}),
 	} {
 		def, ok := root.Defs[typ.Name()]

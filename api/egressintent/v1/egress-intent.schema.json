@@ -13,6 +13,7 @@
     "allow": {"type": "array", "items": {"$ref": "#/$defs/Rule"}},
     "credentials": {"type": "array", "items": {"$ref": "#/$defs/Credential"}},
     "tls": {"$ref": "#/$defs/TLS"},
+    "secretsDir": {"type": "string", "minLength": 1},
     "identity": {"$ref": "#/$defs/Identity"}
   },
   "$defs": {
@@ -75,20 +76,31 @@
         "destinations": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^(\\*\\.)?[a-z0-9.-]+:[0-9]{1,5}$"}},
         "header": {"type": "string", "minLength": 1},
         "valueTemplate": {"type": "string", "pattern": "^[^{}]*\\{\\}[^{}]*$"},
-        "file": {"type": "string", "minLength": 1}
+        "file": {"type": "string", "minLength": 1},
+        "headerValueFile": {"type": "string", "minLength": 1}
       }
     },
     "TLS": {
       "type": "object",
       "required": ["interceptCA"],
       "properties": {
-        "interceptCA": {"$ref": "#/$defs/CA"}
+        "interceptCA": {"$ref": "#/$defs/CA"},
+        "certificates": {"type": "array", "items": {"$ref": "#/$defs/Certificate"}}
       }
     },
     "CA": {
       "type": "object",
-      "required": ["cert", "key"],
+      "required": ["cert"],
       "properties": {
+        "cert": {"type": "string", "minLength": 1},
+        "key": {"type": "string", "minLength": 1}
+      }
+    },
+    "Certificate": {
+      "type": "object",
+      "required": ["hosts", "cert", "key"],
+      "properties": {
+        "hosts": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^(\\*\\.)?[a-z0-9.-]+$"}},
         "cert": {"type": "string", "minLength": 1},
         "key": {"type": "string", "minLength": 1}
       }

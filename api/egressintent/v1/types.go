@@ -14,8 +14,8 @@
 // Rules of the file:
 //
 //   - It is mounted read-only at Path and never changes for the life of the
-//     launcher pod. Per-sandbox data that arrives later (credential values)
-//     is in separate files named here.
+//     launcher pod. Per-sandbox data that arrives later (credential values,
+//     TLS keys) is in separate files named here, all in SecretsDir.
 //   - Within v1 fields may be added only where a consumer that ignores them
 //     stays safe. Consumers MUST ignore fields they do not know. A change a
 //     consumer must not ignore is a new version (v2).
@@ -54,6 +54,15 @@ type EgressIntent struct {
 	Credentials []Credential `json:"credentials,omitempty"`
 	// TLS material the proxy uses. Present when Credentials is not empty.
 	TLS *TLS `json:"tls,omitempty"`
+	// SecretsDir holds every file named in Credentials and TLS, on a
+	// memory-backed volume shared only with the proxy. KubeSwift replaces
+	// the whole content at once: the files are symlinks to "..data/<name>",
+	// and "..data" is a symlink to a fresh directory, swapped by rename (the
+	// kubelet's layout for projected volumes). A proxy watches SecretsDir and
+	// reloads all of its files together. Present when Credentials is not
+	// empty. The files exist before the proxy starts; a warm slot's hold
+	// throwaway material and empty values until a sandbox claims it.
+	SecretsDir string `json:"secretsDir,omitempty"`
 	// Identity the proxy may use. Present when the sandbox has a SPIFFE
 	// identity.
 	Identity *Identity `json:"identity,omitempty"`
@@ -125,10 +134,14 @@ type RuleTLS struct {
 
 // Credential is one secret the proxy swaps in for a placeholder.
 //
-// The proxy terminates the guest's TLS with TLS.InterceptCA, replaces
-// Placeholder in Header with ValueTemplate ("{}" standing for the value read
-// from File) on requests to Destinations, and refuses any request to another
-// destination that still contains Placeholder.
+// The proxy terminates the guest's TLS for Destinations (with a certificate
+// from TLS.Certificates, or one it mints with TLS.InterceptCA), sets Header
+// to ValueTemplate ("{}" standing for the value read from File) on requests
+// to Destinations, and must not let a request whose Host differs from the
+// destination use the credential. An empty value (a warm slot not yet
+// claimed) must fail the request, never forward the placeholder. A proxy
+// cannot see inside TLS it does not terminate, so a placeholder sent to
+// another allowed destination leaves unchanged; it is worthless there.
 type Credential struct {
 	// Name of the guest environment variable holding the placeholder.
 	Name string `json:"name"`
@@ -140,24 +153,44 @@ type Credential struct {
 	Header string `json:"header"`
 	// ValueTemplate is the header value, "{}" standing for the secret.
 	ValueTemplate string `json:"valueTemplate"`
-	// File holds the secret value. It exists from start, empty until the
-	// value is delivered, and is replaced atomically (rename); the proxy
-	// must pick up a replaced file without a restart.
+	// File holds the secret value, in SecretsDir. It exists from start,
+	// empty until the value is delivered; the proxy must pick up a new value
+	// without a restart.
 	File string `json:"file"`
+	// HeaderValueFile holds ValueTemplate with the value filled in, for a
+	// proxy that cannot apply a template. Same lifecycle as File.
+	HeaderValueFile string `json:"headerValueFile,omitempty"`
 }
 
 // TLS is TLS material for the proxy.
 type TLS struct {
-	// InterceptCA signs the certificates the proxy presents to the guest.
+	// InterceptCA is the certificate authority the guest trusts for
+	// intercepted connections. It is name-constrained to the credential
+	// destinations' hosts and replaced when a warm slot is claimed.
 	InterceptCA CA `json:"interceptCA"`
+	// Certificates are leaf certificates KubeSwift issued with InterceptCA,
+	// one per credential destination host. A proxy presents the one whose
+	// Hosts match the TLS server name.
+	Certificates []Certificate `json:"certificates,omitempty"`
 }
 
-// CA is a certificate authority as two PEM files. The guest trusts Cert;
-// Key never leaves the launcher pod. Both are replaced atomically when a
-// warm slot is claimed.
+// CA is a certificate authority as PEM files.
 type CA struct {
+	// Cert is the CA certificate.
 	Cert string `json:"cert"`
-	Key  string `json:"key"`
+	// Key is the CA private key, for a proxy that mints its own
+	// certificates. KubeSwift keeps the key out of the proxy and leaves this
+	// empty; such a proxy uses Certificates.
+	Key string `json:"key,omitempty"`
+}
+
+// Certificate is a leaf certificate and its private key as PEM files, in
+// SecretsDir.
+type Certificate struct {
+	// Hosts are the DNS names in the certificate (subjectAltName).
+	Hosts []string `json:"hosts"`
+	Cert  string   `json:"cert"`
+	Key   string   `json:"key"`
 }
 
 // Identity is what the proxy may use to prove the sandbox's identity.
