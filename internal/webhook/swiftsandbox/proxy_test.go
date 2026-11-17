@@ -13,14 +13,15 @@ import (
 func available(t *testing.T) {
 	t.Helper()
 	saved := []bool{ProxiedAvailable, EgressProxyAvailable, IdentityAvailable, PresetsAvailable, CredentialsAvailable, ServiceUpstreamsAvailable, HTTPListenerAvailable}
-	savedImages := AllowedProxyImages
+	savedImages, savedPresets := AllowedProxyImages, EgressProxyPresets
+	EgressProxyPresets = map[string]EgressProxyPreset{"envoy": {Image: "docker.io/envoyproxy/envoy:v1.36.2"}}
 	ProxiedAvailable, EgressProxyAvailable, IdentityAvailable = true, true, true
 	PresetsAvailable, CredentialsAvailable, ServiceUpstreamsAvailable, HTTPListenerAvailable = true, true, true, true
 	AllowedProxyImages = []string{"*", "*/*", "*/*/*"}
 	t.Cleanup(func() {
 		ProxiedAvailable, EgressProxyAvailable, IdentityAvailable = saved[0], saved[1], saved[2]
 		PresetsAvailable, CredentialsAvailable, ServiceUpstreamsAvailable, HTTPListenerAvailable = saved[3], saved[4], saved[5], saved[6]
-		AllowedProxyImages = savedImages
+		AllowedProxyImages, EgressProxyPresets = savedImages, savedPresets
 	})
 }
 
@@ -44,9 +45,10 @@ func preset() *sandboxv1alpha1.SandboxEgressProxy {
 	return &sandboxv1alpha1.SandboxEgressProxy{Preset: "envoy"}
 }
 
-// Mode proxied with the built-in broker or an allowed proxy image is
-// accepted; presets, credentials, service upstreams and the HTTP listener are
-// refused, with that reason only, until their runtime ships.
+// Mode proxied with the built-in broker, an allowed proxy image or a defined
+// preset is accepted; an unknown preset is refused; credentials, service
+// upstreams and the HTTP listener are refused, with that reason only, until
+// their runtime ships.
 func TestProxyNotAvailableYet(t *testing.T) {
 	saved := AllowedProxyImages
 	AllowedProxyImages = []string{"docker.io/envoyproxy/envoy:*"}
@@ -67,7 +69,7 @@ func TestProxyNotAvailableYet(t *testing.T) {
 		name, want string
 		n          sandboxv1alpha1.SandboxNetwork
 	}{
-		{"preset", "preset (use an image) is not available", proxied(&sandboxv1alpha1.SandboxEgress{Proxy: preset()})},
+		{"unknown preset", "is not a preset this cluster defines", proxied(&sandboxv1alpha1.SandboxEgress{Proxy: preset()})},
 		{"image not allowed", "is not an egress proxy image this cluster allows", proxied(&sandboxv1alpha1.SandboxEgress{
 			Proxy: &sandboxv1alpha1.SandboxEgressProxy{Image: "docker.io/library/nginx:1", Listeners: listeners}})},
 		{"http listener", "listeners.http is not available", proxied(&sandboxv1alpha1.SandboxEgress{
@@ -271,5 +273,39 @@ func TestValidateIdentity(t *testing.T) {
 		if err := ValidateIdentity(tc.id, tc.n); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: got %v, want %q", tc.name, err, tc.want)
 		}
+	}
+}
+
+func TestParseProxyPresets(t *testing.T) {
+	got, err := ParseProxyPresets(`{"envoy":{"image":"docker.io/envoyproxy/envoy:v1.36.2","args":["-c","/etc/kubeswift/egress-proxy/envoy.json"],
+		"translatorImage":"ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:v0.1.0","translatorArgs":["--out","/etc/kubeswift/egress-proxy/envoy.json"],
+		"listeners":{"transparent":15006}}}`)
+	if err != nil || got["envoy"].Listeners.Transparent != 15006 || got["envoy"].TranslatorImage == "" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if got, err := ParseProxyPresets(""); err != nil || got != nil {
+		t.Errorf("empty: %v %v", got, err)
+	}
+	for name, in := range map[string]string{
+		"bad name":        `{"Envoy":{"image":"x","listeners":{"transparent":15006}}}`,
+		"no image":        `{"envoy":{"listeners":{"transparent":15006}}}`,
+		"privileged port": `{"envoy":{"image":"x","listeners":{"transparent":80}}}`,
+		"same ports":      `{"envoy":{"image":"x","listeners":{"transparent":15006,"dns":15006}}}`,
+		"unknown field":   `{"envoy":{"image":"x","listeners":{"transparent":15006},"command":["sh"]}}`,
+		"not json":        `envoy`,
+	} {
+		if _, err := ParseProxyPresets(in); err == nil {
+			t.Errorf("%s: parsed, want an error", name)
+		}
+	}
+	// A preset's listener cannot be an exposed port.
+	saved := EgressProxyPresets
+	EgressProxyPresets = map[string]EgressProxyPreset{"envoy": {Image: "x"}}
+	EgressProxyPresets["envoy"] = func() EgressProxyPreset { p := EgressProxyPresets["envoy"]; p.Listeners.Transparent = 15006; return p }()
+	t.Cleanup(func() { EgressProxyPresets = saved })
+	n := proxied(&sandboxv1alpha1.SandboxEgress{Proxy: preset()})
+	n.Ports = []sandboxv1alpha1.SandboxPort{{Name: "web", Port: 15006}}
+	if err := ValidateNetwork(n); err == nil || !strings.Contains(err.Error(), "listener of egress proxy preset") {
+		t.Errorf("preset listener exposed: got %v", err)
 	}
 }

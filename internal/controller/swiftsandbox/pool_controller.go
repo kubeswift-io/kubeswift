@@ -395,6 +395,12 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 				prime(lookup, abiReq)
 			}
 		}
+		// The image that reads the egress-intent file must say it reads v1,
+		// checked before any slot boots.
+		irReq, irImage, irWanted := intentReaderRequest(r.slotTemplate(&pool, "resolve"))
+		if irWanted {
+			prime(lookup, irReq)
+		}
 		resolved, imageReady, err := resolveImage(r.slotTemplate(&pool, "resolve"), auth, lookup)
 		var rm resolvedModel
 		modelReady := true
@@ -436,9 +442,26 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 					fmt.Sprintf("%s (next attempt in %s)", aerr.Error(), wait), wait)
 			}
 		}
-		if !imageReady || !modelReady || !kernelABIReady {
+		irReady := true
+		var irLabels map[string]string
+		if irWanted {
+			res, ok := lookup(irReq)
+			irReady, irLabels = ok, res.config.Labels
+			if ok && res.err != nil {
+				wait := r.nextResolveBackoff(req.NamespacedName)
+				return r.degradedAfter(ctx, &pool, ready, claimed, "EgressProxyImageResolveFailed",
+					fmt.Sprintf("%s (next attempt in %s)", res.err.Error(), wait), wait)
+			}
+		}
+		if !imageReady || !modelReady || !kernelABIReady || !irReady {
 			// Enqueued again when the requests finish.
 			return ctrl.Result{RequeueAfter: registryPendingRecheck}, nil
+		}
+		if irWanted {
+			if reason, msg := intentVersionVerdict(irImage, irLabels); reason != "" {
+				wait := r.nextResolveBackoff(req.NamespacedName)
+				return r.degradedAfter(ctx, &pool, ready, claimed, reason, msg, wait)
+			}
 		}
 		if gpuPool {
 			// Checked before any slot allocates a GPU: a pool whose image

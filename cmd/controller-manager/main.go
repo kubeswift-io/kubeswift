@@ -155,6 +155,12 @@ func main() {
 	} else {
 		swiftsandboxwebhook.AllowedProxyImages = imgs
 	}
+	if presets, err := swiftsandboxwebhook.ParseProxyPresets(os.Getenv("KUBESWIFT_SANDBOX_EGRESS_PROXY_PRESETS")); err != nil {
+		klog.ErrorS(err, "invalid KUBESWIFT_SANDBOX_EGRESS_PROXY_PRESETS")
+		os.Exit(1)
+	} else {
+		swiftsandboxwebhook.EgressProxyPresets = presets
+	}
 	if q, err := swiftsandbox.ParseLauncherCPUPerVCPU(os.Getenv("KUBESWIFT_SANDBOX_LAUNCHER_CPU_PER_VCPU")); err != nil {
 		klog.ErrorS(err, "invalid KUBESWIFT_SANDBOX_LAUNCHER_CPU_PER_VCPU")
 		os.Exit(1)

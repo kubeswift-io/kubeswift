@@ -710,8 +710,9 @@ type SandboxEgress struct {
 	// broker allows connections that match allow (by TLS server name or HTTP
 	// Host for host rules, by address for the others). Only valid with mode
 	// proxied. An image runs when the administrator allows it (chart
-	// sandboxMaterialize.egressProxyImages); presets, service upstreams and
-	// the HTTP listener are not available yet and are refused.
+	// sandboxMaterialize.egressProxyImages), a preset when the administrator
+	// defines it (sandboxMaterialize.egressProxyPresets); service upstreams
+	// and the HTTP listener are not available yet and are refused.
 	// +optional
 	Proxy *SandboxEgressProxy `json:"proxy,omitempty"`
 
@@ -829,9 +830,9 @@ const (
 // restricted: never the cloud metadata endpoint, node addresses, the API
 // server or Services in front of them.
 type SandboxEgressProxy struct {
-	// Preset names a proxy the administrator configured in the chart (for
-	// example envoy or agentgateway): image, translator and listeners. Exactly
-	// one of preset and image is set.
+	// Preset names a proxy the administrator defines in the chart
+	// (sandboxMaterialize.egressProxyPresets): image, translator and
+	// listeners. Exactly one of preset and image is set.
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	Preset string `json:"preset,omitempty"`
