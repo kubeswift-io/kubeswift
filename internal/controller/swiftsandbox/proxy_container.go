@@ -198,7 +198,7 @@ func egressIntentJSON(sb *sandboxv1alpha1.SwiftSandbox, ownerKind, ownerName str
 		key := a.CIDR + " " + a.From
 		i, seen := byCIDR[key]
 		if !seen {
-			in.Allow = append(in.Allow, egressintentv1.Rule{CIDR: a.CIDR, From: a.From})
+			in.Allow = append(in.Allow, egressintentv1.Rule{CIDR: a.CIDR, From: a.From, Service: ruleService(a.From)})
 			i = len(in.Allow) - 1
 			if tlsFrom[a.From] {
 				in.Allow[i].TLS = &egressintentv1.RuleTLS{Originate: string(sandboxv1alpha1.SandboxEgressTLSSPIFFE)}
@@ -327,6 +327,20 @@ func addEgressProxy(pod *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox) {
 		pod.Spec.InitContainers = append(pod.Spec.InitContainers, t)
 	}
 	pod.Spec.InitContainers = append(pod.Spec.InitContainers, c)
+}
+
+// ruleService is the Service behind a resolved rule's From ("service
+// <namespace>/<name>", egressAllowed), nil for any other rule.
+func ruleService(from string) *egressintentv1.RuleService {
+	ref, ok := strings.CutPrefix(from, "service ")
+	if !ok {
+		return nil
+	}
+	ns, name, ok := strings.Cut(ref, "/")
+	if !ok || ns == "" || name == "" {
+		return nil
+	}
+	return &egressintentv1.RuleService{Namespace: ns, Name: name}
 }
 
 // reasonEgressIntentUnsupported: the image that reads the egress-intent file

@@ -138,6 +138,15 @@ type Rule struct {
 	Ports []Port `json:"ports,omitempty"`
 	// TLS asks the proxy to originate TLS to this destination.
 	TLS *RuleTLS `json:"tls,omitempty"`
+	// Service is the Service a cidr rule was resolved from (a service entry
+	// in the sandbox spec). A proxy with an HTTP listener lets the guest ask
+	// for it by name in a CONNECT or absolute-URI request, as the built-in
+	// broker does: "<name>" when the Service is in Owner.Namespace,
+	// "<name>.<namespace>", "<name>.<namespace>.svc" and
+	// "<name>.<namespace>.svc.<cluster domain>", on the rule's ports. The
+	// proxy connects to CIDR on the requested port and never resolves the
+	// name, so a request naming anything else cannot become a DNS lookup.
+	Service *RuleService `json:"service,omitempty"`
 	// From is the sandbox spec entry this came from, for logs:
 	// "host <name>", "cidr <cidr>" or "service <namespace>/<name>".
 	From string `json:"from"`
@@ -148,6 +157,12 @@ type Port struct {
 	Port int32 `json:"port"`
 	// Protocol is TCP.
 	Protocol string `json:"protocol"`
+}
+
+// RuleService names a Service.
+type RuleService struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
 }
 
 // RuleTLS is TLS the proxy originates on the guest's behalf.
