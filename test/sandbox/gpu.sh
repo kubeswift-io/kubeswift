@@ -39,7 +39,7 @@
 set -euo pipefail
 
 NS="${NS:-sandbox-gpu}"
-KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.12}"
+KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.13}"
 IMAGE="${IMAGE:-docker.io/library/busybox:1.36}"
 GPU_IMAGE="${GPU_IMAGE:-}"
 TIMEOUT="${TIMEOUT:-300}"
