@@ -32,7 +32,8 @@
       "properties": {
         "transparent": {"$ref": "#/$defs/ListenerPort"},
         "dns": {"$ref": "#/$defs/ListenerPort"},
-        "http": {"$ref": "#/$defs/ListenerPort"}
+        "http": {"$ref": "#/$defs/ListenerPort"},
+        "proxyProtocol": {"enum": ["v1", "v2"]}
       }
     },
     "ListenerPort": {"type": "integer", "minimum": 1024, "maximum": 65535},

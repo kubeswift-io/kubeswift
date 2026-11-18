@@ -388,7 +388,7 @@ fn find(h: &[u8], n: &[u8]) -> Option<usize> {
 }
 
 /// The destination the guest asked for, before the REDIRECT.
-fn original_dst(s: &TcpStream) -> std::io::Result<SocketAddrV4> {
+pub(crate) fn original_dst(s: &TcpStream) -> std::io::Result<SocketAddrV4> {
     let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
     let mut len = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
     // SO_ORIGINAL_DST (linux/netfilter_ipv4.h) = 80.
@@ -673,9 +673,23 @@ pub fn spawn_if_proxied() -> Result<(), String> {
         return Ok(());
     }
     if std::env::var("KUBESWIFT_EGRESS_PROXY").as_deref() == Ok("container") {
-        return wait_for_proxy();
+        wait_for_proxy()?;
+        if !crate::egress_relay::enabled() {
+            return Ok(());
+        }
+        // listeners.proxyProtocol: the guest is redirected to the relay,
+        // which hands each connection to the proxy with a PROXY header.
+        let cfg = crate::egress_relay::Config::from_env()?;
+        spawn_helper(crate::egress_relay::SUBCOMMAND)?;
+        return wait_listening(cfg.port, "egress relay");
     }
     let cfg = Config::from_env()?;
+    spawn_helper(SUBCOMMAND)?;
+    wait_listening(cfg.port, "egress broker")
+}
+
+/// Runs `swiftletd <sub>` under the proxy uid, restarting it if it exits.
+fn spawn_helper(sub: &'static str) -> Result<(), String> {
     let uid: u32 = std::env::var("KUBESWIFT_EGRESS_PROXY_UID")
         .ok()
         .and_then(|u| u.parse().ok())
@@ -689,7 +703,7 @@ pub fn spawn_if_proxied() -> Result<(), String> {
             // Its log comes back through a pipe: copied to this log and
             // its decisions to the egress audit (audit.rs).
             match Command::new(&exe)
-                .arg(SUBCOMMAND)
+                .arg(sub)
                 .uid(uid)
                 .gid(uid)
                 .stderr(std::process::Stdio::piped())
@@ -700,11 +714,11 @@ pub fn spawn_if_proxied() -> Result<(), String> {
                         std::thread::spawn(move || crate::audit::follow_broker(e));
                     }
                     match child.wait() {
-                        Ok(st) => log::warn!("egress_broker_exited status={}", st),
-                        Err(e) => log::warn!("egress_broker_wait: {}", e),
+                        Ok(st) => log::warn!("{}_exited status={}", sub.replace('-', "_"), st),
+                        Err(e) => log::warn!("{}_wait: {}", sub.replace('-', "_"), e),
                     }
                 }
-                Err(e) => log::error!("egress_broker_spawn: {}", e),
+                Err(e) => log::error!("{}_spawn: {}", sub.replace('-', "_"), e),
             }
             if started.elapsed() > Duration::from_secs(30) {
                 backoff = Duration::from_millis(500);
@@ -713,16 +727,21 @@ pub fn spawn_if_proxied() -> Result<(), String> {
             backoff = (backoff * 2).min(Duration::from_secs(10));
         }
     });
+    Ok(())
+}
+
+/// Waits up to 10 s for `what` to listen on `port`.
+fn wait_listening(port: u16, what: &str) -> Result<(), String> {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while std::time::Instant::now() < deadline {
-        if listening(cfg.port) {
+        if listening(port) {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     Err(format!(
-        "egress broker is not listening on port {} after 10s",
-        cfg.port
+        "{} is not listening on port {} after 10s",
+        what, port
     ))
 }
 
@@ -731,7 +750,10 @@ pub fn spawn_if_proxied() -> Result<(), String> {
 /// its transparent port (and DNS port, when it has one) so the guest never
 /// boots into a redirect to nothing.
 fn wait_for_proxy() -> Result<(), String> {
-    let port: u16 = std::env::var("KUBESWIFT_EGRESS_BROKER_PORT")
+    // With a relay (listeners.proxyProtocol) the proxy's own port is
+    // KUBESWIFT_EGRESS_PROXY_PORT; KUBESWIFT_EGRESS_BROKER_PORT is the relay's.
+    let port: u16 = std::env::var("KUBESWIFT_EGRESS_PROXY_PORT")
+        .or_else(|_| std::env::var("KUBESWIFT_EGRESS_BROKER_PORT"))
         .ok()
         .and_then(|p| p.parse().ok())
         .ok_or("KUBESWIFT_EGRESS_BROKER_PORT is not a port")?;

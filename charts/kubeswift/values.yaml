@@ -143,6 +143,17 @@ sandboxMaterialize:
   #     translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/envoy.json", "--admin-port", "15000"]
   #     listeners: {transparent: 15006}
   #     readiness: {httpGet: {port: 15000, path: /certs}}
+  # A proxy that cannot read SO_ORIGINAL_DST sets listeners.proxyProtocol
+  # (v1 or v2): guest connections then reach it through a relay in the
+  # launcher that sends a PROXY protocol header with the original
+  # destination, on 127.0.0.1:<transparent> (port 15001 is the relay's).
+  # Example, agentgateway:
+  #   agentgateway:
+  #     image: cr.agentgateway.dev/agentgateway:v1.7.0
+  #     args: ["-f", "/etc/kubeswift/egress-proxy/agentgateway.json"]
+  #     translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/agentgateway-translator:<version>
+  #     translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/agentgateway.json"]
+  #     listeners: {transparent: 15006, proxyProtocol: v2}
   egressProxyPresets: {}
   # SPIFFE identity for proxied sandboxes (spec.identity.spiffe). Needs a
   # SPIFFE implementation in the cluster: SPIRE with its controller manager

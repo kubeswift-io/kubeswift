@@ -1122,6 +1122,18 @@ spec:
                                 maximum: 65535
                                 minimum: 1024
                                 type: integer
+                              proxyProtocol:
+                                description: |-
+                                  ProxyProtocol is for a proxy that cannot read SO_ORIGINAL_DST: guest
+                                  connections then go to a relay in the launcher that connects to
+                                  Transparent on 127.0.0.1 and starts each connection with a PROXY
+                                  protocol header (v1 text or v2 binary) carrying the original
+                                  destination. Only the relay reaches Transparent. The proxy must
+                                  refuse a connection without the header.
+                                enum:
+                                - v1
+                                - v2
+                                type: string
                               transparent:
                                 description: |-
                                   Transparent receives every guest TCP connection; the original

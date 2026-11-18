@@ -63,7 +63,9 @@ build_deny_chain() {
 
 # apply_proxied_egress sets up mode proxied (KUBESWIFT_SANDBOX_EGRESS=proxied):
 # the guest keeps its NIC, nothing it sends is forwarded, every TCP
-# connection is redirected to the egress broker's transparent listener, and
+# connection is redirected to the egress broker's transparent listener (or,
+# with KUBESWIFT_EGRESS_PROXY_PORT, to the PROXY protocol relay in front of
+# a proxy listening on that port on loopback), and
 # DNS goes to the launcher's dnsmasq (which answers only allowed names). The
 # broker runs as KUBESWIFT_EGRESS_PROXY_UID; its own connections pass the
 # same checks a restricted guest's would (metadata, the platform deny list,
@@ -140,9 +142,21 @@ apply_proxied_egress() {
         done
     fi
 
+    # listeners.proxyProtocol: guest TCP goes to the relay (on $port), which
+    # connects to the proxy's own port on loopback with a PROXY header. Only
+    # loopback reaches that port, so the guest cannot send a forged header.
+    pport="${KUBESWIFT_EGRESS_PROXY_PORT:-}"
+    case "$pport" in *[!0-9]*) echo "ERROR: malformed KUBESWIFT_EGRESS_PROXY_PORT" >&2; exit 1 ;; esac
+    if [ -n "$pport" ]; then
+        iptables -C INPUT ! -i lo -p tcp --dport "$pport" -j DROP 2>/dev/null \
+            || iptables -I INPUT 1 ! -i lo -p tcp --dport "$pport" -j DROP
+    fi
+
     out="KUBESWIFT_SBX_PROXY"
     iptables -N "$out" 2>/dev/null || iptables -F "$out"
     iptables -A "$out" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+    # The relay (proxy uid) reaches the proxy's port, and no other loopback port.
+    [ -z "$pport" ] || iptables -A "$out" -d 127.0.0.1 -p tcp --dport "$pport" -j RETURN
     for d in $(grep '^nameserver ' /etc/resolv.conf 2>/dev/null | awk '{print $2}'); do
         iptables -A "$out" -d "$d" -p udp --dport 53 -j RETURN
         iptables -A "$out" -d "$d" -p tcp --dport 53 -j RETURN

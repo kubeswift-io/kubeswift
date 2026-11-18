@@ -30,10 +30,10 @@ func ValidateNetwork(n sandboxv1alpha1.SandboxNetwork) error {
 		if what := proxyNotAvailable(n); what != "" {
 			return fmt.Errorf("%s is not available in this version of KubeSwift yet", what)
 		}
-		if n.Egress == nil || n.Egress.Proxy == nil {
+		if UsesBrokerPort(n) {
 			for _, p := range n.Ports {
 				if p.Port == EgressBrokerPort {
-					return fmt.Errorf("spec.network.ports %s: port %d is the egress broker's in mode proxied", p.Name, p.Port)
+					return fmt.Errorf("spec.network.ports %s: port %d is the egress broker's (or relay's) in mode proxied", p.Name, p.Port)
 				}
 			}
 		}

@@ -428,6 +428,33 @@ namespace `egress-conformance` (`... cleanup` deletes it). From a checkout:
 `test/conformance/egress/egress-conformance.sh validate` with
 `IMAGE=<the egress-conformance image>`.
 
+##### Proxies that cannot read the original destination
+
+A proxy that does not read `SO_ORIGINAL_DST` sets `listeners.proxyProtocol:
+v1` or `v2` (in a preset, or in `spec.network.egress.proxy.listeners` for an
+image). The launcher then redirects guest connections to a relay on port
+15001, which runs under the proxy's uid, connects to the proxy's transparent
+port on 127.0.0.1 and starts each connection with a PROXY protocol header
+carrying the guest's address and the original destination. Only loopback
+reaches the proxy's port, so the guest cannot send a header of its own; the
+proxy must require one. With config `Intent`, the intent reader must list
+`proxy-protocol` in `io.kubeswift.egress-intent.features`. agentgateway is
+such a proxy:
+
+```yaml
+sandboxMaterialize:
+  egressProxyPresets:
+    agentgateway:
+      image: cr.agentgateway.dev/agentgateway:v1.7.0
+      args: ["-f", "/etc/kubeswift/egress-proxy/agentgateway.json"]
+      translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/agentgateway-translator:<version>
+      translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/agentgateway.json"]
+      listeners: {transparent: 15006, proxyProtocol: v2}
+```
+
+The agentgateway translator supports `host`, `cidr` and `service` rules; it
+refuses credentials, `allow[].tls` and the DNS and HTTP listeners.
+
 #### Egress credentials
 
 `network.egress.credentials` gives the workload an API key it never sees. The

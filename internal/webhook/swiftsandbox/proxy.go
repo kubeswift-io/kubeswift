@@ -59,6 +59,10 @@ type EgressProxyPreset struct {
 		// HTTP is an explicit HTTP proxy port the guest's HTTP_PROXY and
 		// HTTPS_PROXY point at.
 		HTTP int32 `json:"http,omitempty"`
+		// ProxyProtocol (v1 or v2): the proxy reads the original
+		// destination from a PROXY protocol header the launcher's relay
+		// sends, not from SO_ORIGINAL_DST.
+		ProxyProtocol string `json:"proxyProtocol,omitempty"`
 	} `json:"listeners"`
 	// Readiness tells swiftletd when the proxy has loaded newly delivered
 	// credentials. Only a preset with it can receive credentials.
@@ -103,9 +107,13 @@ func ParseProxyPresets(s string) (map[string]EgressProxyPreset, error) {
 			(l.HTTP != 0 && (l.HTTP < 1024 || l.HTTP > 65535 || l.HTTP == l.Transparent || l.HTTP == l.DNS)) {
 			return nil, fmt.Errorf("egress proxy preset %q: listeners must be distinct ports in 1024-65535", name)
 		}
+		if err := validateProxyProtocol(l.ProxyProtocol, l.Transparent, l.DNS, l.HTTP); err != nil {
+			return nil, fmt.Errorf("egress proxy preset %q: listeners.%w", name, err)
+		}
 		if r := p.Readiness; r != nil {
 			port := r.HTTPGet.Port
-			if port < 1024 || port > 65535 || port == l.Transparent || port == l.DNS || port == l.HTTP {
+			if port < 1024 || port > 65535 || port == l.Transparent || port == l.DNS || port == l.HTTP ||
+				(l.ProxyProtocol != "" && port == EgressBrokerPort) {
 				return nil, fmt.Errorf("egress proxy preset %q: readiness.httpGet.port must be a port in 1024-65535 other than the listeners", name)
 			}
 			if !strings.HasPrefix(r.HTTPGet.Path, "/") || strings.ContainsAny(r.HTTPGet.Path, " \r\n") {
@@ -170,8 +178,41 @@ func proxyNotAvailable(n sandboxv1alpha1.SandboxNetwork) string {
 }
 
 // EgressBrokerPort is the built-in broker's transparent listener in the
-// launcher pod. A proxied sandbox without a proxy cannot expose it.
+// launcher pod, and the PROXY protocol relay's for a proxy with
+// listeners.proxyProtocol. A proxied sandbox using either cannot expose it.
 const EgressBrokerPort = 15001
+
+// validateProxyProtocol checks listeners.proxyProtocol: v1 or v2, and the
+// proxy's ports leave EgressBrokerPort to the relay.
+func validateProxyProtocol(v string, ports ...int32) error {
+	switch v {
+	case "":
+		return nil
+	case "v1", "v2":
+	default:
+		return fmt.Errorf("proxyProtocol %q is not v1 or v2", v)
+	}
+	for _, p := range ports {
+		if p == EgressBrokerPort {
+			return fmt.Errorf("proxyProtocol: port %d is the launcher's relay; use another listener port", EgressBrokerPort)
+		}
+	}
+	return nil
+}
+
+// UsesBrokerPort reports whether the launcher listens on EgressBrokerPort for
+// n: the built-in broker (no proxy) or the relay (proxyProtocol).
+func UsesBrokerPort(n sandboxv1alpha1.SandboxNetwork) bool {
+	if n.Egress == nil || n.Egress.Proxy == nil {
+		return true
+	}
+	p := n.Egress.Proxy
+	if p.Preset != "" {
+		pr, ok := EgressProxyPresets[p.Preset]
+		return ok && pr.Listeners.ProxyProtocol != ""
+	}
+	return p.Listeners != nil && p.Listeners.ProxyProtocol != ""
+}
 
 // SPIFFEConfig is the platform's SPIFFE setup (chart
 // sandboxMaterialize.spiffe), from KUBESWIFT_SANDBOX_SPIFFE. Nil: off, and
@@ -322,6 +363,9 @@ func validateProxy(n sandboxv1alpha1.SandboxNetwork) error {
 				return fmt.Errorf("%s.listeners.%s %d is also used by %s", f, x.name, x.port, other)
 			}
 			seen[x.port] = "listeners." + x.name
+		}
+		if err := validateProxyProtocol(l.ProxyProtocol, l.Transparent, l.DNS, l.HTTP); err != nil {
+			return fmt.Errorf("%s.listeners.%w", f, err)
 		}
 	}
 	switch p.Config {

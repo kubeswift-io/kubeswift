@@ -390,3 +390,49 @@ func TestParseSPIFFE(t *testing.T) {
 		}
 	}
 }
+
+// listeners.proxyProtocol: v1 or v2, and port 15001 stays the relay's.
+func TestProxyProtocolListeners(t *testing.T) {
+	got, err := ParseProxyPresets(`{"agw":{"image":"x","listeners":{"transparent":15006,"proxyProtocol":"v2"}}}`)
+	if err != nil || got["agw"].Listeners.ProxyProtocol != "v2" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	for name, in := range map[string]string{
+		"bad version":            `{"agw":{"image":"x","listeners":{"transparent":15006,"proxyProtocol":"v3"}}}`,
+		"transparent on relay":   `{"agw":{"image":"x","listeners":{"transparent":15001,"proxyProtocol":"v1"}}}`,
+		"readiness on relay":     `{"agw":{"image":"x","listeners":{"transparent":15006,"proxyProtocol":"v1"},"readiness":{"httpGet":{"port":15001,"path":"/x"}}}}`,
+		"http listener on relay": `{"agw":{"image":"x","listeners":{"transparent":15006,"http":15001,"proxyProtocol":"v2"}}}`,
+	} {
+		if _, err := ParseProxyPresets(in); err == nil {
+			t.Errorf("%s: parsed, want an error", name)
+		}
+	}
+	// Without proxyProtocol a preset may use 15001 (the broker is not there).
+	if _, err := ParseProxyPresets(`{"agw":{"image":"x","listeners":{"transparent":15001}}}`); err != nil {
+		t.Errorf("15001 without a relay: %v", err)
+	}
+
+	saved := EgressProxyPresets
+	t.Cleanup(func() { EgressProxyPresets = saved })
+	pr := EgressProxyPreset{Image: "x"}
+	pr.Listeners.Transparent = 15006
+	pr.Listeners.ProxyProtocol = "v2"
+	EgressProxyPresets = map[string]EgressProxyPreset{"envoy": pr}
+	n := proxied(&sandboxv1alpha1.SandboxEgress{Proxy: preset()})
+	if !UsesBrokerPort(n) {
+		t.Error("a relayed preset must reserve the relay's port")
+	}
+	pr.Listeners.ProxyProtocol = ""
+	EgressProxyPresets["envoy"] = pr
+	if UsesBrokerPort(n) {
+		t.Error("a preset without proxyProtocol does not use 15001")
+	}
+	if !UsesBrokerPort(proxied(&sandboxv1alpha1.SandboxEgress{})) {
+		t.Error("the built-in broker uses 15001")
+	}
+	img := proxied(&sandboxv1alpha1.SandboxEgress{Proxy: &sandboxv1alpha1.SandboxEgressProxy{Image: "x",
+		Listeners: &sandboxv1alpha1.SandboxEgressProxyListeners{Transparent: 15001, ProxyProtocol: "v2"}}})
+	if err := validateProxy(img); err == nil || !strings.Contains(err.Error(), "relay") {
+		t.Errorf("image proxy on the relay's port: %v", err)
+	}
+}

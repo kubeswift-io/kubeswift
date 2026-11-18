@@ -6,6 +6,7 @@ mod console;
 mod cpuset;
 mod egress_broker;
 mod egress_deny;
+mod egress_relay;
 mod egress_secrets;
 mod hotplug;
 mod intent;
@@ -101,6 +102,11 @@ fn main() {
     // Before anything else: it is not a launcher.
     if env::args().nth(1).as_deref() == Some(egress_broker::SUBCOMMAND) {
         egress_broker::main();
+    }
+    // `swiftletd egress-relay`: the PROXY protocol relay in front of an
+    // egress proxy with listeners.proxyProtocol (egress_relay.rs).
+    if env::args().nth(1).as_deref() == Some(egress_relay::SUBCOMMAND) {
+        egress_relay::main();
     }
     // `swiftletd egress-secrets-init`: fills the egress proxy's secrets
     // volume with throwaway material before the proxy starts.
