@@ -53,7 +53,7 @@
 set -euo pipefail
 
 NS="${NS:-sandbox-egress-restricted}"
-KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.23}"
+KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.24}"
 IMAGE="${IMAGE:-docker.io/library/busybox:1.36}"
 PUBLIC_TARGET="${PUBLIC_TARGET-1.1.1.1:443}"
 TIMEOUT="${TIMEOUT:-300}"

@@ -55,6 +55,8 @@ WORKDIR=""
 RUN_USER=""
 RUN_NNP=""
 RUN_NONROOT=""
+# Brokered egress (kubeswift.egress=): empty for every other sandbox.
+EGRESS=""
 # Paths inside the new root the platform put there for the workload (secret
 # files, output shares): the guest agent gives them to the workload user.
 OWN_LIST=/run/kubeswift-own
