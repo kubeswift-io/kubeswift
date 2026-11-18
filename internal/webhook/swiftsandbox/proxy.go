@@ -402,6 +402,29 @@ func validateProxy(n sandboxv1alpha1.SandboxNetwork) error {
 	if p.Image != "" && EgressProxyAvailable && !ProxyImageAllowed(p.Image) {
 		return fmt.Errorf("%s.image %q is not an egress proxy image this cluster allows (chart sandboxMaterialize.egressProxyImages)", f, p.Image)
 	}
+	if n.Mode == sandboxv1alpha1.SandboxNetworkBrokered {
+		return brokeredProxy(p)
+	}
+	return nil
+}
+
+// brokeredProxy: in mode brokered the guest's connections reach the proxy as
+// HTTP proxy requests (CONNECT, absolute-URI), passed unchanged to its
+// listeners.http. A proxy without one has nothing to receive them.
+func brokeredProxy(p *sandboxv1alpha1.SandboxEgressProxy) error {
+	const why = "mode brokered delivers the guest's connections as HTTP proxy requests (CONNECT) to listeners.http"
+	if p.Preset != "" {
+		if !PresetsAvailable {
+			return nil
+		}
+		if pr, ok := EgressProxyPresets[p.Preset]; ok && pr.Listeners.HTTP == 0 {
+			return fmt.Errorf("spec.network.egress.proxy.preset %q declares no listeners.http: %s", p.Preset, why)
+		}
+		return nil
+	}
+	if p.Listeners == nil || p.Listeners.HTTP == 0 {
+		return fmt.Errorf("spec.network.egress.proxy.listeners.http is required: %s", why)
+	}
 	return nil
 }
 
@@ -553,8 +576,8 @@ func ValidateIdentity(id *sandboxv1alpha1.SandboxIdentity, n sandboxv1alpha1.San
 	if !enabled {
 		return nil
 	}
-	if n.Mode != sandboxv1alpha1.SandboxNetworkProxied {
-		return fmt.Errorf("spec.identity.spiffe Enabled needs network mode proxied: the egress proxy or the built-in broker holds the identity, never the guest")
+	if !n.Mode.EgressMediated() {
+		return fmt.Errorf("spec.identity.spiffe Enabled needs network mode proxied or brokered: the egress proxy or the built-in broker holds the identity, never the guest")
 	}
 	if SPIFFE == nil {
 		return fmt.Errorf("spec.identity.spiffe Enabled needs SPIFFE on the platform (chart sandboxMaterialize.spiffe.enabled)")

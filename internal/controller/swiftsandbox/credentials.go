@@ -46,7 +46,7 @@ const (
 )
 
 func credentials(n sandboxv1alpha1.SandboxNetwork) []sandboxv1alpha1.SandboxEgressCredential {
-	if n.Mode != sandboxv1alpha1.SandboxNetworkProxied || n.Egress == nil {
+	if !n.Mode.EgressMediated() || n.Egress == nil {
 		return nil
 	}
 	return n.Egress.Credentials

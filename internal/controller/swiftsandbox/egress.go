@@ -47,9 +47,9 @@ func resolveEgress(ctx context.Context, c client.Reader, ns string, n sandboxv1a
 	if n.Egress == nil {
 		return nil, nil, nil
 	}
-	// Mode proxied carries no guest UDP other than DNS: a Service rule without
+	// Modes proxied and brokered carry no guest UDP other than DNS: a Service rule without
 	// ports allows only the Service's TCP ports there.
-	proxied := n.Mode == sandboxv1alpha1.SandboxNetworkProxied
+	proxied := n.Mode.EgressMediated()
 	return resolveRules(ctx, c, ns, n.Egress.Allow, "spec.network.egress.allow", proxied)
 }
 

@@ -26,6 +26,9 @@ func validateExposure(n sandboxv1alpha1.SandboxNetwork) error {
 	if n.Mode == sandboxv1alpha1.SandboxNetworkNone {
 		return fmt.Errorf("spec.network.ports needs a network: mode none has none")
 	}
+	if n.Mode == sandboxv1alpha1.SandboxNetworkBrokered {
+		return fmt.Errorf("spec.network.ports is not supported in mode brokered yet: the guest has no network device")
+	}
 	if len(n.Ports) > 16 {
 		return fmt.Errorf("spec.network.ports has %d entries, at most 16", len(n.Ports))
 	}
