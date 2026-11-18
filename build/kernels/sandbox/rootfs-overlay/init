@@ -72,6 +72,7 @@ for arg in $(cat /proc/cmdline); do
 		kubeswift.mounts=*)     MOUNTS="${arg#kubeswift.mounts=}" ;;
 		kubeswift.stage=*)      STAGE="${arg#kubeswift.stage=}" ;;
 		kubeswift.outputs=*)    OUTPUTS="${arg#kubeswift.outputs=}" ;;
+		kubeswift.egress=*)     EGRESS="${arg#kubeswift.egress=}" ;;
 	esac
 done
 
@@ -81,7 +82,8 @@ done
 # know, and would run the workload without its files or mounts.
 # run-as-user: the USER/NNP/NONROOT lines below. landlock, vmgenid: the kernel's
 # own (CONFIG_SECURITY_LANDLOCK, CONFIG_VMGENID), listed so swiftletd can ask.
-BRIDGE_FEATURES="files mounts warm-mounts outputs workload-stream run-as-user landlock vmgenid"
+# egress-vsock: kubeswift.egress= below (network.mode brokered).
+BRIDGE_FEATURES="files mounts warm-mounts outputs workload-stream run-as-user landlock vmgenid egress-vsock"
 echo "sandbox-bridge: features: $BRIDGE_FEATURES"
 
 # fail ends the sandbox. It reports an exit code first (125), as a workload
@@ -248,6 +250,13 @@ fi
 # /etc/resolv.conf, so a workload can't resolve names without this. /proc/net/pnp
 # carries the DHCP-provided nameserver(s); write the resolver directives into the
 # guest (the tmpfs overlay upper is writable, so the signed image is untouched).
+# Brokered egress (kubeswift.egress=<loopback addr:port>,vsock:<port>): the
+# guest has no NIC and no DNS. Names go to the proxy (HTTP_PROXY), so the
+# resolver points at loopback where nothing answers: a client that resolves
+# first fails at once instead of timing out.
+if [ -n "$EGRESS" ]; then
+	echo "nameserver 127.0.0.1" | in_root_write /etc/resolv.conf 0644 || echo "sandbox-bridge: cannot write /etc/resolv.conf in the sandbox root"
+else
 {
 	if [ -r /proc/net/pnp ]; then
 		grep -E '^(nameserver|domain)' /proc/net/pnp 2>/dev/null || true
@@ -263,6 +272,7 @@ fi
 		echo "options ndots:5"
 	fi
 } | in_root_write /etc/resolv.conf 0644 || echo "sandbox-bridge: cannot write /etc/resolv.conf in the sandbox root"
+fi
 
 # --- resolve the workload exec ---
 # Primary: the config disk (kubeswift.config) carries the full argv/env/cwd with
@@ -365,6 +375,17 @@ fi
 # that swiftletd captures as the sandbox log.
 if [ -x /usr/local/bin/kubeswift-guest-agent ]; then
 	/usr/local/bin/kubeswift-guest-agent --exec-root=/newroot --user="$RUN_USER" $NNP_FLAG $NONROOT_FLAG >/dev/kmsg 2>&1 &
+fi
+
+# Brokered egress: the guest's only way out is the forwarder on loopback,
+# which carries each connection over vsock to the host's broker. Without it
+# the sandbox has no egress at all (fails closed), but a workload asked for
+# brokered egress must not run thinking it has it.
+if [ -n "$EGRESS" ]; then
+	[ -x /usr/local/bin/kubeswift-guest-agent ] || fail "brokered egress needs the guest agent"
+	ip link set lo up 2>/dev/null || ifconfig lo 127.0.0.1 up || fail "cannot bring up loopback for brokered egress"
+	/usr/local/bin/kubeswift-guest-agent --egress-forward="$EGRESS" >/dev/kmsg 2>&1 &
+	echo "sandbox-bridge: brokered egress via $EGRESS"
 fi
 
 # Warm-pool keeper (kubeswift.idle=1): the slot is pre-booted with NO workload yet;

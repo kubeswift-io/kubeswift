@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -36,7 +37,17 @@ func main() {
 	mkdirMode := flag.Bool("mkdir", false, "one-shot: create the directory named by the argument inside --exec-root, resolving the image's symlinks as the workload would, and print its path from outside --exec-root (the sandbox bridge mounts there)")
 	writeMode := flag.Bool("write-file", false, "one-shot: write stdin to the file named by the argument inside --exec-root, resolving the image's symlinks as the workload would")
 	fileMode := flag.String("mode", "0400", "--write-file: the file's octal mode")
+	egressForward := flag.String("egress-forward", "", "serve the brokered egress forwarder instead: <loopback addr:port>,vsock:<host port>; every connection is carried unchanged to the host")
 	flag.Parse()
+
+	if *egressForward != "" {
+		spec, err := parseEgressSpec(*egressForward)
+		if err != nil {
+			log.Fatalf("kubeswift-guest-agent: --egress-forward: %v", err)
+		}
+		dial := func(p uint32) (io.ReadWriteCloser, error) { return dialHost(p) }
+		log.Fatalf("kubeswift-guest-agent: egress forwarder: %v", serveEgress(spec, dial))
+	}
 
 	// One-shot local exec (the sandbox cold-boot path): chroot + chdir + exec via
 	// the same buildExecCmd the vsock exec op uses (in-chroot PATH resolution, works
