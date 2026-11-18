@@ -345,8 +345,10 @@ spec:
   its own arguments or control plane. With `config: Intent`, the proxy also
   gets the `egress-intent.kubeswift.io/v1` file at
   `/etc/kubeswift/egress/intent.json` (path in `$KUBESWIFT_EGRESS_INTENT`): the
-  allowlist, with `host` rules as written and Services resolved to addresses,
-  and the listeners. The format is documented in `api/egressintent/v1`.
+  allowlist, with `host` rules as written and Services resolved to addresses
+  (each naming its Service, so a proxy with an HTTP listener can accept
+  `app:8080` and connect to the address without resolving the name), and the
+  listeners. The format is documented in `api/egressintent/v1`.
 - Pools: slots boot with the pool's proxy, and a sandbox claims a slot only
   with the same proxy.
 
