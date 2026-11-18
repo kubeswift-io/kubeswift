@@ -93,7 +93,7 @@ func workloadAPISocket() string {
 // PoolRefLabelKey here.
 func addSPIFFE(pod *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox) {
 	cfg := sandboxwebhook.SPIFFE
-	if cfg == nil || !identityEnabled(sb.Spec.Identity) || sb.Spec.Network.Mode != sandboxv1alpha1.SandboxNetworkProxied {
+	if cfg == nil || !identityEnabled(sb.Spec.Identity) || !sb.Spec.Network.Mode.EgressMediated() {
 		return
 	}
 	holder, holderInit := launcherName, false

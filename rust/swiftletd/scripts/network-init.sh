@@ -61,6 +61,45 @@ build_deny_chain() {
     fi
 }
 
+# apply_proxy_uid_chain holds the connections of the proxy uid (the built-in
+# broker, the relays, a proxy container) to the restricted rules plus the
+# allowlist (KUBESWIFT_SANDBOX_EGRESS_ALLOW): DNS to the cluster resolver,
+# never 169.254/16, the platform deny list or private ranges unless allowed,
+# and on loopback only port $1 (the proxy's, for a relay; empty for none).
+# Sets allowed and denied.
+apply_proxy_uid_chain() {
+    lport="$1"
+    out="KUBESWIFT_SBX_PROXY"
+    iptables -N "$out" 2>/dev/null || iptables -F "$out"
+    iptables -A "$out" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+    # The relay (proxy uid) reaches the proxy's port, and no other loopback port.
+    [ -z "$lport" ] || iptables -A "$out" -d 127.0.0.1 -p tcp --dport "$lport" -j RETURN
+    for d in $(grep '^nameserver ' /etc/resolv.conf 2>/dev/null | awk '{print $2}'); do
+        iptables -A "$out" -d "$d" -p udp --dport 53 -j RETURN
+        iptables -A "$out" -d "$d" -p tcp --dport 53 -j RETURN
+    done
+    iptables -A "$out" -d 127.0.0.0/8 -j DROP
+    iptables -A "$out" -d 169.254.0.0/16 -j DROP
+    build_deny_chain
+    iptables -A "$out" -j "$deny_chain"
+    allowed=0
+    for rule in ${KUBESWIFT_SANDBOX_EGRESS_ALLOW:-}; do
+        proto="${rule%%,*}"; rest="${rule#*,}"; cidr="${rest%%,*}"; rport="${rest#*,}"
+        case "$proto" in
+            tcp) iptables -A "$out" -d "$cidr" -p tcp --dport "$rport" -j RETURN ;;
+            any) iptables -A "$out" -d "$cidr" -j RETURN ;;
+            *)   echo "ERROR: malformed egress allow rule '$rule' for mode $KUBESWIFT_SANDBOX_EGRESS" >&2; exit 1 ;;
+        esac
+        allowed=$((allowed + 1))
+    done
+    iptables -A "$out" -d 10.0.0.0/8     -j DROP
+    iptables -A "$out" -d 172.16.0.0/12  -j DROP
+    iptables -A "$out" -d 192.168.0.0/16 -j DROP
+    iptables -A "$out" -d 100.64.0.0/10  -j DROP
+    iptables -C OUTPUT -m owner --uid-owner "$uid" -j "$out" 2>/dev/null \
+        || iptables -I OUTPUT 1 -m owner --uid-owner "$uid" -j "$out"
+}
+
 # apply_proxied_egress sets up mode proxied (KUBESWIFT_SANDBOX_EGRESS=proxied):
 # the guest keeps its NIC, nothing it sends is forwarded, every TCP
 # connection is redirected to the egress broker's transparent listener (or,
@@ -152,35 +191,7 @@ apply_proxied_egress() {
             || iptables -I INPUT 1 ! -i lo -p tcp --dport "$pport" -j DROP
     fi
 
-    out="KUBESWIFT_SBX_PROXY"
-    iptables -N "$out" 2>/dev/null || iptables -F "$out"
-    iptables -A "$out" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
-    # The relay (proxy uid) reaches the proxy's port, and no other loopback port.
-    [ -z "$pport" ] || iptables -A "$out" -d 127.0.0.1 -p tcp --dport "$pport" -j RETURN
-    for d in $(grep '^nameserver ' /etc/resolv.conf 2>/dev/null | awk '{print $2}'); do
-        iptables -A "$out" -d "$d" -p udp --dport 53 -j RETURN
-        iptables -A "$out" -d "$d" -p tcp --dport 53 -j RETURN
-    done
-    iptables -A "$out" -d 127.0.0.0/8 -j DROP
-    iptables -A "$out" -d 169.254.0.0/16 -j DROP
-    build_deny_chain
-    iptables -A "$out" -j "$deny_chain"
-    allowed=0
-    for rule in ${KUBESWIFT_SANDBOX_EGRESS_ALLOW:-}; do
-        proto="${rule%%,*}"; rest="${rule#*,}"; cidr="${rest%%,*}"; rport="${rest#*,}"
-        case "$proto" in
-            tcp) iptables -A "$out" -d "$cidr" -p tcp --dport "$rport" -j RETURN ;;
-            any) iptables -A "$out" -d "$cidr" -j RETURN ;;
-            *)   echo "ERROR: malformed egress allow rule '$rule' for mode proxied" >&2; exit 1 ;;
-        esac
-        allowed=$((allowed + 1))
-    done
-    iptables -A "$out" -d 10.0.0.0/8     -j DROP
-    iptables -A "$out" -d 172.16.0.0/12  -j DROP
-    iptables -A "$out" -d 192.168.0.0/16 -j DROP
-    iptables -A "$out" -d 100.64.0.0/10  -j DROP
-    iptables -C OUTPUT -m owner --uid-owner "$uid" -j "$out" 2>/dev/null \
-        || iptables -I OUTPUT 1 -m owner --uid-owner "$uid" -j "$out"
+    apply_proxy_uid_chain "$pport"
 
     if command -v ip6tables >/dev/null 2>&1; then
         ip6tables -N "$fwd" 2>/dev/null || ip6tables -F "$fwd"
@@ -193,6 +204,34 @@ apply_proxied_egress() {
 
     echo "Proxied egress: $guest_if ($src_net) TCP -> broker :$port (uid $uid), DNS -> $gw;" \
          "broker reaches DNS + internet + $allowed allowed rule(s), not 169.254/16, $denied platform address(es), RFC1918, 100.64/10"
+}
+
+# apply_brokered_egress sets up mode brokered (KUBESWIFT_SANDBOX_EGRESS=brokered):
+# the guest has no NIC, so there is no bridge, tap, DHCP or DNS. Its traffic
+# arrives over vsock at swiftletd, whose broker or relay runs as
+# KUBESWIFT_EGRESS_PROXY_UID; only the uid chain applies. With a proxy
+# container (KUBESWIFT_EGRESS_PROXY_HTTP_PORT, its CONNECT listener) the relay
+# reaches that port on loopback, and nothing outside the pod reaches the
+# proxy's listeners.
+apply_brokered_egress() {
+    uid="${KUBESWIFT_EGRESS_PROXY_UID:-}"
+    case "$uid" in
+        ''|*[!0-9]*) echo "ERROR: mode brokered needs KUBESWIFT_EGRESS_PROXY_UID" >&2; exit 1 ;;
+    esac
+    hport="${KUBESWIFT_EGRESS_PROXY_HTTP_PORT:-}"
+    for p in "$hport" "${KUBESWIFT_EGRESS_PROXY_PORT:-}"; do
+        [ -n "$p" ] || continue
+        case "$p" in *[!0-9]*) echo "ERROR: malformed proxy listener port '$p'" >&2; exit 1 ;; esac
+        iptables -C INPUT ! -i lo -p tcp --dport "$p" -j DROP 2>/dev/null \
+            || iptables -I INPUT 1 ! -i lo -p tcp --dport "$p" -j DROP
+    done
+    apply_proxy_uid_chain "$hport"
+    if command -v ip6tables >/dev/null 2>&1; then
+        ip6tables -C OUTPUT -m owner --uid-owner "$uid" -j DROP 2>/dev/null \
+            || ip6tables -I OUTPUT 1 -m owner --uid-owner "$uid" -j DROP
+    fi
+    echo "Brokered egress: no guest NIC; uid $uid reaches DNS + internet + $allowed allowed rule(s)${hport:+ + proxy :$hport on loopback}," \
+         "not 169.254/16, $denied platform address(es), RFC1918, 100.64/10"
 }
 
 apply_restricted_egress() {
@@ -715,6 +754,12 @@ setup_primary_udn_nic() {
 # --- Main ---
 
 # Check if intent has "nics" array (multi-NIC mode)
+# Mode brokered: no guest network at all, only the proxy uid chain.
+if [ "${KUBESWIFT_SANDBOX_EGRESS:-}" = "brokered" ]; then
+    apply_brokered_egress
+    exit 0
+fi
+
 has_nics() {
     [ -f "$INTENT_PATH" ] || return 1
     grep -q '"nics"' "$INTENT_PATH" || return 1

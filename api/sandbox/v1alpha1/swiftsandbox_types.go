@@ -353,7 +353,7 @@ const (
 )
 
 // SandboxNetworkMode selects the sandbox connectivity posture.
-// +kubebuilder:validation:Enum=restricted;open;none;proxied
+// +kubebuilder:validation:Enum=restricted;open;none;proxied;brokered
 type SandboxNetworkMode string
 
 const (
@@ -376,7 +376,22 @@ const (
 	// IPv6 never leave the guest. The broker runs under its own uid, and the
 	// restricted rules apply to its connections.
 	SandboxNetworkProxied SandboxNetworkMode = "proxied"
+	// SandboxNetworkBrokered gives the guest no network device at all. Its
+	// workload reaches the outside only through an HTTP proxy on the guest's
+	// loopback (HTTP_PROXY and HTTPS_PROXY point at it), carried over vsock
+	// to the egress proxy (spec.network.egress.proxy, which must declare
+	// listeners.http) or the built-in broker, which enforce the same
+	// allowlist as in mode proxied. The guest has no DNS, UDP, ICMP or IPv6;
+	// any TCP to an allowed host and port works through CONNECT. Needs
+	// kernels sandbox:6.6.24 / gpu-sandbox:6.6.14 or later.
+	SandboxNetworkBrokered SandboxNetworkMode = "brokered"
 )
+
+// EgressMediated is whether the mode sends the guest's egress through the
+// built-in broker or an egress proxy: proxied or brokered.
+func (m SandboxNetworkMode) EgressMediated() bool {
+	return m == SandboxNetworkProxied || m == SandboxNetworkBrokered
+}
 
 // SandboxReadinessStartup is the fast start of the readiness probe.
 type SandboxReadinessStartup struct {
@@ -434,15 +449,16 @@ const (
 
 // SandboxNetwork is the sandbox networking policy.
 type SandboxNetwork struct {
-	// Mode is "restricted" (default), "open", "none" or "proxied".
+	// Mode is "restricted" (default), "open", "none", "proxied" or
+	// "brokered".
 	// +kubebuilder:default=restricted
 	// +optional
 	Mode SandboxNetworkMode `json:"mode,omitempty"`
 
 	// Egress lets a restricted sandbox reach destinations the restricted mode
 	// blocks, such as one in-cluster Service, without opening everything. In
-	// mode proxied it is the guest's allowlist, enforced by the egress proxy.
-	// Only valid with mode restricted or proxied.
+	// modes proxied and brokered it is the guest's allowlist, enforced by the
+	// egress proxy. Only valid with mode restricted, proxied or brokered.
 	// +optional
 	Egress *SandboxEgress `json:"egress,omitempty"`
 
@@ -720,7 +736,8 @@ type SandboxEgress struct {
 	// placeholder with the Secret's value in the named header of requests to
 	// the listed destinations, after terminating TLS with a certificate
 	// authority generated for the launcher, which the guest is made to trust.
-	// The value is never written into the guest. Needs mode proxied and a
+	// The value is never written into the guest. Needs mode proxied or
+	// brokered and a
 	// proxy preset with config Intent and a readiness probe (chart
 	// sandboxMaterialize.egressProxyPresets), and a sandbox kernel whose
 	// bridge writes files. On a pool, the shape (names, placeholders,
@@ -752,8 +769,10 @@ type SandboxEgressRule struct {
 	// domain with a leading "*." (*.example.com matches a.example.com and
 	// a.b.example.com, not example.com). The proxy matches it against the TLS
 	// server name or the HTTP Host of each connection and requires the
-	// connection's destination to be an address the name resolves to. TCP
-	// only. Only valid with mode proxied, and not in proxy.upstreams.
+	// connection's destination to be an address the name resolves to (in mode
+	// brokered the guest names the destination and the proxy connects to the
+	// name). TCP only. Only valid with mode proxied or brokered, and not in
+	// proxy.upstreams.
 	// +kubebuilder:validation:MaxLength=253
 	// +optional
 	Host string `json:"host,omitempty"`
@@ -764,7 +783,7 @@ type SandboxEgressRule struct {
 	// io.kubeswift.egress-intent.features label, connects over TLS presenting
 	// the sandbox's SPIFFE X.509-SVID and accepts only an upstream presenting
 	// an SVID of the same trust domain. For a host rule the guest must speak
-	// HTTP (the Host header is matched). Needs mode proxied and
+	// HTTP (the Host header is matched). Needs mode proxied or brokered and
 	// spec.identity.spiffe Enabled; a Self proxy originates TLS in its own
 	// configuration.
 	// +optional
@@ -986,7 +1005,8 @@ type SandboxIdentity struct {
 	// when the slot boots so a checkout waits for nothing (status.identity
 	// records which). The egress proxy container, or without one the
 	// built-in broker (for allow[].tls), holds the SVID through the SPIFFE
-	// Workload API; the guest never sees it. Needs network mode proxied and
+	// Workload API; the guest never sees it. Needs network mode proxied or
+	// brokered and
 	// SPIFFE on the platform (chart sandboxMaterialize.spiffe). Disabled when
 	// unset.
 	// +optional
@@ -1061,7 +1081,7 @@ const (
 	// stopped, LauncherGone when the launcher pod no longer exists.
 	SwiftSandboxConditionTerminating = "Terminating"
 	// SwiftSandboxConditionEgressProxyReady reports the egress path of a
-	// sandbox in network mode proxied: True (reason Listening) once the
+	// sandbox in network mode proxied or brokered: True (reason Listening) once the
 	// built-in broker or the egress proxy container listens, False with
 	// reason Starting before that, EgressProxyNotRunning while the proxy
 	// container is not running (crashed, restarting), EgressProxyNotReady or
@@ -1156,7 +1176,7 @@ type SandboxNetworkStatus struct {
 	// +optional
 	EgressAllowed []SandboxEgressAllowed `json:"egressAllowed,omitempty"`
 	// ProxyUpstreams is what the egress proxy container itself may reach
-	// (mode proxied with a proxy), from spec.network.egress.proxy.upstreams
+	// (mode proxied or brokered with a proxy), from spec.network.egress.proxy.upstreams
 	// with every Service resolved to its address. The guest cannot reach
 	// these unless the allowlist also allows them.
 	// +optional

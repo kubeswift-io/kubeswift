@@ -53,7 +53,7 @@ type resolvedProxy struct {
 // a mode other than proxied, or a preset this cluster does not define (which
 // validation refuses before any launcher is built).
 func resolveProxySpec(n sandboxv1alpha1.SandboxNetwork) *resolvedProxy {
-	if n.Mode != sandboxv1alpha1.SandboxNetworkProxied || n.Egress == nil || n.Egress.Proxy == nil {
+	if !n.Mode.EgressMediated() || n.Egress == nil || n.Egress.Proxy == nil {
 		return nil
 	}
 	spec := n.Egress.Proxy
