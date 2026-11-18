@@ -383,7 +383,7 @@ const (
 	// listeners.http) or the built-in broker, which enforce the same
 	// allowlist as in mode proxied. The guest has no DNS, UDP, ICMP or IPv6;
 	// any TCP to an allowed host and port works through CONNECT. Needs
-	// kernels sandbox:6.6.23 / gpu-sandbox:6.6.13 or later.
+	// kernels sandbox:6.6.24 / gpu-sandbox:6.6.14 or later.
 	SandboxNetworkBrokered SandboxNetworkMode = "brokered"
 )
 

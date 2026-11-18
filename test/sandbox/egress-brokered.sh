@@ -51,7 +51,7 @@
 # Prerequisites:
 #   - a node labeled kubeswift.io/kernel-node=true with KVM
 #   - a sandbox kernel whose bridge lists egress-vsock (KERNEL_IMAGE,
-#     kernels/sandbox 6.6.23 or later)
+#     kernels/sandbox 6.6.24 or later)
 #   - internet egress from pods; PUBLIC_HOST (default example.com, must also
 #     answer for www.PUBLIC_HOST) and OTHER_HOST (default github.com)
 #
@@ -60,7 +60,7 @@
 set -euo pipefail
 
 NS="${NS:-sandbox-egress-brokered}"
-KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.23}"
+KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.24}"
 IMAGE="${IMAGE:-docker.io/curlimages/curl:8.11.1}"
 TARGET_IMAGE="${TARGET_IMAGE:-docker.io/library/busybox:1.36}"
 PUBLIC_HOST="${PUBLIC_HOST:-example.com}"

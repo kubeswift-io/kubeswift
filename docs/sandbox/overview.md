@@ -655,7 +655,7 @@ private ranges the allowlist does not name. `network.ports` and network
 probes are refused (the guest has no address). Warm pools work; a checkout
 must repeat the pool's network block.
 
-Needs kernels `sandbox:6.6.23` / `gpu-sandbox:6.6.13` or later (bridge feature
+Needs kernels `sandbox:6.6.24` / `gpu-sandbox:6.6.14` or later (bridge feature
 `egress-vsock`); on an older kernel the sandbox fails with `KernelUnsupported`.
 
 ### Exposing ports
