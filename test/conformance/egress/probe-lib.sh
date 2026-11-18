@@ -12,11 +12,11 @@ digq() { n=$1; w=$2; shift 2; if [ -n "$(dig +time=3 +tries=1 +short "$@" 2>/dev
 http() { n=$1; w=$2; shift 2; if curl -sS -m 8 -o /dev/null "$@" 2>/dev/null; then g=reach; else g=block; fi; res $g $w "$n"; }
 # banner NAME WANT ADDR PORT PATTERN: reach when the server's greeting matches.
 banner() { if timeout 8 nc "$3" "$4" </dev/null 2>/dev/null | head -c 256 | grep -q "$5"; then g=reach; else g=block; fi; res $g $2 "$1"; }
-# nic NAME WANT: reach when the guest has a network device other than lo
-# (read from /proc/net/dev, which must list lo for the answer to count).
-nic() { d=$(awk -F: 'NR>2{gsub(/ /,"",$1); print $1}' /proc/net/dev 2>/dev/null)
-  if ! printf '%s\n' "$d" | grep -qx lo; then echo "PROBE-FAIL $1 cannot read /proc/net/dev"; f=$((f+1)); return; fi
-  if printf '%s\n' "$d" | grep -qvx lo; then g=reach; else g=block; fi; res $g $2 "$1"; }
+# nic NAME WANT: reach when the guest has a network device backed by a
+# device (a virtio NIC; lo and the kernel's sit0 tunnel stub are not), read
+# from sysfs, which must show lo for the answer to count.
+nic() { if [ ! -e /sys/class/net/lo ]; then echo "PROBE-FAIL $1 cannot read /sys/class/net"; f=$((f+1)); return; fi
+  g=block; for d in /sys/class/net/*; do [ -e "$d/device" ] && g=reach; done; res $g $2 "$1"; }
 # icmp NAME WANT ADDR [-6]
 icmp() { if ping $4 -c 1 -W 3 "$3" >/dev/null 2>&1; then g=reach; else g=block; fi; res $g $2 "$1"; }
 # ntp NAME WANT ADDR: one NTP exchange over UDP 123.
