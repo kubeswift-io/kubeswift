@@ -765,6 +765,22 @@ fn main() {
             // (no-op when the pod carries none).
             if intent.is_sandbox() {
                 egress_deny::spawn_if_present();
+                // Mode brokered needs the bridge to start the guest's vsock
+                // forwarder; on an older kernel the guest has no way out.
+                if egress_vsock::enabled() {
+                    if let Err(msg) = bridge::require("egress-vsock", "network mode brokered") {
+                        log::error!("{}", msg);
+                        if let (Ok(ns), Ok(n)) = (env::var("POD_NAMESPACE"), env::var("POD_NAME")) {
+                            if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                            {
+                                let _ = rt.block_on(report::report_kernel_error(&ns, &n, &msg));
+                            }
+                        }
+                        std::process::exit(1);
+                    }
+                }
                 // Modes proxied and brokered: the guest's only way out.
                 // Without it the guest would boot with no egress and no
                 // explanation.
