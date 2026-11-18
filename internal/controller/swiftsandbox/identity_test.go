@@ -2,6 +2,7 @@ package swiftsandbox
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -276,6 +277,16 @@ func TestIntentTLSOriginate(t *testing.T) {
 	}
 	if in.Identity == nil || in.Identity.SPIFFE == nil {
 		t.Error("tls rules without the identity")
+	}
+	// A resolved service rule names its Service; nothing else does.
+	for _, r := range in.Allow {
+		want := (*egressintentv1.RuleService)(nil)
+		if r.From == "service ai/llm" {
+			want = &egressintentv1.RuleService{Namespace: "ai", Name: "llm"}
+		}
+		if !reflect.DeepEqual(r.Service, want) {
+			t.Errorf("%s: service %+v, want %+v", r.From, r.Service, want)
+		}
 	}
 	v1 := map[string]string{egressintentv1.ImageLabel: "v1"}
 	if r, msg := intentVersionVerdict("t", v1, sb); r != reasonEgressIntentUnsupported || !strings.Contains(msg, "tls-originate") {
