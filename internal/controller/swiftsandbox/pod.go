@@ -70,7 +70,7 @@ func networked(sb *sandboxv1alpha1.SwiftSandbox) bool {
 // workloadGated is whether the sandbox's launcher pod carries the workload
 // readiness gate: it exposes ports, so a Service may route to it.
 func workloadGated(sb *sandboxv1alpha1.SwiftSandbox) bool {
-	return networked(sb) && len(sb.Spec.Network.Ports) > 0
+	return guestNetworked(sb) && len(sb.Spec.Network.Ports) > 0
 }
 
 // nestedEnabled is whether a sandbox's guest sees VMX/SVM: only when it says
@@ -99,7 +99,7 @@ func nestedKey(v swiftv1alpha1.NestedVirtualization) string {
 // default is restricted; the fallthrough also covers a pre-admission empty value.
 func egressMode(sb *sandboxv1alpha1.SwiftSandbox) sandboxv1alpha1.SandboxNetworkMode {
 	switch sb.Spec.Network.Mode {
-	case sandboxv1alpha1.SandboxNetworkOpen, sandboxv1alpha1.SandboxNetworkProxied:
+	case sandboxv1alpha1.SandboxNetworkOpen, sandboxv1alpha1.SandboxNetworkProxied, sandboxv1alpha1.SandboxNetworkBrokered:
 		return sb.Spec.Network.Mode
 	}
 	return sandboxv1alpha1.SandboxNetworkRestricted
@@ -133,7 +133,7 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 	if idle {
 		cmdline += " kubeswift.idle=1"
 	}
-	if networked(sb) {
+	if guestNetworked(sb) {
 		// Kernel IP autoconfig (the sandbox kernel has CONFIG_IP_PNP_DHCP=y). A bare
 		// OCI workload (e.g. /bin/sh) runs no DHCP client and the bridge-init does no
 		// network setup, so the guest would otherwise never acquire the dnsmasq lease
@@ -147,6 +147,11 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 		// namespace; the bridge-init writes them into the guest's /etc/resolv.conf.
 		// (Cluster domain assumed cluster.local — the near-universal default.)
 		cmdline += " kubeswift.dns-search=" + sb.Namespace + ".svc.cluster.local,svc.cluster.local,cluster.local"
+	}
+	if brokeredLauncher(sb) {
+		// No NIC: the bridge starts the vsock forwarder instead (warm slots
+		// too, so a checkout finds it running).
+		cmdline += brokeredCmdline()
 	}
 	var sandboxExec *runtimeintent.SandboxExecSpec
 	if !idle {
@@ -239,7 +244,7 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 		// Networked unless mode=none: network-init sets up br0/tap0 and the
 		// launcher-entrypoint starts dnsmasq; a deny-ingress NetworkPolicy enforces
 		// the "restricted" posture (built by the controller).
-		Network:    networked(sb),
+		Network:    guestNetworked(sb),
 		Hypervisor: "cloud-hypervisor",
 		// vsock control channel for the in-guest agent (swiftctl sandbox exec/attach).
 		// The agent is baked into the sandbox initramfs and the bridge runs it; the host
@@ -255,7 +260,7 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 		ri.SandboxProbes = probesIntent(sb, workloadGated(sb) && swiftguest.LauncherReportsReadiness())
 		ri.SandboxTermination = terminationIntent(sb)
 	}
-	if networked(sb) {
+	if guestNetworked(sb) {
 		// spec.network.ports: network-init DNATs each pod port to the same port
 		// on the guest (the shared setup_exposed_ports path, which also pins
 		// the guest's DHCP address so the DNAT target is right).

@@ -162,7 +162,7 @@ func TestValidateNetworkProxied(t *testing.T) {
 		{"proxy in restricted", "proxy needs mode proxied", restricted(&sandboxv1alpha1.SandboxEgress{Proxy: preset()})},
 		{"credentials in restricted", "credentials need mode proxied", restricted(&sandboxv1alpha1.SandboxEgress{
 			Credentials: []sandboxv1alpha1.SandboxEgressCredential{cred("api.example.com")}})},
-		{"egress in open", "restricted or proxied only", sandboxv1alpha1.SandboxNetwork{
+		{"egress in open", "restricted, proxied or brokered only", sandboxv1alpha1.SandboxNetwork{
 			Mode: sandboxv1alpha1.SandboxNetworkOpen, Egress: &sandboxv1alpha1.SandboxEgress{}}},
 		{"two destinations in one rule", "service, cidr and host", proxied(&sandboxv1alpha1.SandboxEgress{
 			Allow: []sandboxv1alpha1.SandboxEgressRule{{Host: "a.example.com", CIDR: "10.0.0.0/8"}}})},
@@ -434,5 +434,59 @@ func TestProxyProtocolListeners(t *testing.T) {
 		Listeners: &sandboxv1alpha1.SandboxEgressProxyListeners{Transparent: 15001, ProxyProtocol: "v2"}}})
 	if err := validateProxy(img); err == nil || !strings.Contains(err.Error(), "relay") {
 		t.Errorf("image proxy on the relay's port: %v", err)
+	}
+}
+
+// Mode brokered takes the same egress API as proxied; a proxy must declare
+// listeners.http (the guest's requests arrive as CONNECT), and ports and
+// network probes are refused (no guest NIC).
+func TestValidateNetworkBrokered(t *testing.T) {
+	available(t)
+	EgressProxyPresets["agw-http"] = EgressProxyPreset{Image: "ghcr.io/x/agentgateway:1"}
+	p := EgressProxyPresets["agw-http"]
+	p.Listeners.Transparent, p.Listeners.HTTP = 15002, 15003
+	EgressProxyPresets["agw-http"] = p
+	brokered := func(e *sandboxv1alpha1.SandboxEgress) sandboxv1alpha1.SandboxNetwork {
+		return sandboxv1alpha1.SandboxNetwork{Mode: sandboxv1alpha1.SandboxNetworkBrokered, Egress: e}
+	}
+	ok := []struct {
+		name string
+		n    sandboxv1alpha1.SandboxNetwork
+	}{
+		{"built-in broker, no egress", brokered(nil)},
+		{"built-in broker with host and cidr rules", brokered(&sandboxv1alpha1.SandboxEgress{Allow: []sandboxv1alpha1.SandboxEgressRule{
+			{Host: "api.example.com", Ports: tcp(443)}, {CIDR: "203.0.113.0/24"}}})},
+		{"preset with listeners.http", brokered(&sandboxv1alpha1.SandboxEgress{Proxy: &sandboxv1alpha1.SandboxEgressProxy{Preset: "agw-http"}})},
+		{"image with listeners.http", brokered(&sandboxv1alpha1.SandboxEgress{Proxy: &sandboxv1alpha1.SandboxEgressProxy{
+			Image: "registry.example/proxy:1", Listeners: &sandboxv1alpha1.SandboxEgressProxyListeners{Transparent: 15002, HTTP: 15003}}})},
+	}
+	for _, tc := range ok {
+		if err := ValidateNetwork(tc.n); err != nil {
+			t.Errorf("%s: unexpected error %v", tc.name, err)
+		}
+	}
+	bad := []struct {
+		name, want string
+		n          sandboxv1alpha1.SandboxNetwork
+	}{
+		{"preset without listeners.http", "declares no listeners.http", brokered(&sandboxv1alpha1.SandboxEgress{Proxy: preset()})},
+		{"image without listeners.http", "listeners.http is required", brokered(&sandboxv1alpha1.SandboxEgress{Proxy: &sandboxv1alpha1.SandboxEgressProxy{
+			Image: "registry.example/proxy:1", Listeners: &sandboxv1alpha1.SandboxEgressProxyListeners{Transparent: 15002}}})},
+		{"ports", "not supported in mode brokered", sandboxv1alpha1.SandboxNetwork{Mode: sandboxv1alpha1.SandboxNetworkBrokered,
+			Ports: []sandboxv1alpha1.SandboxPort{{Name: "http", Port: 8080}}}},
+	}
+	for _, tc := range bad {
+		err := ValidateNetwork(tc.n)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: got %v, want an error containing %q", tc.name, err, tc.want)
+		}
+	}
+	on := &sandboxv1alpha1.SandboxIdentity{SPIFFE: sandboxv1alpha1.SandboxIdentitySPIFFEEnabled}
+	if err := ValidateIdentity(on, brokered(nil)); err != nil {
+		t.Errorf("spiffe in brokered: %v", err)
+	}
+	probe := &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{}}}
+	if err := validateProbe(probe, brokered(nil), false); err == nil || !strings.Contains(err.Error(), "brokered") {
+		t.Errorf("probe in brokered: got %v", err)
 	}
 }

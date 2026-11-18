@@ -459,3 +459,50 @@ func TestProxyProtocolRelay(t *testing.T) {
 		t.Errorf("no relay: %v", env)
 	}
 }
+
+// Mode brokered: the guest gets no NIC (no network in the intent, no
+// ip=dhcp) and the bridge starts the vsock forwarder; the launcher gets the
+// broker environment plus the vsock port; network-init still runs, for the
+// proxy uid chain; the workload's proxy variables point at the forwarder.
+func TestBuildPod_Brokered(t *testing.T) {
+	sb := proxiedSandbox()
+	sb.Spec.Network.Mode = sandboxv1alpha1.SandboxNetworkBrokered
+	pod := buildPod(sb, "sandbox")
+	ni := containerEnv(pod.Spec.InitContainers, networkInitName)
+	if ni == nil || ni["KUBESWIFT_SANDBOX_EGRESS"] != "brokered" || ni["KUBESWIFT_EGRESS_PROXY_UID"] != "65531" {
+		t.Fatalf("network-init env %v", ni)
+	}
+	l := containerEnv(pod.Spec.Containers, launcherName)
+	for k, v := range map[string]string{
+		"KUBESWIFT_SANDBOX_EGRESS":       "brokered",
+		"KUBESWIFT_EGRESS_VSOCK_PORT":    "1080",
+		"KUBESWIFT_SANDBOX_EGRESS_HOSTS": "*.example.org,0 api.example.com,443 api.example.com,8443",
+		"KUBESWIFT_SANDBOX_EGRESS_ALLOW": "tcp,10.96.0.12/32,8000",
+	} {
+		if l[k] != v {
+			t.Errorf("launcher %s = %q, want %q", k, l[k], v)
+		}
+	}
+	if _, ok := pod.Annotations[EgressDenyAnnotation]; !ok {
+		t.Error("brokered launcher has no egress deny list")
+	}
+
+	ri := buildIntent(sb, "sandbox", "/r.ext4", "", execSpec{Argv: []string{"sh"}}, false)
+	if ri.Network {
+		t.Error("brokered intent has a guest network")
+	}
+	cmd := ri.KernelBoot.Cmdline
+	if strings.Contains(cmd, "ip=dhcp") || !strings.Contains(cmd, "kubeswift.egress=127.0.0.1:3128,vsock:1080") {
+		t.Errorf("cmdline %q", cmd)
+	}
+	env := strings.Join(ri.SandboxExec.Env, " ")
+	for _, want := range []string{"HTTPS_PROXY=http://127.0.0.1:3128", "http_proxy=http://127.0.0.1:3128", "NO_PROXY=localhost,127.0.0.1,::1", "NODE_USE_ENV_PROXY=1"} {
+		if !strings.Contains(env, want) {
+			t.Errorf("workload env lacks %s: %s", want, env)
+		}
+	}
+	// A warm slot boots brokered too (the forwarder is running at checkout).
+	if idle := buildIntent(sb, "sandbox", "/r.ext4", "", execSpec{}, true); !strings.Contains(idle.KernelBoot.Cmdline, "kubeswift.egress=") {
+		t.Errorf("warm slot cmdline %q", idle.KernelBoot.Cmdline)
+	}
+}

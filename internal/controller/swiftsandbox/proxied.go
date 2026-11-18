@@ -25,9 +25,35 @@ const (
 	EgressProxyUID = 65531
 )
 
-// proxiedLauncher is whether buildPod sets the sandbox up for mode proxied.
+// proxiedLauncher is whether buildPod sets the sandbox up for mode proxied
+// or brokered: the guest's egress goes through the broker or a proxy.
 func proxiedLauncher(sb *sandboxv1alpha1.SwiftSandbox) bool {
-	return sb.Spec.Network.Mode == sandboxv1alpha1.SandboxNetworkProxied
+	return sb.Spec.Network.Mode.EgressMediated()
+}
+
+// brokeredLauncher is mode brokered: no guest NIC, egress over vsock.
+func brokeredLauncher(sb *sandboxv1alpha1.SwiftSandbox) bool {
+	return sb.Spec.Network.Mode == sandboxv1alpha1.SandboxNetworkBrokered
+}
+
+// guestNetworked is whether the guest has a network device: every mode but
+// none and brokered. (networked is whether the launcher pod has a network.)
+func guestNetworked(sb *sandboxv1alpha1.SwiftSandbox) bool {
+	return networked(sb) && !brokeredLauncher(sb)
+}
+
+// Mode brokered: the bridge runs the guest agent's forwarder on
+// brokeredGuestProxy (the workload's HTTP_PROXY), which carries every
+// connection over vsock to brokeredVsockPort on the host, where swiftletd
+// listens on <vsock socket>_<port> and hands it to the broker or the proxy.
+const (
+	brokeredGuestProxy = "127.0.0.1:3128"
+	brokeredVsockPort  = 1080
+)
+
+// brokeredCmdline is the bridge parameter that starts the forwarder.
+func brokeredCmdline() string {
+	return " kubeswift.egress=" + brokeredGuestProxy + ",vsock:" + strconv.Itoa(brokeredVsockPort)
 }
 
 // egressHostsEnv renders the host rules for dnsmasq and the broker,
@@ -141,8 +167,11 @@ func addProxiedLauncherEnv(pod *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox) {
 	}
 	for i := range pod.Spec.Containers {
 		if c := &pod.Spec.Containers[i]; c.Name == launcherName {
-			c.Env = append(c.Env, corev1.EnvVar{Name: "KUBESWIFT_SANDBOX_EGRESS", Value: string(sandboxv1alpha1.SandboxNetworkProxied)})
+			c.Env = append(c.Env, corev1.EnvVar{Name: "KUBESWIFT_SANDBOX_EGRESS", Value: string(sb.Spec.Network.Mode)})
 			c.Env = append(c.Env, proxiedEnv(sb)...)
+			if brokeredLauncher(sb) {
+				c.Env = append(c.Env, corev1.EnvVar{Name: "KUBESWIFT_EGRESS_VSOCK_PORT", Value: strconv.Itoa(brokeredVsockPort)})
+			}
 		}
 	}
 }
@@ -154,18 +183,26 @@ const sandboxBridgeGateway = "192.168.99.1"
 // httpProxyEnv is what the workload's environment gains when its egress proxy
 // declares listeners.http: the proxy variables, upper and lower case (tools
 // read one or the other), pointing at the HTTP listener on the bridge. A
-// client that ignores them still reaches the transparent listener.
+// client that ignores them still reaches the transparent listener. In mode
+// brokered they always point at the guest's loopback forwarder.
 func httpProxyEnv(sb *sandboxv1alpha1.SwiftSandbox) []string {
 	p := egressProxy(sb)
+	const noProxy = "localhost,127.0.0.1,::1"
+	vars := func(url string) []string {
+		return []string{
+			"HTTP_PROXY=" + url, "HTTPS_PROXY=" + url, "NO_PROXY=" + noProxy,
+			"http_proxy=" + url, "https_proxy=" + url, "no_proxy=" + noProxy,
+		}
+	}
+	if brokeredLauncher(sb) {
+		// The forwarder on the guest's loopback is its only way out, so
+		// every client is pointed at it; Node needs to be told to read them.
+		return append(vars("http://"+brokeredGuestProxy), "NODE_USE_ENV_PROXY=1")
+	}
 	if p == nil || p.Listeners.HTTP == 0 {
 		return nil
 	}
-	url := "http://" + sandboxBridgeGateway + ":" + strconv.Itoa(int(p.Listeners.HTTP))
-	const noProxy = "localhost,127.0.0.1,::1"
-	return []string{
-		"HTTP_PROXY=" + url, "HTTPS_PROXY=" + url, "NO_PROXY=" + noProxy,
-		"http_proxy=" + url, "https_proxy=" + url, "no_proxy=" + noProxy,
-	}
+	return vars("http://" + sandboxBridgeGateway + ":" + strconv.Itoa(int(p.Listeners.HTTP)))
 }
 
 // annEgressReady is set by swiftletd once the egress path of a proxied
@@ -177,7 +214,7 @@ const annEgressReady = "kubeswift.io/sandbox-egress-ready"
 // proxy container its live state (a native sidecar the kubelet restarts).
 // A warm checkout reads its slot, which listened before the claim.
 func applyEgressProxyReady(sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) {
-	if sb.Spec.Network.Mode != sandboxv1alpha1.SandboxNetworkProxied {
+	if !sb.Spec.Network.Mode.EgressMediated() {
 		return
 	}
 	set := func(status metav1.ConditionStatus, reason, msg string) {

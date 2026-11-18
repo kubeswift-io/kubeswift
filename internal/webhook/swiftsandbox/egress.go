@@ -23,9 +23,9 @@ func ValidateNetwork(n sandboxv1alpha1.SandboxNetwork) error {
 	if err := validateExposure(n); err != nil {
 		return err
 	}
-	if n.Mode == sandboxv1alpha1.SandboxNetworkProxied {
+	if n.Mode.EgressMediated() {
 		if !ProxiedAvailable {
-			return fmt.Errorf("spec.network.mode proxied is not available in this version of KubeSwift yet")
+			return fmt.Errorf("spec.network.mode %s is not available in this version of KubeSwift yet", n.Mode)
 		}
 		if what := proxyNotAvailable(n); what != "" {
 			return fmt.Errorf("%s is not available in this version of KubeSwift yet", what)
@@ -45,9 +45,9 @@ func validateEgress(n sandboxv1alpha1.SandboxNetwork) error {
 	if n.Egress == nil {
 		return nil
 	}
-	proxied := n.Mode == sandboxv1alpha1.SandboxNetworkProxied
+	proxied := n.Mode.EgressMediated()
 	if n.Mode != "" && n.Mode != sandboxv1alpha1.SandboxNetworkRestricted && !proxied {
-		return fmt.Errorf("spec.network.egress applies to mode restricted or proxied only (mode is %s)", n.Mode)
+		return fmt.Errorf("spec.network.egress applies to mode restricted, proxied or brokered only (mode is %s)", n.Mode)
 	}
 	if len(n.Egress.Allow) > 32 {
 		return fmt.Errorf("spec.network.egress.allow has %d entries, at most 32", len(n.Egress.Allow))
@@ -59,10 +59,10 @@ func validateEgress(n sandboxv1alpha1.SandboxNetwork) error {
 	}
 	if !proxied {
 		if n.Egress.Proxy != nil {
-			return fmt.Errorf("spec.network.egress.proxy needs mode proxied")
+			return fmt.Errorf("spec.network.egress.proxy needs mode proxied or brokered")
 		}
 		if len(n.Egress.Credentials) > 0 {
-			return fmt.Errorf("spec.network.egress.credentials need mode proxied")
+			return fmt.Errorf("spec.network.egress.credentials need mode proxied or brokered")
 		}
 	}
 	if err := validateProxy(n); err != nil {
@@ -89,7 +89,7 @@ func validateEgressRule(r sandboxv1alpha1.SandboxEgressRule, kind ruleKind, prox
 		case kind == ruleUpstream:
 			return fmt.Errorf("host is not valid in upstreams: the proxy's own connections are filtered by address")
 		case !proxied:
-			return fmt.Errorf("host needs mode proxied: mode restricted filters by address and cannot match names")
+			return fmt.Errorf("host needs mode proxied or brokered: mode restricted filters by address and cannot match names")
 		}
 		if err := EgressHost(r.Host); err != nil {
 			return err
@@ -100,7 +100,7 @@ func validateEgressRule(r sandboxv1alpha1.SandboxEgressRule, kind ruleKind, prox
 		case kind == ruleUpstream:
 			return fmt.Errorf("tls is not valid in upstreams")
 		case !proxied:
-			return fmt.Errorf("tls needs mode proxied")
+			return fmt.Errorf("tls needs mode proxied or brokered")
 		case r.TLS.Originate != sandboxv1alpha1.SandboxEgressTLSSPIFFE:
 			return fmt.Errorf("tls.originate %q is not SPIFFE", r.TLS.Originate)
 		}

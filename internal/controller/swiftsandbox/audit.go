@@ -35,7 +35,7 @@ const (
 // addEgressAudit gives a proxied launcher the audit volume, the launcher its
 // mount and env, and the egress-audit container.
 func addEgressAudit(pod *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox) {
-	if sb.Spec.Network.Mode != sandboxv1alpha1.SandboxNetworkProxied {
+	if !sb.Spec.Network.Mode.EgressMediated() {
 		return
 	}
 	pod.Spec.Volumes = append(pod.Spec.Volumes,

@@ -43,9 +43,9 @@ func TestValidateNetwork(t *testing.T) {
 		name, want string
 		n          sandboxv1alpha1.SandboxNetwork
 	}{
-		{"egress with open", "applies to mode restricted or proxied only", sandboxv1alpha1.SandboxNetwork{
+		{"egress with open", "applies to mode restricted, proxied or brokered only", sandboxv1alpha1.SandboxNetwork{
 			Mode: sandboxv1alpha1.SandboxNetworkOpen, Egress: &sandboxv1alpha1.SandboxEgress{}}},
-		{"egress with none", "applies to mode restricted or proxied only", sandboxv1alpha1.SandboxNetwork{
+		{"egress with none", "applies to mode restricted, proxied or brokered only", sandboxv1alpha1.SandboxNetwork{
 			Mode: sandboxv1alpha1.SandboxNetworkNone, Egress: &sandboxv1alpha1.SandboxEgress{}}},
 		{"both service and cidr", "exactly one of service and cidr",
 			allow(sandboxv1alpha1.SandboxEgressRule{Service: svc("a", ""), CIDR: "10.0.0.0/8"})},
