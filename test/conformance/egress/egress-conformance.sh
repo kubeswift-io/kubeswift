@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# Egress proxy conformance: what a SwiftSandbox in network mode `proxied`
-# can and cannot reach, run against the built-in broker or a proxy preset.
+# Egress proxy conformance: what a SwiftSandbox in network mode `proxied` or
+# `brokered` can and cannot reach, run against the built-in broker or a proxy
+# preset.
 # Every proxy KubeSwift runs for a sandbox (the broker, an Envoy, agentgateway
 # or OpenShell preset, an explicit image) must pass it.
 #
@@ -17,6 +18,10 @@
 # Environment:
 #   PROXY        broker (default) or the name of a preset
 #                (chart sandboxMaterialize.egressProxyPresets)
+#   MODE         proxied (default) or brokered: the guest has no network
+#                device and reaches out only through HTTP_PROXY, carried over
+#                vsock (a preset needs listeners.http; kernels sandbox:6.6.23
+#                and later)
 #   CREDENTIALS  1: also run the credentials suite (needs a preset)
 #   SPIFFE       1: also run the SPIFFE suite (needs SPIRE and the chart's
 #                sandboxMaterialize.spiffe)
@@ -40,6 +45,9 @@
 #               ClusterIP; a Service fronting a node; the target pod's address
 #        spoof: PUBLIC_HOST's name sent to OTHER_HOST's address (server name,
 #               and Host) is refused or lands on PUBLIC_HOST's own address
+#      In mode brokered the guest has no resolver, so every DNS probe is
+#      blocked (the proxy resolves allowed names); the guest has no network
+#      device, and a request that ignores HTTP_PROXY is blocked.
 #   2. Sandbox "kernel" allows, as cidr rules (and, for a preset, as
 #      proxy.upstreams), every node address, every API server endpoint, the
 #      kubernetes ClusterIP and the target pod: only the target pod becomes
@@ -47,10 +55,11 @@
 #      connections (the proxy uid chain).
 #   3. A sandbox allowing the Service that fronts a node does not start
 #      (EgressServiceReachesNode).
-#   4. EgressProxyReady is True; the egress audit carries the DNS queries (and,
-#      for the broker, its allow and deny decisions).
+#   4. EgressProxyReady is True; the egress audit carries the DNS queries (mode
+#      proxied) and, for the broker, its allow and deny decisions.
 #   5. Pool "warm" and a checkout on its warm slot: the allowlist holds there.
-#   6. With CREDENTIALS=1 / SPIFFE=1, the suites in /conformance/suites.
+#   6. With CREDENTIALS=1 / SPIFFE=1, the suites in /conformance/suites (mode
+#      proxied only).
 #
 # Prerequisites: a node labeled kubeswift.io/kernel-node=true with KVM;
 # internet egress from pods; for a preset, the preset defined in the chart.
@@ -61,6 +70,7 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 PROXY="${PROXY:-broker}"
+MODE="${MODE:-proxied}"
 NS="${NS:-egress-conformance}"
 KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.24}"
 IMAGE="${IMAGE:-${CONFORMANCE_IMAGE:-}}"
@@ -93,7 +103,7 @@ finished() {
 # proxy.upstreams (its uid chain), so in-cluster destinations are listed there
 # too; the built-in broker needs no upstreams.
 network() {
-	printf '  network:\n    mode: proxied\n    egress:\n      allow:\n%s\n' "$(printf '%s\n' "$1" | sed '/^$/d; s/^/      - /')"
+	printf '  network:\n    mode: %s\n    egress:\n      allow:\n%s\n' "$MODE" "$(printf '%s\n' "$1" | sed '/^$/d; s/^/      - /')"
 	[ "$PROXY" = broker ] && return
 	printf '      proxy:\n        preset: %s\n' "$PROXY"
 	[ -z "${2:-}" ] || printf '        upstreams:\n%s\n' "$(printf '%s\n' "$2" | sed '/^$/d; s/^/        - /')"
@@ -171,7 +181,11 @@ suite() { # suite NAME: a feature suite shipped next to this driver
 
 validate() {
 	[ -n "$IMAGE" ] || die "IMAGE (or CONFORMANCE_IMAGE) must name the egress-conformance image"
-	log "proxy: $PROXY, guest image: $IMAGE"
+	case "$MODE" in proxied|brokered) ;; *) die "MODE must be proxied or brokered, not $MODE" ;; esac
+	if [ "$MODE" = brokered ] && { [ "${CREDENTIALS:-0}" = 1 ] || [ "${SPIFFE:-0}" = 1 ]; }; then
+		die "CREDENTIALS=1 and SPIFFE=1 run in mode proxied only"
+	fi
+	log "mode: $MODE, proxy: $PROXY, guest image: $IMAGE"
 	kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 	kubectl -n "$NS" delete swiftsandbox --all --wait=true >/dev/null
 	kubectl -n "$NS" delete swiftsandboxpool --all --wait=true >/dev/null
@@ -242,8 +256,18 @@ http apiserver-$a block -k https://$a:6443/"; done
 {service: {name: app}, ports: [{port: 8080}]}"
 	local upstreams="{service: {name: app}, ports: [{port: 8080}]}"
 
-	run battery "$(network "$allow" "$upstreams")" "dns dns-allowed reach $PUBLIC_HOST
-dns dns-wildcard reach www.$PUBLIC_HOST
+	# Mode brokered: no resolver and no network device in the guest; the
+	# proxy resolves allowed names, and only HTTP_PROXY gets out.
+	local dns_want=reach extra=""
+	if [ "$MODE" = brokered ]; then
+		dns_want=block
+		extra="nic guest-network-device block
+http direct-bypassing-proxy block --noproxy '*' https://$PUBLIC_HOST/
+http direct-by-address block --noproxy '*' -k https://$other_ip/"
+	fi
+
+	run battery "$(network "$allow" "$upstreams")" "dns dns-allowed $dns_want $PUBLIC_HOST
+dns dns-wildcard $dns_want www.$PUBLIC_HOST
 http https-allowed reach -f https://$PUBLIC_HOST/
 http https-wildcard reach -f https://www.$PUBLIC_HOST/
 http http-allowed-by-host reach -f http://$PUBLIC_HOST/
@@ -265,6 +289,7 @@ http ipv6 block -k -g https://[2606:4700:4700::1111]/
 spoof sni-spoof https $PUBLIC_HOST $other_ip
 spoof host-spoof http $PUBLIC_HOST $other_ip
 http target-pod-address block -f http://$target:8080/
+$extra
 $guarded"
 	proxy_ready battery
 
@@ -276,9 +301,10 @@ $guarded"
 		while IFS= read -r line; do
 			[ -z "$line" ] || jq -e . >/dev/null 2>&1 <<<"$line" || die "egress audit line is not JSON: $line"
 		done <<<"$audit"
-		sels=('.kind=="dns" and .event=="query"' ".kind==\"dns\" and .event==\"blocked\" and .name==\"$OTHER_HOST\"")
+		sels=()
+		[ "$MODE" = brokered ] || sels+=('.kind=="dns" and .event=="query"' ".kind==\"dns\" and .event==\"blocked\" and .name==\"$OTHER_HOST\"")
 		[ "$PROXY" != broker ] || sels+=('.kind=="connection" and .event=="allow"' '.kind=="connection" and .event=="deny"')
-		for sel in "${sels[@]}"; do
+		for sel in ${sels[@]+"${sels[@]}"}; do
 			[ -n "$(jq -c "select($sel)" <<<"$audit")" ] || die "egress audit of $pod has no event with $sel"
 		done
 		log "egress audit of battery: $(grep -c . <<<"$audit") JSON lines"
@@ -341,7 +367,7 @@ http node-kubelet-$node1 block -k https://$node1:10250/"
 	fi
 	[ "${SPIFFE:-0}" != 1 ] || suite spiffe
 
-	log "PASS: $PROXY conforms: only the allowlist, by name and address; never nodes, the API server, other ports, UDP, ICMP or IPv6"
+	log "PASS: $PROXY ($MODE) conforms: only the allowlist, by name and address; never nodes, the API server, other ports, UDP, ICMP or IPv6"
 }
 
 case "${1:-}" in
