@@ -32,7 +32,7 @@
 set -euo pipefail
 
 NS="${NS:-sandbox-egress-preset}"
-KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.22}"
+KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.23}"
 IMAGE="${IMAGE:-docker.io/curlimages/curl:8.11.1}"
 PRESET="${PRESET:-envoy}"
 BAD_PRESET="${BAD_PRESET:-unlabelled}"

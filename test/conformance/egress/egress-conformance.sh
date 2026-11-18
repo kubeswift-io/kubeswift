@@ -62,7 +62,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 PROXY="${PROXY:-broker}"
 NS="${NS:-egress-conformance}"
-KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.22}"
+KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.23}"
 IMAGE="${IMAGE:-${CONFORMANCE_IMAGE:-}}"
 TARGET_IMAGE="${TARGET_IMAGE:-docker.io/library/busybox:1.36}"
 PUBLIC_HOST="${PUBLIC_HOST:-example.com}"
