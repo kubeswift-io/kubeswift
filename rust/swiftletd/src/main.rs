@@ -8,6 +8,7 @@ mod egress_broker;
 mod egress_deny;
 mod egress_relay;
 mod egress_secrets;
+mod egress_vsock;
 mod hotplug;
 mod intent;
 mod kube_client;
@@ -107,6 +108,11 @@ fn main() {
     // egress proxy with listeners.proxyProtocol (egress_relay.rs).
     if env::args().nth(1).as_deref() == Some(egress_relay::SUBCOMMAND) {
         egress_relay::main();
+    }
+    // `swiftletd egress-connect-relay`: mode brokered with an egress proxy;
+    // passes the guest's vsock connections to its HTTP listener.
+    if env::args().nth(1).as_deref() == Some(egress_vsock::CONNECT_RELAY) {
+        egress_vsock::connect_relay_main();
     }
     // `swiftletd egress-secrets-init`: fills the egress proxy's secrets
     // volume with throwaway material before the proxy starts.
@@ -759,10 +765,30 @@ fn main() {
             // (no-op when the pod carries none).
             if intent.is_sandbox() {
                 egress_deny::spawn_if_present();
-                // Mode proxied: the guest's only way out. Without it the
-                // guest would boot with no egress and no explanation.
-                let proxied = env::var("KUBESWIFT_SANDBOX_EGRESS").as_deref() == Ok("proxied");
-                let spawned = egress_broker::spawn_if_proxied();
+                // Mode brokered needs the bridge to start the guest's vsock
+                // forwarder; on an older kernel the guest has no way out.
+                if egress_vsock::enabled() {
+                    if let Err(msg) = bridge::require("egress-vsock", "network mode brokered") {
+                        log::error!("{}", msg);
+                        if let (Ok(ns), Ok(n)) = (env::var("POD_NAMESPACE"), env::var("POD_NAME")) {
+                            if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                                .enable_all()
+                                .build()
+                            {
+                                let _ = rt.block_on(report::report_kernel_error(&ns, &n, &msg));
+                            }
+                        }
+                        std::process::exit(1);
+                    }
+                }
+                // Modes proxied and brokered: the guest's only way out.
+                // Without it the guest would boot with no egress and no
+                // explanation.
+                let proxied = matches!(
+                    env::var("KUBESWIFT_SANDBOX_EGRESS").as_deref(),
+                    Ok("proxied") | Ok("brokered")
+                );
+                let spawned = egress_broker::spawn_if_proxied(runtime_dir.root());
                 if spawned.is_ok() && proxied {
                     // The egress path listens: EgressProxyReady.
                     let what = if env::var("KUBESWIFT_EGRESS_PROXY").as_deref() == Ok("container") {

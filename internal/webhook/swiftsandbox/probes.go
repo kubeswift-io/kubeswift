@@ -57,6 +57,9 @@ func validateProbe(p *corev1.Probe, n sandboxv1alpha1.SandboxNetwork, liveness b
 	if n.Mode == sandboxv1alpha1.SandboxNetworkNone {
 		return fmt.Errorf("needs a network to reach the guest; mode none has none")
 	}
+	if n.Mode == sandboxv1alpha1.SandboxNetworkBrokered {
+		return fmt.Errorf("needs a network to reach the guest; in mode brokered the guest has no network device")
+	}
 	switch {
 	case p.Exec != nil:
 		return fmt.Errorf("exec probes are not supported; use httpGet or tcpSocket")

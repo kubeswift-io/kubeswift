@@ -54,9 +54,9 @@ struct CidrRule {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct HostRule {
+pub(crate) struct HostRule {
     /// Lowercase; "*.example.com" or "api.example.com".
-    pattern: String,
+    pub(crate) pattern: String,
     /// 0 = every port.
     port: u16,
 }
@@ -106,14 +106,14 @@ impl Config {
         Ok(())
     }
 
-    fn originates_tls(&self) -> bool {
+    pub(crate) fn originates_tls(&self) -> bool {
         !self.tls_cidrs.is_empty() || !self.tls_hosts.is_empty()
     }
 
     /// The server name to originate TLS with for a connection to dst
     /// allowed by `host` (the host rule and the name the guest sent), or
     /// None to splice bytes.
-    fn tls_name(
+    pub(crate) fn tls_name(
         &self,
         dst: SocketAddrV4,
         host: Option<(&HostRule, &str)>,
@@ -132,7 +132,7 @@ impl Config {
             })
     }
 
-    fn parse(port: &str, allow: &str, hosts: &str) -> Result<Config, String> {
+    pub(crate) fn parse(port: &str, allow: &str, hosts: &str) -> Result<Config, String> {
         let port: u16 = port
             .parse()
             .ok()
@@ -189,14 +189,14 @@ impl Config {
         Ok(c)
     }
 
-    fn cidr_allows(&self, dst: SocketAddrV4) -> bool {
+    pub(crate) fn cidr_allows(&self, dst: SocketAddrV4) -> bool {
         let ip = u32::from(*dst.ip());
         self.cidrs
             .iter()
             .any(|r| ip & r.mask == r.net && (r.port == 0 || r.port == dst.port()))
     }
 
-    fn host_rule(&self, name: &str, port: u16) -> Option<&HostRule> {
+    pub(crate) fn host_rule(&self, name: &str, port: u16) -> Option<&HostRule> {
         self.hosts
             .iter()
             .find(|r| host_matches(&r.pattern, name) && (r.port == 0 || r.port == port))
@@ -233,7 +233,7 @@ enum Sniff {
     Unknown,
 }
 
-fn normalize(name: &[u8]) -> Option<String> {
+pub(crate) fn normalize(name: &[u8]) -> Option<String> {
     let s = std::str::from_utf8(name)
         .ok()?
         .trim()
@@ -446,7 +446,7 @@ async fn sniff_stream(s: &TcpStream) -> Sniff {
     }
 }
 
-type SvidRx = tokio::sync::watch::Receiver<Option<Arc<crate::spiffe::Svid>>>;
+pub(crate) type SvidRx = tokio::sync::watch::Receiver<Option<Arc<crate::spiffe::Svid>>>;
 
 /// How long a TLS-originating connection waits for the first SVID.
 const SVID_WAIT: Duration = Duration::from_secs(10);
@@ -516,7 +516,7 @@ async fn handle(mut client: TcpStream, peer: SocketAddr, cfg: Arc<Config>, svid:
             return;
         }
     };
-    let mut upstream = match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(dst)).await {
+    let upstream = match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(dst)).await {
         Ok(Ok(u)) => u,
         Ok(Err(e)) => {
             log::info!(
@@ -538,11 +538,54 @@ async fn handle(mut client: TcpStream, peer: SocketAddr, cfg: Arc<Config>, svid:
             return;
         }
     };
-    let tls = cfg.tls_name(dst, matched.as_ref().map(|(r, n)| (r, n.as_str())));
-    let Some(name) = tls else {
+    let host = matched.as_ref().map(|(r, n)| (r, n.as_str()));
+    finish(
+        &mut client,
+        upstream,
+        &cfg,
+        svid,
+        host,
+        &peer.to_string(),
+        dst,
+        &why,
+        &[],
+        &[],
+    )
+    .await;
+}
+
+/// Connects the allowed client to upstream: splices bytes, or originates TLS
+/// with the SVID when an `allow[].tls` rule covers dst (`host`: the host rule
+/// and the name that matched it). `to_client` is written to the client and
+/// `to_upstream` to the upstream (over TLS when originating) once the
+/// upstream is ready, before the splice: the CONNECT reply and the rewritten
+/// request head in mode brokered, nothing for a transparent connection.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn finish<C>(
+    client: &mut C,
+    mut upstream: TcpStream,
+    cfg: &Config,
+    svid: Option<SvidRx>,
+    host: Option<(&HostRule, &str)>,
+    peer: &str,
+    dst: SocketAddrV4,
+    why: &str,
+    to_client: &[u8],
+    to_upstream: &[u8],
+) -> bool
+where
+    C: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::AsyncWriteExt;
+    let Some(name) = cfg.tls_name(dst, host) else {
         log::info!("egress_broker_allow peer={} dst={} {}", peer, dst, why);
-        let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
-        return;
+        if upstream.write_all(to_upstream).await.is_err()
+            || client.write_all(to_client).await.is_err()
+        {
+            return true;
+        }
+        let _ = tokio::io::copy_bidirectional(client, &mut upstream).await;
+        return true;
     };
     let failed = |e: String| {
         log::info!(
@@ -555,11 +598,11 @@ async fn handle(mut client: TcpStream, peer: SocketAddr, cfg: Arc<Config>, svid:
     };
     let Some(mut rx) = svid else {
         failed("no-workload-api".into());
-        return;
+        return false;
     };
     let Some(svid) = crate::spiffe::current(&mut rx, SVID_WAIT).await else {
         failed("no-svid".into());
-        return;
+        return false;
     };
     let connector = tokio_rustls::TlsConnector::from(svid.tls.clone());
     let mut tls =
@@ -567,11 +610,11 @@ async fn handle(mut client: TcpStream, peer: SocketAddr, cfg: Arc<Config>, svid:
             Ok(Ok(t)) => t,
             Ok(Err(e)) => {
                 failed(format!("tls:{}", e));
-                return;
+                return false;
             }
             Err(_) => {
                 failed("tls:timeout".into());
-                return;
+                return false;
             }
         };
     log::info!(
@@ -581,7 +624,11 @@ async fn handle(mut client: TcpStream, peer: SocketAddr, cfg: Arc<Config>, svid:
         why,
         svid.id
     );
-    let _ = tokio::io::copy_bidirectional(&mut client, &mut tls).await;
+    if tls.write_all(to_upstream).await.is_err() || client.write_all(to_client).await.is_err() {
+        return true;
+    }
+    let _ = tokio::io::copy_bidirectional(client, &mut tls).await;
+    true
 }
 
 /// `swiftletd egress-broker`: serves until killed. Exits non-zero when it
@@ -604,63 +651,84 @@ pub fn main() -> ! {
             std::process::exit(1);
         }
     };
-    let code = rt.block_on(async move {
-        let listener = match TcpListener::bind(("0.0.0.0", cfg.port)).await {
-            Ok(l) => l,
-            Err(e) => {
-                log::error!("egress_broker_bind port={} error={}", cfg.port, e);
-                return 1;
-            }
-        };
-        // TLS origination needs the SVID: watch the Workload API from the
-        // start, so the first connection does not wait for it.
-        let svid = if cfg.originates_tls() {
-            match crate::spiffe::socket_from_env() {
-                Some(socket) => Some(crate::spiffe::watch(socket)),
-                None => {
-                    log::error!(
-                        "egress_broker_config_invalid: TLS origination needs {}",
-                        crate::spiffe::SOCKET_ENV
-                    );
+    let code =
+        rt.block_on(async move {
+            // Mode brokered: the guest's connections arrive as HTTP proxy
+            // requests on the vsock listener swiftletd bound and handed down.
+            let vsock = match crate::egress_vsock::inherited_listener() {
+                Ok(v) => v,
+                Err(e) => {
+                    log::error!("egress_broker_config_invalid: {}", e);
                     return 2;
                 }
-            }
-        } else {
-            None
-        };
-        log::info!(
+            };
+            let listener = if vsock.is_some() {
+                None
+            } else {
+                match TcpListener::bind(("0.0.0.0", cfg.port)).await {
+                    Ok(l) => Some(l),
+                    Err(e) => {
+                        log::error!("egress_broker_bind port={} error={}", cfg.port, e);
+                        return 1;
+                    }
+                }
+            };
+            // TLS origination needs the SVID: watch the Workload API from the
+            // start, so the first connection does not wait for it.
+            let svid = if cfg.originates_tls() {
+                match crate::spiffe::socket_from_env() {
+                    Some(socket) => Some(crate::spiffe::watch(socket)),
+                    None => {
+                        log::error!(
+                            "egress_broker_config_invalid: TLS origination needs {}",
+                            crate::spiffe::SOCKET_ENV
+                        );
+                        return 2;
+                    }
+                }
+            } else {
+                None
+            };
+            log::info!(
             "egress_broker_listening port={} address_rules={} host_rules={} tls_rules={} uid={}",
-            cfg.port,
+            if listener.is_some() { cfg.port.to_string() } else { "vsock".to_string() },
             cfg.cidrs.len(),
             cfg.hosts.len(),
             cfg.tls_cidrs.len() + cfg.tls_hosts.len(),
             unsafe { libc::getuid() }
         );
-        let limit = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
-        loop {
-            let (sock, peer) = match listener.accept().await {
-                Ok(c) => c,
-                Err(e) => {
-                    log::warn!("egress_broker_accept: {}", e);
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    continue;
+            let limit = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+            let listener = match (vsock, listener) {
+                (Some(v), _) => {
+                    return crate::egress_vsock::serve_broker(v, cfg, svid, limit).await
                 }
+                (None, Some(l)) => l,
+                (None, None) => return 1,
             };
-            let Ok(permit) = limit.clone().try_acquire_owned() else {
-                log::warn!(
-                    "egress_broker_deny peer={} reason=too-many-connections",
-                    peer
-                );
-                continue;
-            };
-            let cfg = cfg.clone();
-            let svid = svid.clone();
-            tokio::spawn(async move {
-                handle(sock, peer, cfg, svid).await;
-                drop(permit);
-            });
-        }
-    });
+            loop {
+                let (sock, peer) = match listener.accept().await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        log::warn!("egress_broker_accept: {}", e);
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        continue;
+                    }
+                };
+                let Ok(permit) = limit.clone().try_acquire_owned() else {
+                    log::warn!(
+                        "egress_broker_deny peer={} reason=too-many-connections",
+                        peer
+                    );
+                    continue;
+                };
+                let cfg = cfg.clone();
+                let svid = svid.clone();
+                tokio::spawn(async move {
+                    handle(sock, peer, cfg, svid).await;
+                    drop(permit);
+                });
+            }
+        });
     std::process::exit(code);
 }
 
@@ -668,7 +736,10 @@ pub fn main() -> ! {
 /// uid, restarting it if it exits, and waits until it listens. An error means
 /// the broker never came up: the caller must not boot a guest that would
 /// have no egress at all and no explanation.
-pub fn spawn_if_proxied() -> Result<(), String> {
+pub fn spawn_if_proxied(runtime_root: &std::path::Path) -> Result<(), String> {
+    if crate::egress_vsock::enabled() {
+        return spawn_brokered(runtime_root);
+    }
     if std::env::var("KUBESWIFT_SANDBOX_EGRESS").as_deref() != Ok("proxied") {
         return Ok(());
     }
@@ -688,8 +759,35 @@ pub fn spawn_if_proxied() -> Result<(), String> {
     wait_listening(cfg.port, "egress broker")
 }
 
+/// Mode brokered: binds the vsock listener the guest's forwarder reaches
+/// (before the guest boots, so its first connection finds it) and runs the
+/// broker, or with an egress proxy the CONNECT relay, on it under the proxy
+/// uid (main checks the bridge has egress-vsock first).
+fn spawn_brokered(runtime_root: &std::path::Path) -> Result<(), String> {
+    let port = crate::egress_vsock::port_from_env()?;
+    let listener = crate::egress_vsock::bind(runtime_root, port)?;
+    // The parent keeps it open across helper restarts; each child gets it
+    // as fd 3.
+    let fd = listener.as_raw_fd();
+    std::mem::forget(listener);
+    if std::env::var("KUBESWIFT_EGRESS_PROXY").as_deref() == Ok("container") {
+        wait_for_proxy()?;
+        spawn_helper_fd(crate::egress_vsock::CONNECT_RELAY, Some(fd))?;
+    } else {
+        Config::from_env()?;
+        spawn_helper_fd(SUBCOMMAND, Some(fd))?;
+    }
+    log::info!("egress_vsock_listening port={}", port);
+    Ok(())
+}
+
 /// Runs `swiftletd <sub>` under the proxy uid, restarting it if it exits.
 fn spawn_helper(sub: &'static str) -> Result<(), String> {
+    spawn_helper_fd(sub, None)
+}
+
+/// spawn_helper, handing `listen_fd` to the child as fd 3 when set.
+fn spawn_helper_fd(sub: &'static str, listen_fd: Option<i32>) -> Result<(), String> {
     let uid: u32 = std::env::var("KUBESWIFT_EGRESS_PROXY_UID")
         .ok()
         .and_then(|u| u.parse().ok())
@@ -702,13 +800,32 @@ fn spawn_helper(sub: &'static str) -> Result<(), String> {
             let started = std::time::Instant::now();
             // Its log comes back through a pipe: copied to this log and
             // its decisions to the egress audit (audit.rs).
-            match Command::new(&exe)
-                .arg(sub)
+            let mut cmd = Command::new(&exe);
+            cmd.arg(sub)
                 .uid(uid)
                 .gid(uid)
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-            {
+                .stderr(std::process::Stdio::piped());
+            if let Some(fd) = listen_fd {
+                let (k, v) = crate::egress_vsock::helper_env();
+                cmd.env(k, v);
+                let target = crate::egress_vsock::LISTEN_FD;
+                // SAFETY: only async-signal-safe calls (dup2, fcntl) between
+                // fork and exec.
+                unsafe {
+                    cmd.pre_exec(move || {
+                        if fd == target {
+                            // Already in place: just let it survive exec.
+                            if libc::fcntl(fd, libc::F_SETFD, 0) < 0 {
+                                return Err(std::io::Error::last_os_error());
+                            }
+                        } else if libc::dup2(fd, target) < 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        Ok(())
+                    });
+                }
+            }
+            match cmd.spawn() {
                 Ok(mut child) => {
                     if let Some(e) = child.stderr.take() {
                         std::thread::spawn(move || crate::audit::follow_broker(e));

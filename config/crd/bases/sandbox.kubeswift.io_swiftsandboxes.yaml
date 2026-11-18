@@ -451,7 +451,8 @@ spec:
                       when the slot boots so a checkout waits for nothing (status.identity
                       records which). The egress proxy container, or without one the
                       built-in broker (for allow[].tls), holds the SVID through the SPIFFE
-                      Workload API; the guest never sees it. Needs network mode proxied and
+                      Workload API; the guest never sees it. Needs network mode proxied or
+                      brokered and
                       SPIFFE on the platform (chart sandboxMaterialize.spiffe). Disabled when
                       unset.
                     enum:
@@ -707,8 +708,8 @@ spec:
                     description: |-
                       Egress lets a restricted sandbox reach destinations the restricted mode
                       blocks, such as one in-cluster Service, without opening everything. In
-                      mode proxied it is the guest's allowlist, enforced by the egress proxy.
-                      Only valid with mode restricted or proxied.
+                      modes proxied and brokered it is the guest's allowlist, enforced by the
+                      egress proxy. Only valid with mode restricted, proxied or brokered.
                     properties:
                       allow:
                         description: |-
@@ -735,8 +736,10 @@ spec:
                                 domain with a leading "*." (*.example.com matches a.example.com and
                                 a.b.example.com, not example.com). The proxy matches it against the TLS
                                 server name or the HTTP Host of each connection and requires the
-                                connection's destination to be an address the name resolves to. TCP
-                                only. Only valid with mode proxied, and not in proxy.upstreams.
+                                connection's destination to be an address the name resolves to (in mode
+                                brokered the guest names the destination and the proxy connects to the
+                                name). TCP only. Only valid with mode proxied or brokered, and not in
+                                proxy.upstreams.
                               maxLength: 253
                               type: string
                             ports:
@@ -793,7 +796,7 @@ spec:
                                 io.kubeswift.egress-intent.features label, connects over TLS presenting
                                 the sandbox's SPIFFE X.509-SVID and accepts only an upstream presenting
                                 an SVID of the same trust domain. For a host rule the guest must speak
-                                HTTP (the Host header is matched). Needs mode proxied and
+                                HTTP (the Host header is matched). Needs mode proxied or brokered and
                                 spec.identity.spiffe Enabled; a Self proxy originates TLS in its own
                                 configuration.
                               properties:
@@ -818,7 +821,8 @@ spec:
                           placeholder with the Secret's value in the named header of requests to
                           the listed destinations, after terminating TLS with a certificate
                           authority generated for the launcher, which the guest is made to trust.
-                          The value is never written into the guest. Needs mode proxied and a
+                          The value is never written into the guest. Needs mode proxied or
+                          brokered and a
                           proxy preset with config Intent and a readiness probe (chart
                           sandboxMaterialize.egressProxyPresets), and a sandbox kernel whose
                           bridge writes files. On a pool, the shape (names, placeholders,
@@ -1178,8 +1182,10 @@ spec:
                                     domain with a leading "*." (*.example.com matches a.example.com and
                                     a.b.example.com, not example.com). The proxy matches it against the TLS
                                     server name or the HTTP Host of each connection and requires the
-                                    connection's destination to be an address the name resolves to. TCP
-                                    only. Only valid with mode proxied, and not in proxy.upstreams.
+                                    connection's destination to be an address the name resolves to (in mode
+                                    brokered the guest names the destination and the proxy connects to the
+                                    name). TCP only. Only valid with mode proxied or brokered, and not in
+                                    proxy.upstreams.
                                   maxLength: 253
                                   type: string
                                 ports:
@@ -1237,7 +1243,7 @@ spec:
                                     io.kubeswift.egress-intent.features label, connects over TLS presenting
                                     the sandbox's SPIFFE X.509-SVID and accepts only an upstream presenting
                                     an SVID of the same trust domain. For a host rule the guest must speak
-                                    HTTP (the Host header is matched). Needs mode proxied and
+                                    HTTP (the Host header is matched). Needs mode proxied or brokered and
                                     spec.identity.spiffe Enabled; a Self proxy originates TLS in its own
                                     configuration.
                                   properties:
@@ -1403,13 +1409,15 @@ spec:
                     type: object
                   mode:
                     default: restricted
-                    description: Mode is "restricted" (default), "open", "none" or
-                      "proxied".
+                    description: |-
+                      Mode is "restricted" (default), "open", "none", "proxied" or
+                      "brokered".
                     enum:
                     - restricted
                     - open
                     - none
                     - proxied
+                    - brokered
                     type: string
                   ports:
                     description: |-
@@ -2264,7 +2272,7 @@ spec:
                   proxyUpstreams:
                     description: |-
                       ProxyUpstreams is what the egress proxy container itself may reach
-                      (mode proxied with a proxy), from spec.network.egress.proxy.upstreams
+                      (mode proxied or brokered with a proxy), from spec.network.egress.proxy.upstreams
                       with every Service resolved to its address. The guest cannot reach
                       these unless the allowlist also allows them.
                     items:
