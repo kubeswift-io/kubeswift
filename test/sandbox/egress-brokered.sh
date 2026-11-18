@@ -38,6 +38,15 @@
 #      "checkout" claiming it: https to PUBLIC_HOST works, OTHER_HOST does
 #      not, from a warm slot.
 #   5. EgressProxyReady is True on "brokered" and "checkout".
+#   6. Sandbox "relay" runs an Envoy egress proxy (config Self, a CONNECT
+#      forward proxy on listeners.http) instead of the broker: https to
+#      PUBLIC_HOST works through it, a node's kubelet does not (the proxy
+#      uid chain), and the guest has no NIC. Needs the controller to allow
+#      PROXY_IMAGE (chart sandboxMaterialize.egressProxyImages); SKIP_RELAY=1
+#      skips it.
+#   7. With OLD_KERNEL_IMAGE set (a kernel whose bridge lacks egress-vsock,
+#      such as kernels/sandbox:6.6.22), sandbox "old-kernel" fails with
+#      KernelUnsupported.
 #
 # Prerequisites:
 #   - a node labeled kubeswift.io/kernel-node=true with KVM
@@ -59,6 +68,11 @@ OTHER_HOST="${OTHER_HOST:-github.com}"
 TIMEOUT="${TIMEOUT:-300}"
 # SKIP_KERNEL=1: the SwiftKernel "sandbox" in NS is already prepared.
 SKIP_KERNEL="${SKIP_KERNEL:-}"
+PROXY_IMAGE="${PROXY_IMAGE:-docker.io/envoyproxy/envoy:v1.36.2}"
+SKIP_RELAY="${SKIP_RELAY:-}"
+OLD_KERNEL_IMAGE="${OLD_KERNEL_IMAGE:-}"
+# The SwiftKernel sandbox() boots.
+KP=sandbox
 
 log() { printf '==> %s\n' "$*"; }
 die() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -103,7 +117,7 @@ kind: SwiftSandbox
 metadata: {name: $1, namespace: $NS}
 spec:
   image: $IMAGE
-  kernelProfileRef: {name: sandbox}
+  kernelProfileRef: {name: $KP}
   cpu: 1
   memory: 256Mi
 $2
@@ -126,6 +140,54 @@ run() {
 	if printf '%s\n' "$out" | grep -q '^PROBE-FAIL' || [ "$phase" != Completed ]; then
 		die "sandbox $1: egress not as expected (phase $phase)"
 	fi
+}
+
+# envoy_connect: a brokered network block whose egress proxy is Envoy as a
+# CONNECT / absolute-URI forward proxy to any name on listeners.http 15002
+# (its transparent listener forwards nothing).
+envoy_connect() {
+	printf '  network:\n    mode: brokered\n    egress:\n      proxy:\n        image: %s\n        listeners: {transparent: 15006, http: 15002}\n        args:\n        - --disable-hot-restart\n        - --log-level\n        - warn\n        - --config-yaml\n        - |\n' "$PROXY_IMAGE"
+	sed 's/^/          /' <<'EOF'
+static_resources:
+  listeners:
+  - name: transparent
+    address: {socket_address: {address: 0.0.0.0, port_value: 15006}}
+    listener_filters:
+    - name: envoy.filters.listener.tls_inspector
+      typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector}
+    filter_chains:
+    - filter_chain_match: {server_names: ["nothing.invalid"]}
+      filters:
+      - name: envoy.filters.network.tcp_proxy
+        typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy, stat_prefix: none, cluster: dfp}
+  - name: http
+    address: {socket_address: {address: 0.0.0.0, port_value: 15002}}
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: fwd
+          route_config:
+            virtual_hosts:
+            - name: all
+              domains: ["*"]
+              routes:
+              - match: {connect_matcher: {}}
+                route: {cluster: dfp, upgrade_configs: [{upgrade_type: CONNECT, connect_config: {}}]}
+              - match: {prefix: "/"}
+                route: {cluster: dfp}
+          http_filters:
+          - name: envoy.filters.http.dynamic_forward_proxy
+            typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig, dns_cache_config: {name: c, dns_lookup_family: V4_ONLY}}
+          - name: envoy.filters.http.router
+            typed_config: {"@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router}
+  clusters:
+  - name: dfp
+    lb_policy: CLUSTER_PROVIDED
+    connect_timeout: 5s
+    cluster_type: {name: envoy.clusters.dynamic_forward_proxy, typed_config: {"@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig, dns_cache_config: {name: c, dns_lookup_family: V4_ONLY}}}
+EOF
 }
 
 network() { # network ALLOW_LINES: a brokered network block with these allow entries
@@ -243,6 +305,33 @@ http https-other block https://$OTHER_HOST/"
 	[ "$claimed" = warm ] || die "checkout did not run on a warm slot"
 	log "checkout ran on a warm slot of pool warm"
 	ready_condition checkout
+
+	if [ -z "$SKIP_RELAY" ]; then
+		local rprobes="chk no-eth0 block test -e /sys/class/net/eth0
+http https-public reach https://$PUBLIC_HOST/"
+		for ip in $node_ips; do rprobes="$rprobes
+http kubelet-$ip block -k https://$ip:10250/"; done
+		run relay "$(envoy_connect)" "$rprobes"
+		ready_condition relay
+	fi
+
+	if [ -n "$OLD_KERNEL_IMAGE" ]; then
+		cat <<EOF | kubectl apply -f - >/dev/null
+apiVersion: kernel.kubeswift.io/v1alpha1
+kind: SwiftKernel
+metadata: {name: old, namespace: $NS}
+spec: {profile: sandbox, kernelCmdline: console=ttyS0, ociRef: {image: "$OLD_KERNEL_IMAGE"}}
+EOF
+		kubectl -n "$NS" wait --for=jsonpath='{.status.phase}'=Ready swiftkernel/old --timeout=300s >/dev/null || die "SwiftKernel old not Ready"
+		kubectl -n "$NS" delete swiftsandbox old-kernel --ignore-not-found --wait=true >/dev/null
+		KP=old sandbox old-kernel "$(network "{host: $PUBLIC_HOST}")" "true"
+		local phase reason
+		phase=$(finished old-kernel)
+		reason=$(kubectl -n "$NS" get swiftsandbox old-kernel -o jsonpath='{.status.conditions[?(@.type=="GuestRunning")].reason}')
+		[ "$phase" = Failed ] && [ "$reason" = KernelUnsupported ] ||
+			die "old-kernel: $phase $reason: $(kubectl -n "$NS" get swiftsandbox old-kernel -o jsonpath='{.status.message}')"
+		log "old-kernel: Failed KernelUnsupported"
+	fi
 
 	log "PASS: brokered egress has no guest NIC and allows only the allowlist, never nodes or the API server"
 }
