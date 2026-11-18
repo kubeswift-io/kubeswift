@@ -762,10 +762,8 @@ pub fn spawn_if_proxied(runtime_root: &std::path::Path) -> Result<(), String> {
 /// Mode brokered: binds the vsock listener the guest's forwarder reaches
 /// (before the guest boots, so its first connection finds it) and runs the
 /// broker, or with an egress proxy the CONNECT relay, on it under the proxy
-/// uid. Refuses a kernel whose bridge cannot start the forwarder: the guest
-/// would have no way out at all.
+/// uid (main checks the bridge has egress-vsock first).
 fn spawn_brokered(runtime_root: &std::path::Path) -> Result<(), String> {
-    crate::bridge::require("egress-vsock", "network mode brokered")?;
     let port = crate::egress_vsock::port_from_env()?;
     let listener = crate::egress_vsock::bind(runtime_root, port)?;
     // The parent keeps it open across helper restarts; each child gets it

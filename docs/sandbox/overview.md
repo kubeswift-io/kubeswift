@@ -140,6 +140,7 @@ node only. The controller checks again every 10 seconds.
 | `open` | Denied | Unrestricted — the whole cluster and internet | Trusted workloads that must reach in-cluster services |
 | `none` | No network at all | No network at all | Pure compute / detonation |
 | `proxied` | Denied | Nothing is forwarded: every TCP connection goes to an egress broker that allows only `network.egress.allow`, by address or by DNS name; DNS answers only allowed names; no UDP other than DNS, no ICMP, no IPv6 | Agents and other untrusted code that may reach only named services |
+| `brokered` | No network device in the guest | Only through an HTTP proxy on the guest's loopback, carried over vsock to the same broker (or egress proxy) and allowlist as `proxied`; no DNS, UDP, ICMP or IPv6 | Agents that must have no network path at all |
 
 Ingress isolation is a NetworkPolicy shared by `restricted` and `open` (deny
 all inbound). The `restricted` vs `open` difference is entirely **in-pod
@@ -610,6 +611,52 @@ Requirements:
 The ID is as strong as pod creation in the sandbox's namespace: anyone who may
 create pods there can label one like a launcher, as with any SPIFFE ID derived
 from pod metadata.
+
+### Mode brokered
+
+`brokered` gives the guest no network card. Its workload's `HTTP_PROXY` and
+`HTTPS_PROXY` (and `http_proxy`, `https_proxy`, `NODE_USE_ENV_PROXY=1`) point
+at `127.0.0.1:3128`, where the guest agent carries each connection unchanged
+over vsock to the launcher. There the built-in broker, or the sandbox's egress
+proxy, takes the HTTP proxy request and applies `network.egress.allow` as in
+`proxied`:
+
+- `CONNECT host:port` tunnels any TCP (HTTPS, SSH with a CONNECT helper) to
+  an allowed host and port; a plain `GET http://...` is forwarded with its
+  `Host` set to the destination.
+- `host` rules match the name in the request. The broker resolves the name
+  and connects itself, so the guest never chooses the address.
+- `cidr` rules match an IPv4 address in the request. A `service` rule is
+  reached by the Service's name (`app`, `app.<namespace>`,
+  `app.<namespace>.svc`); the broker resolves only names a host rule or an
+  allowed Service gives, never others.
+- The guest has no DNS (its resolver is `127.0.0.1`, where nothing answers)
+  and no UDP, ICMP or IPv6. A client that resolves a name before using the
+  proxy fails.
+
+```yaml
+spec:
+  network:
+    mode: brokered
+    egress:
+      allow:
+      - host: api.example.com
+        ports: [{port: 443}]
+      - service: {name: llm}
+        ports: [{port: 8080}]
+```
+
+The rest of the `proxied` API applies unchanged: `egress.proxy` (which must
+declare `listeners.http`: the requests arrive as `CONNECT` and are passed to
+it as they are), presets, `credentials`, `allow[].tls`,
+`spec.identity.spiffe`, the egress audit and `EgressProxyReady`. The proxy uid
+chain still keeps the broker and the proxy away from nodes, the API server and
+private ranges the allowlist does not name. `network.ports` and network
+probes are refused (the guest has no address). Warm pools work; a checkout
+must repeat the pool's network block.
+
+Needs kernels `sandbox:6.6.23` / `gpu-sandbox:6.6.13` or later (bridge feature
+`egress-vsock`); on an older kernel the sandbox fails with `KernelUnsupported`.
 
 ### Exposing ports
 
