@@ -139,7 +139,7 @@ sandboxMaterialize:
   #   envoy:
   #     image: docker.io/envoyproxy/envoy:v1.36.2
   #     args: ["-c", "/etc/kubeswift/egress-proxy/envoy.json", "--disable-hot-restart"]
-  #     translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:v0.2.0
+  #     translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:v0.5.0
   #     translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/envoy.json", "--admin-port", "15000"]
   #     listeners: {transparent: 15006}
   #     readiness: {httpGet: {port: 15000, path: /certs}}
@@ -151,9 +151,18 @@ sandboxMaterialize:
   #   agentgateway:
   #     image: cr.agentgateway.dev/agentgateway:v1.7.0
   #     args: ["-f", "/etc/kubeswift/egress-proxy/agentgateway.json"]
-  #     translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/agentgateway-translator:<version>
+  #     translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/agentgateway-translator:v0.5.0
   #     translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/agentgateway.json"]
   #     listeners: {transparent: 15006, proxyProtocol: v2}
+  # A sandbox in network mode brokered needs a preset with listeners.http
+  # (CONNECT and absolute-URI requests). envoy-translator v0.5.0 serves it,
+  # but not together with credentials or allow[].tls:
+  #   envoy-http:
+  #     image: docker.io/envoyproxy/envoy:v1.36.2
+  #     args: ["-c", "/etc/kubeswift/egress-proxy/envoy.json", "--disable-hot-restart"]
+  #     translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:v0.5.0
+  #     translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/envoy.json"]
+  #     listeners: {transparent: 15006, http: 3128}
   egressProxyPresets: {}
   # SPIFFE identity for proxied sandboxes (spec.identity.spiffe). Needs a
   # SPIFFE implementation in the cluster: SPIRE with its controller manager
