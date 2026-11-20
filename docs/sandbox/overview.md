@@ -382,7 +382,7 @@ sandboxMaterialize:
     envoy:
       image: docker.io/envoyproxy/envoy:v1.36.2
       args: ["-c", "/etc/kubeswift/egress-proxy/envoy.json", "--disable-hot-restart"]
-      translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:v0.3.0
+      translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:v0.5.0
       translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/envoy.json", "--admin-port", "15000"]
       listeners: {transparent: 15006}
       readiness: {httpGet: {port: 15000, path: /certs}}
@@ -402,6 +402,27 @@ sandboxMaterialize:
   HTTP on 80, and Envoy connects to the address the name resolves to (not the
   address the guest asked for), so a spoofed server name cannot reach another
   host.
+- With `listeners.http` (envoy-translator v0.5.0 and later) Envoy also serves
+  an explicit HTTP proxy there, which the guest's `HTTP_PROXY` and
+  `HTTPS_PROXY` name, and which a sandbox in mode `brokered` needs. `CONNECT`
+  and absolute-URI requests are matched by the authority the guest asked for:
+  a `host` rule by name and port, a `cidr` rule by an IPv4 literal on its
+  ports, a `service` rule by the Service's name (`app`, `app.<namespace>`,
+  `app.<namespace>.svc`), with Envoy connecting to the Service's address and
+  never resolving the name. Anything else gets 403. The translator refuses
+  `listeners.http` together with credentials or `allow[].tls`, so keep a
+  separate preset for those:
+
+  ```yaml
+  sandboxMaterialize:
+    egressProxyPresets:
+      envoy-http:
+        image: docker.io/envoyproxy/envoy:v1.36.2
+        args: ["-c", "/etc/kubeswift/egress-proxy/envoy.json", "--disable-hot-restart"]
+        translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/envoy-translator:v0.5.0
+        translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/envoy.json"]
+        listeners: {transparent: 15006, http: 3128}
+  ```
 
 ##### Checking a proxy: the conformance suite
 
@@ -450,7 +471,7 @@ sandboxMaterialize:
     agentgateway:
       image: cr.agentgateway.dev/agentgateway:v1.7.0
       args: ["-f", "/etc/kubeswift/egress-proxy/agentgateway.json"]
-      translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/agentgateway-translator:<version>
+      translatorImage: ghcr.io/kubeswift-io/kubeswift-egress-adapters/agentgateway-translator:v0.5.0
       translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/agentgateway.json"]
       listeners: {transparent: 15006, proxyProtocol: v2}
 ```
@@ -650,7 +671,8 @@ spec:
 
 The rest of the `proxied` API applies unchanged: `egress.proxy` (which must
 declare `listeners.http`: the requests arrive as `CONNECT` and are passed to
-it as they are), presets, `credentials`, `allow[].tls`,
+it as they are; see the `envoy-http` preset under
+[Proxy presets](#proxy-presets)), presets, `credentials`, `allow[].tls`,
 `spec.identity.spiffe`, the egress audit and `EgressProxyReady`. The proxy uid
 chain still keeps the broker and the proxy away from nodes, the API server and
 private ranges the allowlist does not name. `network.ports` and network
