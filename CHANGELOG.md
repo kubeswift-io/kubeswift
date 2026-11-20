@@ -6,6 +6,20 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.26.0] — 2026-11-20
+
+Egress you control for SwiftSandbox: two new network modes and the pieces around them. `proxied` keeps the guest's NIC but sends every TCP connection to a broker or to your own egress proxy in the launcher pod. `brokered` boots the guest with no network device at all: its only way out is an HTTP proxy carried over vsock. Around them: egress proxy presets with translators (published from kubeswift-egress-adapters), credentials the guest never sees, SPIFFE identity per sandbox, an egress audit stream, and a conformance image that checks any proxy against the same guarantees. All of it is opt-in; existing sandboxes and guests behave as before. KubeSwift is now Apache-2.0.
+
+### Upgrade
+
+- **CRDs changed: apply `crds/` before `helm upgrade`.** `swiftsandboxes` and `swiftsandboxpools` gain `spec.network.mode` values `proxied` and `brokered`, `spec.network.egress.allow[].host` / `allow[].tls`, `spec.network.egress.proxy`, `spec.network.egress.credentials`, `spec.identity.spiffe`, `status.identity.spiffeID` on sandboxes, and `status.network.proxyUpstreams`. No new CRD (21).
+- **New chart values, all off or empty by default:** `sandboxMaterialize.egressProxyImages`, `sandboxMaterialize.egressProxyPresets` and `sandboxMaterialize.spiffe` (`enabled`, `trustDomain`, `workloadAPI`, `clusterSPIFFEIDs`). With them unset the rendered chart is unchanged apart from image tags. New template `sandbox/clusterspiffeids.yaml`, rendered only with `spiffe.enabled` and `clusterSPIFFEIDs.create`. `spiffe.enabled` without `trustDomain` fails the render.
+- **Kernels for mode `brokered`:** `kernels/sandbox:6.6.24` / `gpu-sandbox:6.6.14` or later (bridge feature `egress-vsock`; older kernels fail the sandbox with `KernelUnsupported`). Kernels are not chart-derived: raise your SwiftKernels yourself. **Never use `sandbox:6.6.23` / `gpu-sandbox:6.6.13`**: their bridge panics at boot for every sandbox not in mode `brokered`. Nothing else needs a new kernel.
+- **A tenth image**, `ghcr.io/kubeswift-io/kubeswift/egress-conformance`, is published and signed with this release. It is not deployed by the chart.
+- **Chart default `ui.image.tag` is now `v0.14.0`** (kubeswift-ui v0.14.0: design system, Secret fields in the image, kernel and sandbox forms).
+- **Licence:** this and later releases are Apache-2.0; earlier releases stay AGPL-3.0.
+- No launcher restarts: running guests, sandboxes and warm slots keep their launcher.
+
 ### Changed
 
 - **KubeSwift is now licensed under the Apache License, Version 2.0** (was AGPL-3.0), so it can be used and embedded by projects and vendors that cannot take a copyleft dependency. Earlier releases stay under AGPL-3.0. Contributions are accepted under Apache-2.0 with the DCO sign-off; see [CONTRIBUTING.md](CONTRIBUTING.md) and the new [MAINTAINERS.md](MAINTAINERS.md).
