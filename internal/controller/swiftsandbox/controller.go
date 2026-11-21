@@ -623,8 +623,14 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 	// is past materializing, so it keeps its phase, and the pod's terminal
 	// phase decides Completed or Failed. This case used to fall through to
 	// Materializing, so a finishing sandbox went Running -> Materializing ->
-	// Completed.
-	if _, exited := launcherExitCode(pod); exited {
+	// Completed. A launcher that exited non-zero has failed whatever the pod
+	// phase says: the console container keeps the pod Running for up to two
+	// minutes when the launcher ends before swiftletd starts (its entrypoint
+	// stops on a dnsmasq that exited), so do not wait for it.
+	if code, exited := launcherExitCode(pod); exited {
+		if code != 0 {
+			return r.finishTerminal(ctx, sb, pod)
+		}
 		return ctrl.Result{RequeueAfter: pollInterval}, nil
 	}
 
@@ -704,10 +710,12 @@ func (r *SwiftSandboxReconciler) finishTerminal(ctx context.Context, sb *sandbox
 		}
 		return r.terminal(ctx, sb, sandboxv1alpha1.SwiftSandboxFailed, "WorkloadFailed", fmt.Sprintf("workload exited %d", code))
 	}
+	launcherFailed := false
 	if code, ok := launcherExitCode(pod); ok {
 		sb.Status.ExitCode = &code
+		launcherFailed = code != 0
 	}
-	if pod.Status.Phase == corev1.PodFailed {
+	if pod.Status.Phase == corev1.PodFailed || launcherFailed {
 		return r.terminal(ctx, sb, sandboxv1alpha1.SwiftSandboxFailed, "GuestFailed", podFailureMessage(pod))
 	}
 	// Without the exit line the outputs may be incomplete: never export

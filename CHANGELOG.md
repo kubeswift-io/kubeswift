@@ -6,6 +6,10 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A launcher whose dnsmasq exits at start now fails at once, with dnsmasq's error.** The launcher entrypoint started dnsmasq in the background and never checked it, so a dnsmasq that exited (an option it refuses, its port in use, the node out of `fs.inotify.max_user_instances`) left the guest without an address while the sandbox or guest reported `Running` and the launcher Ready, until the lease poll gave up after 240 s with `guest-network-unready=DHCPTimeout`. The entrypoint now checks every dnsmasq it starts (the primary NIC on nat, UDN or NAD, and the secondary NIC) and exits 1 with dnsmasq's error as the termination message, which reaches the SwiftSandbox or SwiftGuest status. A sandbox whose launcher exited non-zero is now `Failed` at once even while its console container keeps the pod Running, and a warm slot in that state is replaced instead of waiting up to two minutes.
+
 ## [v0.26.0] — 2026-11-20
 
 Egress you control for SwiftSandbox: two new network modes and the pieces around them. `proxied` keeps the guest's NIC but sends every TCP connection to a broker or to your own egress proxy in the launcher pod. `brokered` boots the guest with no network device at all: its only way out is an HTTP proxy carried over vsock. Around them: egress proxy presets with translators (published from kubeswift-egress-adapters), credentials the guest never sees, SPIFFE identity per sandbox, an egress audit stream, and a conformance image that checks any proxy against the same guarantees. All of it is opt-in; existing sandboxes and guests behave as before. KubeSwift is now Apache-2.0.
