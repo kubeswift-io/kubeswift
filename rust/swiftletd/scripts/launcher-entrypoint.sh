@@ -51,6 +51,38 @@ if network_enabled; then
     lease_dir="$RUN_DIR/$safe_id"
     mkdir -p "$lease_dir"
 
+    # BEGIN dnsmasq helpers (rust/swiftletd/scripts/test-dnsmasq-check.sh runs them)
+    # dnsmasq_start LEASEFILE ARGS...: dnsmasq in the foreground (run it with &),
+    # its log on stdout as before, and its first lines also in LEASEFILE.start
+    # so dnsmasq_check can report why it stopped.
+    dnsmasq_start() {
+        _lf="$1"; shift
+        dnsmasq "$@" --dhcp-leasefile="$_lf" 2>&1 |
+            awk -v f="$_lf.start" 'NR <= 20 { print > f; fflush(f) } { print; fflush() }'
+    }
+    # dnsmasq_check: run after the existing one-second wait. A dnsmasq that has
+    # already exited (an option it refuses, its port in use, the node out of
+    # inotify instances) never answers DHCP, so the guest would boot with no
+    # address while the launcher looked healthy, until swiftletd's lease poll
+    # gave up minutes later. Fail the launcher now instead, with dnsmasq's own
+    # error as the termination message, which the controller puts in status.
+    dnsmasq_check() {
+        dnsmasq_running "$lease_dir/dnsmasq.leases" primary
+        if [ -f "$sec_env" ]; then
+            dnsmasq_running "$lease_dir/secondary-dnsmasq.leases" secondary
+        fi
+    }
+    dnsmasq_running() {
+        pgrep -f -- "dhcp-leasefile=$1" >/dev/null 2>&1 && return 0
+        msg="the $2 NIC's dnsmasq exited at start, so the guest would get no address"
+        err=$(grep -v -e 'started, version' -e 'compile time options' -e '^[[:space:]]*$' "$1.start" 2>/dev/null | tail -n 2 | tr '\n' ' ')
+        [ -n "$err" ] && msg="$msg: $err"
+        echo "FATAL: $msg" >&2
+        printf '%s\n' "$msg" > /dev/termination-log 2>/dev/null || true
+        exit 1
+    }
+    # END dnsmasq helpers
+
     # Model A: network-init persisted the
     # OVN-K primary-UDN-assigned IP + the OVN-derived MAC the guest MUST adopt (the LSP
     # port_security pins MAC+IP). Hand exactly that IP to the guest (matched by MAC) via
@@ -77,13 +109,13 @@ if network_enabled; then
         # egress, which blackholes ALL of the guest's traffic. The guest's PRIMARY NIC
         # owns the default route; the secondary only needs its on-link subnet route
         # (from the /prefix address) for node-to-node reachability.
-        dnsmasq --no-daemon --port=0 --bind-interfaces --interface="$SEC_BRIDGE" \
+        dnsmasq_start "$lease_dir/secondary-dnsmasq.leases" \
+            --no-daemon --port=0 --bind-interfaces --interface="$SEC_BRIDGE" \
             --dhcp-range="$SEC_IP,$SEC_IP,infinite" \
             --dhcp-option=option:router \
             ${SEC_MAC:+--dhcp-host="$SEC_MAC,$SEC_IP"} \
             ${SEC_MAC:+--dhcp-ignore=tag:!known} \
             ${SEC_MTU:+--dhcp-option=option:mtu,"$SEC_MTU"} \
-            --dhcp-leasefile="$lease_dir/secondary-dnsmasq.leases" \
             --dhcp-authoritative &
     fi
 
@@ -99,16 +131,17 @@ if network_enabled; then
         echo "Primary UDN dnsmasq: handing $UDN_IP to $UDN_MAC on $UDN_BRIDGE (gw $UDN_GW, mtu ${UDN_MTU:-default})"
         # Same shared-L2 guards as the NAD path (answer only this guest's MAC, infinite
         # lease, carry the overlay MTU) -- a primary UDN is a flat L2 too.
-        dnsmasq --no-daemon --bind-interfaces --interface="$UDN_BRIDGE" \
+        dnsmasq_start "$lease_dir/dnsmasq.leases" \
+            --no-daemon --bind-interfaces --interface="$UDN_BRIDGE" \
             --dhcp-range="$UDN_IP,$UDN_IP,infinite" \
             ${UDN_MAC:+--dhcp-host="$UDN_MAC,$UDN_IP"} \
             ${UDN_MAC:+--dhcp-ignore=tag:!known} \
             ${UDN_GW:+--dhcp-option=option:router,"$UDN_GW"} \
             --dhcp-option=option:dns-server,"$dns" \
             ${UDN_MTU:+--dhcp-option=option:mtu,"$UDN_MTU"} \
-            --dhcp-leasefile="$lease_dir/dnsmasq.leases" \
             --dhcp-authoritative &
         sleep 1
+        dnsmasq_check
         exec /usr/local/bin/swiftletd "$@"
     fi
 
@@ -135,16 +168,17 @@ if network_enabled; then
         # Reachability is unaffected -- the guest talks via its NAD IP + gateway,
         # never the helper. option:mtu carries the overlay MTU so encapsulation
         # overhead does not silently drop the guest's full-size frames.
-        dnsmasq --no-daemon --bind-interfaces --interface="$NAD_BRIDGE" \
+        dnsmasq_start "$lease_dir/dnsmasq.leases" \
+            --no-daemon --bind-interfaces --interface="$NAD_BRIDGE" \
             --dhcp-range="$NAD_IP,$NAD_IP,infinite" \
             ${NAD_MAC:+--dhcp-host="$NAD_MAC,$NAD_IP"} \
             ${NAD_MAC:+--dhcp-ignore=tag:!known} \
             ${NAD_GW:+--dhcp-option=option:router,"$NAD_GW"} \
             --dhcp-option=option:dns-server,"$dns" \
             ${NAD_MTU:+--dhcp-option=option:mtu,"$NAD_MTU"} \
-            --dhcp-leasefile="$lease_dir/dnsmasq.leases" \
             --dhcp-authoritative &
         sleep 1
+        dnsmasq_check
         exec /usr/local/bin/swiftletd "$@"
     fi
 
@@ -244,7 +278,8 @@ if network_enabled; then
     fi
     start_dnsmasq() {
         # shellcheck disable=SC2086 # dns_args is a list of validated words
-        dnsmasq --no-daemon --bind-interfaces --interface="$BRIDGE" --no-ping \
+        dnsmasq_start "$lease_dir/dnsmasq.leases" \
+            --no-daemon --bind-interfaces --interface="$BRIDGE" --no-ping \
             --dhcp-ignore-clid \
             --dhcp-range="$range" \
             --dhcp-option=option:router,"$gateway" \
@@ -252,7 +287,6 @@ if network_enabled; then
             $dns_args \
             ${egress_mtu:+--dhcp-option=option:mtu,"$egress_mtu"} \
             ${search:+--dhcp-option=option:domain-search,"$search"} \
-            --dhcp-leasefile="$lease_dir/dnsmasq.leases" \
             --dhcp-authoritative
     }
     if [ "${KUBESWIFT_SANDBOX_EGRESS:-}" = "proxied" ] && [ -n "${KUBESWIFT_EGRESS_AUDIT_DIR:-}" ]; then
@@ -263,6 +297,7 @@ if network_enabled; then
         start_dnsmasq &
     fi
     sleep 1
+    dnsmasq_check
 fi
 
 exec /usr/local/bin/swiftletd "$@"
