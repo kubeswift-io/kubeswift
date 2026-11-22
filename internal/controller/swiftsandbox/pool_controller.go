@@ -265,7 +265,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		if p.DeletionTimestamp != nil {
 			continue
 		}
-		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+		if slotEnded(p) {
 			// A slot whose launcher has exited never becomes Ready again
 			// (RestartPolicy Never). A warm one used to be left in place:
 			// owner GC removes it only with the pool, so it stayed, and on a
@@ -757,10 +757,22 @@ func (r *SwiftSandboxPoolReconciler) updateStatus(ctx context.Context, pool *san
 	return ctrl.Result{RequeueAfter: poolPollInterval}, nil
 }
 
+// slotEnded: the slot's pod has finished, or its launcher has failed while
+// the console container keeps the pod Running (a launcher that ends before
+// swiftletd starts, such as on a dnsmasq that exited, leaves the console
+// waiting up to two minutes).
+func slotEnded(p *corev1.Pod) bool {
+	if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+		return true
+	}
+	code, exited := launcherExitCode(p)
+	return exited && code != 0
+}
+
 // slotEndMessage says why an ended slot's launcher pod stopped, for the event
 // that records its deletion (its logs go with it).
 func slotEndMessage(p *corev1.Pod) string {
-	if p.Status.Phase == corev1.PodFailed {
+	if code, exited := launcherExitCode(p); p.Status.Phase == corev1.PodFailed || (exited && code != 0) {
 		return podFailureMessage(p)
 	}
 	return "launcher exited"

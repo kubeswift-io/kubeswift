@@ -39,6 +39,12 @@ func TestSandboxReconcile_PhaseOnlyMovesForward(t *testing.T) {
 		exited := corev1.ContainerStatus{Name: launcherName, State: corev1.ContainerState{
 			Terminated: &corev1.ContainerStateTerminated{ExitCode: tc.exitCode},
 		}}
+		// A launcher that exited 0 waits for the pod to end; one that exited
+		// non-zero has failed whatever the pod phase says.
+		whileRunning := sandboxv1alpha1.SwiftSandboxRunning
+		if tc.exitCode != 0 {
+			whileRunning = sandboxv1alpha1.SwiftSandboxFailed
+		}
 		steps := []step{
 			{"materializing", corev1.PodPending,
 				corev1.ContainerStatus{Name: materializeInitName, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
@@ -48,7 +54,7 @@ func TestSandboxReconcile_PhaseOnlyMovesForward(t *testing.T) {
 				corev1.ContainerStatus{Name: launcherName, Ready: true, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
 				sandboxv1alpha1.SwiftSandboxRunning},
 			{"launcher exited, pod still Running", corev1.PodRunning, materialized, exited,
-				sandboxv1alpha1.SwiftSandboxRunning},
+				whileRunning},
 			{"pod terminal", tc.podPhase, materialized, exited, tc.want},
 		}
 
