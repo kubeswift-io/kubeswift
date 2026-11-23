@@ -8,7 +8,9 @@ metadata:
     app.kubernetes.io/name: kubeswift
     app.kubernetes.io/component: controller-manager
 spec:
-  replicas: {{ .Values.controllerManager.replicas }}
+  {{- /* Pod mode's webhook fails closed: one replica would refuse every
+         pod-mode Pod while it restarts. */}}
+  replicas: {{ ternary (max 2 .Values.controllerManager.replicas) .Values.controllerManager.replicas .Values.sandboxMaterialize.podMode.enabled }}
   selector:
     matchLabels:
       app.kubernetes.io/name: kubeswift
@@ -63,7 +65,7 @@ spec:
             - name: KUBESWIFT_MIGRATION_STUNNEL_IMAGE
               value: {{ .Values.migrationStunnel.image.registry }}/migration-stunnel:{{ include "kubeswift.imageTag" (dict "tag" .Values.migrationStunnel.image.tag "appVersion" .Chart.AppVersion) }}
             - name: KUBESWIFT_SANDBOX_MATERIALIZE_IMAGE
-              value: {{ .Values.sandboxMaterialize.image.registry }}/sandbox-materialize:{{ include "kubeswift.imageTag" (dict "tag" .Values.sandboxMaterialize.image.tag "appVersion" .Chart.AppVersion) }}
+              value: {{ include "kubeswift.sandboxMaterializeImage" . }}
             {{- with .Values.sandboxMaterialize.artifactCache }}
             - name: KUBESWIFT_ARTIFACT_CACHE_MAX_BYTES
               value: {{ .maxBytes | default "0" | quote }}
@@ -121,6 +123,10 @@ spec:
             {{- end }}
             {{- if .Values.migration.mtls.enabled }}
             - --migration-mtls-enabled=true
+            {{- end }}
+            {{- if .Values.sandboxMaterialize.podMode.enabled }}
+            - --pod-mode-enabled=true
+            - --pod-mode-namespace={{ .Values.sandboxMaterialize.podMode.namespace }}
             {{- end }}
             {{- /* Always explicit: the binary's default is secure, and an
                    upgrade with --reuse-values that kept secure: false (or

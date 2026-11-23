@@ -49,3 +49,7 @@ monitoring:
 migration:
   mtls:
     enabled: true
+
+sandboxMaterialize:
+  podMode:
+    enabled: true
