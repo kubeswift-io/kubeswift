@@ -1,4 +1,7 @@
 {{- $metricsSecure := and .Values.controllerManager.metrics .Values.controllerManager.metrics.secure }}
+{{- /* Pod mode's webhook fails closed: one replica would refuse every
+       pod-mode Pod while it restarts. */}}
+{{- $replicas := ternary (max 2 .Values.controllerManager.replicas) .Values.controllerManager.replicas .Values.sandboxMaterialize.podMode.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -8,9 +11,7 @@ metadata:
     app.kubernetes.io/name: kubeswift
     app.kubernetes.io/component: controller-manager
 spec:
-  {{- /* Pod mode's webhook fails closed: one replica would refuse every
-         pod-mode Pod while it restarts. */}}
-  replicas: {{ ternary (max 2 .Values.controllerManager.replicas) .Values.controllerManager.replicas .Values.sandboxMaterialize.podMode.enabled }}
+  replicas: {{ $replicas }}
   selector:
     matchLabels:
       app.kubernetes.io/name: kubeswift
@@ -22,6 +23,19 @@ spec:
         app.kubernetes.io/component: controller-manager
     spec:
       serviceAccountName: controller-manager
+      {{- if gt (int $replicas) 1 }}
+      # Spread replicas across nodes so one node going down leaves a webhook.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: kubeswift
+                    app.kubernetes.io/component: controller-manager
+      {{- end }}
       # The controller-manager is a plain Go binary on
       # distroless/static-debian12:nonroot — it needs no host access at all, so
       # it gets the same hardened context as the gateway, UI and gpu-discovery.

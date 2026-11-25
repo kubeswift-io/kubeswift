@@ -164,6 +164,8 @@ metadata:
     app.kubernetes.io/component: controller-manager
 spec:
   minAvailable: 1
+  # A crash-looping replica must not block a node drain.
+  unhealthyPodEvictionPolicy: AlwaysAllow
   selector:
     matchLabels:
       app.kubernetes.io/name: kubeswift
