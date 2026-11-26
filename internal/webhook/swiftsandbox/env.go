@@ -33,3 +33,21 @@ func ValidateEnv(env []corev1.EnvVar) error {
 	}
 	return nil
 }
+
+// GuestEnvName is whether name can be set as a variable on a cold boot: the
+// guest's init sets the workload's environment with its shell, which takes
+// only letters, digits and _, not starting with a digit. Kubernetes allows
+// more (a "." or "-"), and such a name ended init and panicked the guest. A
+// warm checkout passes env through the guest agent, which takes any name.
+func GuestEnvName(name string) bool {
+	if name == "" || (name[0] >= '0' && name[0] <= '9') {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c != '_' && (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return false
+		}
+	}
+	return true
+}
