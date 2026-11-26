@@ -55,6 +55,21 @@ const (
 	// AnnotationTarget is the launcher pod IP the shim forwards to, written by
 	// the controller and read by the shim through the downward API.
 	AnnotationTarget = "podmode.kubeswift.io/target"
+	// AnnotationRun numbers the stand-in's microVMs: 1 for the first, one
+	// more each time a restart boots a new one. Written by the controller on
+	// the stand-in and on each SwiftSandbox.
+	AnnotationRun = "podmode.kubeswift.io/run"
+	// AnnotationExit is "<run>:<exit code>" once that run's workload ended,
+	// written by the controller; the shim exits with the code.
+	AnnotationExit = "podmode.kubeswift.io/exit"
+	// AnnotationExitRestarts is the shim container's restart count when
+	// AnnotationExit was written: a higher count means the kubelet restarted
+	// it, and the controller boots the next run.
+	AnnotationExitRestarts = "podmode.kubeswift.io/exit-restarts"
+	// ConditionMicroVMReady is the stand-in's readiness gate: True while its
+	// microVM runs and the shim forwards to it.
+	ConditionMicroVMReady corev1.PodConditionType = "podmode.kubeswift.io/microvm-ready"
+
 	// Finalizer holds the stand-in until its SwiftSandbox is gone.
 	Finalizer = "podmode.kubeswift.io/microvm"
 
@@ -328,9 +343,22 @@ func Rewrite(pod *corev1.Pod, shimImage string) (*corev1.Pod, error) {
 	// The microVM runs on the stand-in's node, so the stand-in must land on a
 	// node that runs KubeSwift kernels.
 	st.NodeSelector["kubeswift.io/kernel-node"] = "true"
+	// Ready only while the microVM runs, whatever probe the Pod has.
+	if !hasReadinessGate(st.ReadinessGates) {
+		st.ReadinessGates = append(st.ReadinessGates, corev1.PodReadinessGate{ConditionType: ConditionMicroVMReady})
+	}
 	st.Volumes = []corev1.Volume{ShimVolumeSource()}
 	st.Containers = []corev1.Container{StandInContainer(c, shimImage, w.Ports, shimPorts)}
 	return out, nil
+}
+
+func hasReadinessGate(gates []corev1.PodReadinessGate) bool {
+	for _, g := range gates {
+		if g.ConditionType == ConditionMicroVMReady {
+			return true
+		}
+	}
+	return false
 }
 
 // ShimVolumeSource is the stand-in's one volume: its annotations (target and
@@ -549,4 +577,31 @@ func guestMemory(r corev1.ResourceRequirements) string {
 	// Whole MiB: the guest is sized in MiB.
 	mi := (q.Value() + (1<<20 - 1)) >> 20
 	return strconv.FormatInt(mi, 10) + "Mi"
+}
+
+// FormatExit is the AnnotationExit value of run's exit with code.
+func FormatExit(run, code int) string { return strconv.Itoa(run) + ":" + strconv.Itoa(code) }
+
+// ParseExit reads an AnnotationExit value.
+func ParseExit(v string) (run, code int, ok bool) {
+	r, c, found := strings.Cut(v, ":")
+	if !found {
+		return 0, 0, false
+	}
+	run, err1 := strconv.Atoi(r)
+	code, err2 := strconv.Atoi(c)
+	return run, code, err1 == nil && err2 == nil && run > 0
+}
+
+// Restarts is whether the kubelet restarts a container that exited with
+// code under policy, as it does for any Pod.
+func Restarts(policy corev1.RestartPolicy, code int) bool {
+	switch policy {
+	case corev1.RestartPolicyNever:
+		return false
+	case corev1.RestartPolicyOnFailure:
+		return code != 0
+	default:
+		return true
+	}
 }

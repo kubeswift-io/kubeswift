@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kubeswift-io/kubeswift/internal/sandbox/podmode"
 )
 
 func TestReadTarget(t *testing.T) {
@@ -101,5 +103,32 @@ func TestForwardToTarget(t *testing.T) {
 	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, err := io.ReadFull(c, buf); err != nil || string(buf) != msg {
 		t.Errorf("echo %q %v", buf, err)
+	}
+}
+
+func TestWorkloadExit(t *testing.T) {
+	dir := t.TempDir()
+	old := annotationsFile
+	annotationsFile = filepath.Join(dir, "annotations")
+	t.Cleanup(func() { annotationsFile = old })
+	write := func(v string) {
+		if err := os.WriteFile(annotationsFile, []byte(podmode.AnnotationExit+"="+strconv.Quote(v)+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("1:3")
+	if _, ok := workloadExit("1:3"); ok {
+		t.Error("an exit recorded before the shim started counts")
+	}
+	if code, ok := workloadExit(""); !ok || code != 3 {
+		t.Errorf("exit %d %v", code, ok)
+	}
+	write("2:256")
+	if code, ok := workloadExit("1:3"); !ok || code != 1 {
+		t.Errorf("256 maps to %d %v", code, ok)
+	}
+	write("2:137")
+	if code, _ := workloadExit("1:3"); code != 137 {
+		t.Errorf("137 maps to %d", code)
 	}
 }
