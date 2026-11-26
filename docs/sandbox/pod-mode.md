@@ -153,6 +153,10 @@ refreshed, and are writable in the guest.
 | event `NamespaceNotOptedIn` | a stand-in label in a namespace without `kubeswift.io/pod-mode=enabled` |
 | event `StandInTampered` | the stand-in was changed; it and its microVM are deleted |
 
+A Deployment or Job in a namespace that enforces Pod Security `restricted` may
+warn `would violate PodSecurity` when it is created. The warning is about the
+Pod template as written. Its Pods are rewritten into stand-ins, which pass.
+
 The microVM itself is `kubectl -n kubeswift-sandboxes get swiftsandbox pm-<pod uid>`.
 
 ## Limits

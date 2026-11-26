@@ -47,6 +47,8 @@ CURL_IMAGE="${CURL_IMAGE:-docker.io/curlimages/curl:8.11.1}"
 TIMEOUT="${TIMEOUT:-300}"
 TEST_LABEL="kubeswift.io/test=pod-mode"
 
+# Pipelines run with pipefail: grep reads all its input (no -q), so the
+# writer never dies of SIGPIPE and fails the pipeline after a match.
 log() { printf '==> %s\n' "$*"; }
 die() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
@@ -179,10 +181,10 @@ EOF
 	[ -n "$guest" ] && [ "$guest" != "$node_kernel" ] || die "exec ran on the node (uname -r $guest), not in the guest"
 	log "exec runs in the guest: $guest (node: $node_kernel)"
 	local rc=0
-	kubectl -n "$NS" exec web -- sh -c 'exit 7' || rc=$?
+	kubectl -n "$NS" exec web -- sh -c 'exit 7' 2>/dev/null || rc=$?
 	[ "$rc" = 7 ] || die "exec exit code $rc, want 7"
 	kubectl -n "$NS" exec web -- ls / >/dev/null 2>&1 && die "exec of a command other than the shell ran locally"
-	kubectl -n "$NS" logs web | grep -q "Linux version" || die "kubectl logs does not show the guest console"
+	kubectl -n "$NS" logs web | grep "Linux version" >/dev/null || die "kubectl logs does not show the guest console"
 
 	local got
 	got=$(kubectl -n "$NS" run curl --rm -i --restart=Never --image="$CURL_IMAGE" --quiet \
@@ -241,10 +243,10 @@ EOF
 	kubectl -n "$NS" wait pod/cfg --for=condition=Ready --timeout="${TIMEOUT}s" >/dev/null ||
 		die "cfg not Ready: $(condition cfg podmode.kubeswift.io/microvm-ready message)"
 	until_ok 60 "cfg output" sh -c "kubectl -n $NS logs cfg | grep -q '^KEY='"
-	kubectl -n "$NS" logs cfg | grep -qx "TOKEN=$token CFG_MODE=fast" || die "env not set in the guest: $(kubectl -n "$NS" logs cfg | grep TOKEN=)"
-	kubectl -n "$NS" logs cfg | grep -qx "KEY=$key MODE=400 APP=listen: 8080" || die "files not in the guest: $(kubectl -n "$NS" logs cfg | grep KEY=)"
+	kubectl -n "$NS" logs cfg | grep -x "TOKEN=$token CFG_MODE=fast" >/dev/null || die "env not set in the guest: $(kubectl -n "$NS" logs cfg | grep TOKEN=)"
+	kubectl -n "$NS" logs cfg | grep -x "KEY=$key MODE=400 APP=listen: 8080" >/dev/null || die "files not in the guest: $(kubectl -n "$NS" logs cfg | grep KEY=)"
 	uid=$(pod_uid cfg)
-	kubectl -n "$PM_NS" get swiftsandbox "pm-$uid" -o json | grep -qE "$token|$key" && die "a Secret value is in the SwiftSandbox"
+	kubectl -n "$PM_NS" get swiftsandbox "pm-$uid" -o json | grep -E "$token|$key" >/dev/null && die "a Secret value is in the SwiftSandbox"
 	kubectl -n "$PM_NS" get secret "pm-$uid" >/dev/null || die "no Secret copy pm-$uid in $PM_NS"
 
 	until_ok 60 "late waits for its Secret" sh -c "[ \"\$(kubectl -n $NS get pod late -o jsonpath='{.status.conditions[?(@.type==\"podmode.kubeswift.io/microvm-ready\")].reason}')\" = MicroVMConfigError ]"
@@ -285,6 +287,8 @@ spec:
       restartPolicy: Never
       containers: [{name: main, image: $IMAGE, command: [sh, -c, "echo done"]}]
 EOF
+	# The Job's Pod template is checked against Pod Security as written, so
+	# the apply warns; its Pods are rewritten into stand-ins, which pass.
 	kubectl -n "$NS" wait pod/exit3 --for=jsonpath='{.status.phase}'=Failed --timeout="${TIMEOUT}s" >/dev/null || die "exit3 did not fail"
 	local code
 	code=$(pod_field exit3 '{.status.containerStatuses[0].state.terminated.exitCode}')
