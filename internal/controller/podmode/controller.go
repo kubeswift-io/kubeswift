@@ -53,13 +53,17 @@ const (
 	NetworkPolicyPrefix = "kubeswift-podmode-"
 
 	deleteRequeue = 2 * time.Second
+	configRequeue = 10 * time.Second
 )
 
 // Reconciler links stand-in Pods to SwiftSandboxes.
 type Reconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	// APIReader reads the stand-in's Secrets and ConfigMaps uncached; nil
+	// uses Client.
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
+	Recorder  record.EventRecorder
 	// Namespace holds every pod-mode SwiftSandbox and launcher.
 	Namespace string
 	// ShimImage returns the image stand-ins run (pod-shim).
@@ -164,6 +168,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 	sb, err := r.ensureSandbox(ctx, &pod, wl)
+	if ce, ok := isConfigError(err); ok {
+		// As the kubelet does for a container, wait for the Secret or
+		// ConfigMap rather than start without it.
+		r.Recorder.Event(&pod, corev1.EventTypeWarning, "MicroVMConfigError", ce.Msg)
+		return ctrl.Result{RequeueAfter: configRequeue}, r.setReady(ctx, &pod, false, "MicroVMConfigError", ce.Msg)
+	}
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -332,6 +342,9 @@ func (r *Reconciler) release(ctx context.Context, pod *corev1.Pod) (ctrl.Result,
 	if remaining > 0 {
 		return ctrl.Result{RequeueAfter: deleteRequeue}, nil
 	}
+	if err := r.deleteConfigSecret(ctx, ConfigSecretName(pod)); err != nil {
+		return ctrl.Result{}, err
+	}
 	if !controllerutil.ContainsFinalizer(pod, podmode.Finalizer) {
 		return ctrl.Result{}, nil
 	}
@@ -363,6 +376,9 @@ func (r *Reconciler) deleteSandboxes(ctx context.Context, namespace, name string
 				return 0, err
 			}
 		}
+		if err := r.deleteConfigSecret(ctx, sb.Name); err != nil {
+			return 0, err
+		}
 	}
 	return remaining, nil
 }
@@ -389,7 +405,16 @@ func (r *Reconciler) ensureSandbox(ctx context.Context, pod *corev1.Pod, wl *pod
 	if err != nil {
 		return nil, err
 	}
-	want, err := SandboxFor(pod, wl, r.Namespace, hostname)
+	cfg, err := ResolveConfig(ctx, r.reader(), pod, wl)
+	if err != nil {
+		return nil, err
+	}
+	if len(cfg.Data) > 0 {
+		if err := r.ensureConfigSecret(ctx, pod, cfg.Data); err != nil {
+			return nil, err
+		}
+	}
+	want, err := SandboxFor(pod, wl, cfg, r.Namespace, hostname)
 	if err != nil {
 		r.Recorder.Event(pod, corev1.EventTypeWarning, "WorkloadInvalid", err.Error())
 		return nil, reconcile.TerminalError(err)
@@ -418,8 +443,9 @@ func (r *Reconciler) nodeHostname(ctx context.Context, nodeName string) (string,
 	return nodeName, nil
 }
 
-// SandboxFor is the SwiftSandbox that runs a stand-in's workload.
-func SandboxFor(pod *corev1.Pod, wl *podmode.Workload, namespace, hostname string) (*sandboxv1alpha1.SwiftSandbox, error) {
+// SandboxFor is the SwiftSandbox that runs a stand-in's workload, with the
+// environment and files cfg resolved (nil: the workload's env as it is).
+func SandboxFor(pod *corev1.Pod, wl *podmode.Workload, cfg *Config, namespace, hostname string) (*sandboxv1alpha1.SwiftSandbox, error) {
 	mem, err := resource.ParseQuantity(wl.Memory)
 	if err != nil {
 		return nil, fmt.Errorf("workload memory %q: %w", wl.Memory, err)
@@ -443,11 +469,15 @@ func SandboxFor(pod *corev1.Pod, wl *podmode.Workload, namespace, hostname strin
 			Args:         wl.Args,
 			Env:          wl.Env,
 			WorkingDir:   wl.WorkingDir,
+			SecretFiles:  cfgFiles(cfg),
 			CPU:          wl.CPU,
 			Memory:       mem,
 			NodeSelector: map[string]string{corev1.LabelHostname: hostname},
 			Network:      sandboxv1alpha1.SandboxNetwork{Mode: sandboxv1alpha1.SandboxNetworkRestricted},
 		},
+	}
+	if cfg != nil {
+		sb.Spec.Env = cfg.Env
 	}
 	if wl.RunAsUser != nil || wl.RunAsGroup != nil || wl.RunAsNonRoot != nil {
 		sb.Spec.SecurityContext = &sandboxv1alpha1.SandboxSecurityContext{
@@ -463,6 +493,13 @@ func SandboxFor(pod *corev1.Pod, wl *podmode.Workload, namespace, hostname strin
 		sb.Spec.Network.Ingress = &sandboxv1alpha1.SandboxIngress{From: []networkingv1.NetworkPolicyPeer{standInPeer(pod)}}
 	}
 	return sb, nil
+}
+
+func cfgFiles(cfg *Config) []sandboxv1alpha1.SandboxSecretFile {
+	if cfg == nil {
+		return nil
+	}
+	return cfg.Files
 }
 
 func standInPeer(pod *corev1.Pod) networkingv1.NetworkPolicyPeer {

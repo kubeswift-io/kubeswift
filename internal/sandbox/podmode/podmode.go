@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -118,18 +119,22 @@ const (
 // Workload is what a stand-in replaced: the fields of the Pod's one container
 // that the microVM runs. Recorded in AnnotationWorkload at admission.
 type Workload struct {
-	Version      int             `json:"v"`
-	Image        string          `json:"image"`
-	Command      []string        `json:"command,omitempty"`
-	Args         []string        `json:"args,omitempty"`
-	Env          []corev1.EnvVar `json:"env,omitempty"`
-	WorkingDir   string          `json:"workingDir,omitempty"`
-	Ports        []Port          `json:"ports,omitempty"`
-	RunAsUser    *int64          `json:"runAsUser,omitempty"`
-	RunAsGroup   *int64          `json:"runAsGroup,omitempty"`
-	RunAsNonRoot *bool           `json:"runAsNonRoot,omitempty"`
-	CPU          int32           `json:"cpu"`
-	Memory       string          `json:"memory"`
+	Version int             `json:"v"`
+	Image   string          `json:"image"`
+	Command []string        `json:"command,omitempty"`
+	Args    []string        `json:"args,omitempty"`
+	Env     []corev1.EnvVar `json:"env,omitempty"`
+	// EnvFrom are the container's envFrom sources (Secrets and ConfigMaps
+	// in the stand-in's namespace), resolved when each microVM is created.
+	EnvFrom      []corev1.EnvFromSource `json:"envFrom,omitempty"`
+	Files        []FileMount            `json:"files,omitempty"`
+	WorkingDir   string                 `json:"workingDir,omitempty"`
+	Ports        []Port                 `json:"ports,omitempty"`
+	RunAsUser    *int64                 `json:"runAsUser,omitempty"`
+	RunAsGroup   *int64                 `json:"runAsGroup,omitempty"`
+	RunAsNonRoot *bool                  `json:"runAsNonRoot,omitempty"`
+	CPU          int32                  `json:"cpu"`
+	Memory       string                 `json:"memory"`
 }
 
 // Relay is how a shim reaches the relay: Addr is dialled, the certificate is
@@ -148,6 +153,16 @@ type ExecRequest struct {
 	TTY  bool     `json:"tty,omitempty"`
 	Rows uint16   `json:"rows,omitempty"`
 	Cols uint16   `json:"cols,omitempty"`
+}
+
+// FileMount is a Secret or ConfigMap volume the workload container mounts.
+// Its keys are written into the guest as files under Path (or, with SubPath,
+// the one file or directory SubPath names), before the workload starts.
+type FileMount struct {
+	Path      string                        `json:"path"`
+	SubPath   string                        `json:"subPath,omitempty"`
+	Secret    *corev1.SecretVolumeSource    `json:"secret,omitempty"`
+	ConfigMap *corev1.ConfigMapVolumeSource `json:"configMap,omitempty"`
 }
 
 // Port is one TCP port of the workload.
@@ -215,14 +230,17 @@ func Rewrite(pod *corev1.Pod, shimImage string) (*corev1.Pod, error) {
 	}
 	tokenVolumes := map[string]bool{}
 	emptyDirs := map[string]bool{}
+	configVolumes := map[string]corev1.Volume{}
 	for _, v := range s.Volumes {
 		switch {
 		case v.EmptyDir != nil:
 			emptyDirs[v.Name] = true
 		case isInjectedToken(v):
 			tokenVolumes[v.Name] = true
+		case v.Secret != nil, v.ConfigMap != nil:
+			configVolumes[v.Name] = v
 		default:
-			refuse("spec.volumes[%s] (only emptyDir; the guest root filesystem is writable)", v.Name)
+			refuse("spec.volumes[%s] (only emptyDir, secret and configMap; the guest root filesystem is writable)", v.Name)
 		}
 	}
 	for _, k := range unmappedPodSpec(s) {
@@ -243,12 +261,34 @@ func Rewrite(pod *corev1.Pod, shimImage string) (*corev1.Pod, error) {
 		refuse("%s.%s", p, k)
 	}
 	for _, e := range c.Env {
-		if e.ValueFrom != nil {
-			refuse("%s.env[%s].valueFrom", p, e.Name)
+		if vf := e.ValueFrom; vf != nil && vf.SecretKeyRef == nil && vf.ConfigMapKeyRef == nil {
+			refuse("%s.env[%s].valueFrom (only secretKeyRef and configMapKeyRef)", p, e.Name)
 		}
 	}
+	for i, ef := range c.EnvFrom {
+		if ef.SecretRef == nil && ef.ConfigMapRef == nil {
+			refuse("%s.envFrom[%d] (only secretRef and configMapRef)", p, i)
+		}
+	}
+	var files []FileMount
 	for _, m := range c.VolumeMounts {
-		if !emptyDirs[m.Name] && !tokenVolumes[m.Name] {
+		v, isConfig := configVolumes[m.Name]
+		switch {
+		case isConfig:
+			mp := m.MountPath
+			if !strings.HasPrefix(mp, "/") {
+				mp = "/" + mp
+			}
+			switch {
+			case m.SubPathExpr != "":
+				refuse("%s.volumeMounts[%s].subPathExpr", p, m.Name)
+			case underGuestDir(mp):
+				refuse("%s.volumeMounts[%s].mountPath (%s is the guest's own)", p, m.Name, m.MountPath)
+			default:
+				files = append(files, FileMount{Path: path.Clean(mp), SubPath: strings.Trim(m.SubPath, "/"),
+					Secret: v.Secret, ConfigMap: v.ConfigMap})
+			}
+		case !emptyDirs[m.Name] && !tokenVolumes[m.Name]:
 			refuse("%s.volumeMounts[%s]", p, m.Name)
 		}
 	}
@@ -272,6 +312,8 @@ func Rewrite(pod *corev1.Pod, shimImage string) (*corev1.Pod, error) {
 		Command:    c.Command,
 		Args:       c.Args,
 		Env:        c.Env,
+		EnvFrom:    c.EnvFrom,
+		Files:      files,
 		WorkingDir: c.WorkingDir,
 	}
 	seen := map[int32]bool{}
@@ -350,6 +392,18 @@ func Rewrite(pod *corev1.Pod, shimImage string) (*corev1.Pod, error) {
 	st.Volumes = []corev1.Volume{ShimVolumeSource()}
 	st.Containers = []corev1.Container{StandInContainer(c, shimImage, w.Ports, shimPorts)}
 	return out, nil
+}
+
+// underGuestDir is whether p is in a directory mounted over the guest root
+// after files are written (/proc, /sys, /dev), where a file would be hidden.
+func underGuestDir(p string) bool {
+	p = path.Clean(p)
+	for _, d := range []string{"/proc", "/sys", "/dev"} {
+		if p == d || strings.HasPrefix(p, d+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func hasReadinessGate(gates []corev1.PodReadinessGate) bool {
@@ -518,7 +572,7 @@ func unmappedPodSpec(s *corev1.PodSpec) []string {
 func unmappedContainer(c *corev1.Container) []string {
 	r := c.DeepCopy()
 	r.Name, r.Image, r.Command, r.Args, r.WorkingDir = "", "", nil, nil, ""
-	r.Env, r.Ports, r.VolumeMounts, r.SecurityContext = nil, nil, nil, nil
+	r.Env, r.EnvFrom, r.Ports, r.VolumeMounts, r.SecurityContext = nil, nil, nil, nil, nil
 	r.Resources, r.ResizePolicy = corev1.ResourceRequirements{}, nil
 	r.ReadinessProbe = nil
 	r.ImagePullPolicy, r.TerminationMessagePath, r.TerminationMessagePolicy = "", "", ""
