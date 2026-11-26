@@ -343,6 +343,16 @@ setup_primary_nic() {
 
     # Create bridge (internal only -- do NOT add eth0)
     ip link add "$bridge" type bridge stp_state 0
+    # KUBESWIFT_BRIDGE_MAC (sandboxes): a MAC derived from the sandbox, set
+    # before any port joins so the bridge keeps it (addr_assign_type 3). A
+    # launcher that restores the VM must show the guest the same gateway MAC.
+    if [ -n "${KUBESWIFT_BRIDGE_MAC:-}" ]; then
+        case "$KUBESWIFT_BRIDGE_MAC" in
+            [0-9a-f][26ae]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) ;;
+            *) echo "ERROR: KUBESWIFT_BRIDGE_MAC must be a locally administered unicast MAC (got $KUBESWIFT_BRIDGE_MAC)"; exit 1 ;;
+        esac
+        ip link set "$bridge" address "$KUBESWIFT_BRIDGE_MAC"
+    fi
     ip link set "$bridge" up
 
     # Give the bridge an IP -- dnsmasq will bind here, and this is the VM's gateway

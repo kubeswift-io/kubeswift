@@ -6,6 +6,10 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- A SwiftSandbox launcher's guest-facing bridge (`br0`) has a MAC derived from the sandbox's namespace and name instead of its tap device's random MAC, so every launcher of one sandbox presents the same gateway MAC to the guest. Groundwork for sandbox suspend and resume: a restored guest keeps its ARP entry for the gateway (with a random MAC it stalled about 5 s). New launchers only; running sandboxes and warm slots keep their launcher.
+
 ## [v0.27.0] — 2026-11-26
 
 Pod mode (preview, off by default): an ordinary Pod with `runtimeClassName: kubeswift-microvm`, in a namespace that opted in, runs its container in a SwiftSandbox microVM behind an unprivileged stand-in Pod. Deployments, Jobs, Services and kubernetes-sigs/agent-sandbox work unmodified; `kubectl exec` and `kubectl logs` reach the microVM; Secrets and ConfigMaps carry over. Also: a cold sandbox with a variable name the guest shell cannot set fails with a reason instead of panicking the guest, and a launcher whose dnsmasq exits at start fails at once.

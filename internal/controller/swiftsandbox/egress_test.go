@@ -1,6 +1,8 @@
 package swiftsandbox
 
 import (
+	"net"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -62,5 +64,34 @@ func TestBuildPod_EgressEnv(t *testing.T) {
 		if buildPod(egSandbox(sandboxv1alpha1.SandboxNetworkNone), "sandbox").Spec.InitContainers[i].Name == "network-init" {
 			t.Error("network:none must not get a network-init container")
 		}
+	}
+}
+
+// br0's MAC is derived from the sandbox: the same for every launcher of one
+// sandbox (so a restored guest keeps a valid ARP entry for its gateway),
+// different across sandboxes, locally administered and unicast.
+func TestBuildPod_BridgeMAC(t *testing.T) {
+	a := egSandbox("")
+	mac := networkInitEnv(buildPod(a, "sandbox"), "KUBESWIFT_BRIDGE_MAC")
+	if mac == "" {
+		t.Fatal("network-init has no KUBESWIFT_BRIDGE_MAC")
+	}
+	if again := networkInitEnv(buildPod(egSandbox(""), "sandbox"), "KUBESWIFT_BRIDGE_MAC"); again != mac {
+		t.Errorf("same sandbox, second launcher: %q, want %q", again, mac)
+	}
+	b := egSandbox("")
+	b.Name += "-other"
+	if other := networkInitEnv(buildPod(b, "sandbox"), "KUBESWIFT_BRIDGE_MAC"); other == mac {
+		t.Errorf("two sandboxes share br0 MAC %q", mac)
+	}
+	hw, err := net.ParseMAC(mac)
+	if err != nil {
+		t.Fatalf("parse %q: %v", mac, err)
+	}
+	if hw[0]&0x02 == 0 || hw[0]&0x01 != 0 {
+		t.Errorf("%q is not a locally administered unicast MAC", mac)
+	}
+	if mac != strings.ToLower(mac) {
+		t.Errorf("%q is not lower case (network-init matches lower case)", mac)
 	}
 }
