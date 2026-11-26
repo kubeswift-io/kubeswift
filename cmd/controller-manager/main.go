@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -46,6 +47,7 @@ import (
 	"github.com/kubeswift-io/kubeswift/internal/hotplug"
 	kubeswiftmetrics "github.com/kubeswift-io/kubeswift/internal/metrics"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
+	"github.com/kubeswift-io/kubeswift/internal/sandbox/podmode"
 	"github.com/kubeswift-io/kubeswift/internal/scheme"
 	"github.com/kubeswift-io/kubeswift/internal/version"
 	evictionwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/eviction"
@@ -539,13 +541,33 @@ func main() {
 	// unprivileged stand-in (webhook below) whose workload runs in a
 	// SwiftSandbox in the pod-mode namespace.
 	if *podModeEnabled {
-		if err = (&podmodecontroller.Reconciler{
+		pm := &podmodecontroller.Reconciler{
 			Client:    mgr.GetClient(),
 			Scheme:    mgr.GetScheme(),
 			Recorder:  mgr.GetEventRecorderFor("podmode-controller"),
 			Namespace: *podModeNamespace,
-			ShimImage: swiftsandbox.SandboxMaterializeImage,
-		}).SetupWithManager(mgr); err != nil {
+			ShimImage: podmode.ShimImage,
+		}
+		// kubectl exec / logs on a stand-in go through the relay on the
+		// webhook server, so there is one only with webhooks.
+		if *webhookEnabled {
+			ri := &podmodecontroller.RelayInfo{
+				Client:           mgr.GetAPIReader(),
+				ServiceNamespace: leaderElectionNS,
+				ServiceName:      "kubeswift-webhook-service",
+				CAFile:           filepath.Join(certDir, "ca.crt"),
+			}
+			pm.Relay = ri.Get
+			pm.RelayPeer = &podmodecontroller.RelayPeer{
+				Namespace: leaderElectionNS,
+				Labels: map[string]string{
+					"app.kubernetes.io/name":      "kubeswift",
+					"app.kubernetes.io/component": "controller-manager",
+				},
+				Port: int32(*webhookPort),
+			}
+		}
+		if err = pm.SetupWithManager(mgr); err != nil {
 			klog.ErrorS(err, "unable to create pod-mode controller")
 			os.Exit(1)
 		}
@@ -684,8 +706,15 @@ func main() {
 		// condition on the RuntimeClass. No network I/O in the handler.
 		if *podModeEnabled {
 			mgr.GetWebhookServer().Register(podmodewebhook.Path,
-				&webhook.Admission{Handler: &podmodewebhook.Handler{ShimImage: swiftsandbox.SandboxMaterializeImage}})
-			klog.InfoS("registered pod-mode webhook", "path", podmodewebhook.Path)
+				&webhook.Admission{Handler: &podmodewebhook.Handler{ShimImage: podmode.ShimImage}})
+			relay, err := podmodecontroller.NewRelay(mgr.GetAPIReader(), mgr.GetConfig(), *podModeNamespace, podmode.ShimImage)
+			if err != nil {
+				klog.ErrorS(err, "unable to create the pod-mode relay")
+				os.Exit(1)
+			}
+			mgr.GetWebhookServer().Register(podmode.RelayExecPath, relay.ExecHandler())
+			mgr.GetWebhookServer().Register(podmode.RelayLogsPath, relay.LogsHandler())
+			klog.InfoS("registered pod-mode webhook and relay", "path", podmodewebhook.Path)
 		}
 	}
 

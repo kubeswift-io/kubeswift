@@ -14,3 +14,14 @@ func SandboxLogsCommand(runDir string, follow bool) string {
 	}
 	return "cat " + console + " && { cat " + workload + " 2>/dev/null || true; }"
 }
+
+// SandboxAgentBridgeCommand is the shell command, run in a sandbox's launcher,
+// that pipes stdin/stdout to the guest agent's vsock socket (the caller then
+// speaks Cloud Hypervisor's CONNECT handshake). The exec gates
+// (charts/kubeswift/templates/gateway/exec-gate.yaml and sandbox/podmode.yaml)
+// admit exactly this form.
+func SandboxAgentBridgeCommand(runDir string) string {
+	sock := runDir + "/vsock.sock"
+	return "for i in $(seq 1 10); do test -S " + sock + " && break; sleep 1; done; " +
+		"exec socat -t10 - UNIX-CONNECT:" + sock
+}

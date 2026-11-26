@@ -6,7 +6,7 @@
 {{- fail "sandboxMaterialize.podMode.enabled needs ValidatingAdmissionPolicy (admissionregistration.k8s.io/v1, Kubernetes 1.30+): pod mode fails closed through it" }}
 {{- end }}
 {{- $ns := .Values.sandboxMaterialize.podMode.namespace }}
-{{- $shim := include "kubeswift.sandboxMaterializeImage" . }}
+{{- $shim := include "kubeswift.podShimImage" . }}
 # Pod mode (sandboxMaterialize.podMode). Every pod-mode SwiftSandbox and its
 # privileged launcher live in this namespace; tenants get only the stand-in.
 apiVersion: v1
@@ -121,7 +121,10 @@ spec:
          object.spec.containers[0].args[0] == 'pod-shim' &&
          (!has(object.spec.initContainers) || size(object.spec.initContainers) == 0) &&
          (!has(object.spec.ephemeralContainers) || size(object.spec.ephemeralContainers) == 0) &&
-         (!has(object.spec.volumes) || object.spec.volumes.all(v, v.name == 'kubeswift-podmode' && has(v.downwardAPI))))
+         (!has(object.spec.volumes) || object.spec.volumes.all(v, v.name == 'kubeswift-podmode' && has(v.projected) &&
+           v.projected.sources.all(src,
+             (has(src.downwardAPI) && !has(src.serviceAccountToken) && !has(src.secret) && !has(src.configMap) && !has(src.clusterTrustBundle) && !has(src.podCertificate)) ||
+             (has(src.serviceAccountToken) && src.serviceAccountToken.audience == 'kubeswift-podmode' && !has(src.downwardAPI) && !has(src.secret) && !has(src.configMap) && !has(src.clusterTrustBundle) && !has(src.podCertificate))))))
       message: "pod mode: a stand-in has exactly the shim container"
       reason: Forbidden
     - expression: >-
@@ -150,6 +153,83 @@ metadata:
     app.kubernetes.io/component: pod-mode
 spec:
   policyName: kubeswift-pod-mode
+  validationActions: [Deny]
+---
+# The exec and logs relay (kubectl exec / logs on a stand-in): the
+# controller-manager runs the guest agent bridge in the stand-in's launcher.
+# The launcher is privileged, so exec in it is root on its node: the policy
+# after this binding holds the controller-manager's exec, in every namespace,
+# to exactly that bridge in a pod-mode launcher.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kubeswift-pod-mode-relay
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: pod-mode
+rules:
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kubeswift-pod-mode-relay
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: pod-mode
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kubeswift-pod-mode-relay
+subjects:
+  - kind: ServiceAccount
+    name: controller-manager
+    namespace: {{ .Values.namespace }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kubeswift-pod-mode-exec-gate
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: pod-mode
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CONNECT"]
+        resources: ["pods/exec", "pods/attach", "pods/portforward"]
+  matchConditions:
+    - name: controller-manager-credential
+      expression: >-
+        request.userInfo.username == 'system:serviceaccount:{{ .Values.namespace }}:controller-manager'
+  validations:
+    - expression: >-
+        request.namespace == '{{ $ns }}' && request.subResource == 'exec' &&
+        has(object.container) && object.container == 'launcher' &&
+        has(object.command) && size(object.command) == 3 &&
+        object.command[0] == 'sh' && object.command[1] == '-c' &&
+        object.command[2].matches(r'^for i in \$\(seq 1 10\); do test -S /var/lib/kubeswift/run/{{ $ns }}-pm-[a-z0-9-]+/vsock\.sock && break; sleep 1; done; exec socat -t10 - UNIX-CONNECT:/var/lib/kubeswift/run/{{ $ns }}-pm-[a-z0-9-]+/vsock\.sock$')
+      message: >-
+        the kubeswift controller-manager may exec only the pod-mode guest agent
+        bridge, in a launcher container in {{ $ns }}
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kubeswift-pod-mode-exec-gate
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: pod-mode
+spec:
+  policyName: kubeswift-pod-mode-exec-gate
   validationActions: [Deny]
 ---
 # The webhook fails closed, so keep one controller-manager serving it through

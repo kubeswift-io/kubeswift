@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -57,17 +58,43 @@ const (
 	// Finalizer holds the stand-in until its SwiftSandbox is gone.
 	Finalizer = "podmode.kubeswift.io/microvm"
 
-	// ShimVolume is the downward API volume the shim reads the target from.
+	// AnnotationRelay is where the shim reaches the exec and logs relay, as
+	// JSON (Relay), written by the controller.
+	AnnotationRelay = "podmode.kubeswift.io/relay"
+
+	// ShimVolume is the projected volume the shim reads its annotations and
+	// relay token from.
 	ShimVolume = "kubeswift-podmode"
 	// ShimDir is where ShimVolume is mounted.
 	ShimDir = "/etc/podmode"
 	// ShimAnnotationsFile is the downward API file holding the annotations.
 	ShimAnnotationsFile = ShimDir + "/annotations"
+	// ShimTokenFile is the stand-in's ServiceAccount token for the relay.
+	ShimTokenFile = ShimDir + "/token"
+	// TokenAudience is the only audience of the shim's token: it is good for
+	// the relay and nothing else.
+	TokenAudience = "kubeswift-podmode"
+	// TokenExpirationSeconds is the token's lifetime; the kubelet rotates it.
+	TokenExpirationSeconds int64 = 3600
+
+	// RelayExecPath and RelayLogsPath are the relay's endpoints on the
+	// controller-manager's webhook server.
+	RelayExecPath = "/podmode/exec"
+	RelayLogsPath = "/podmode/logs"
+	// ExecRequestHeader carries the base64url JSON ExecRequest, so the relay
+	// can refuse before the WebSocket upgrade with a readable error.
+	ExecRequestHeader = "Kubeswift-Exec-Request"
 	// ShimUID is the uid the shim runs as.
 	ShimUID int64 = 65532
 
 	// WorkloadVersion is the version of the Workload annotation.
 	WorkloadVersion = 1
+
+	// ShimImageEnv overrides the stand-in's image (chart:
+	// sandboxMaterialize.podMode.image).
+	ShimImageEnv = "KUBESWIFT_POD_SHIM_IMAGE"
+	// ShimImageDefault is the fallback when the env is unset.
+	ShimImageDefault = "ghcr.io/kubeswift-io/kubeswift/pod-shim:latest"
 
 	defaultMemory = "512Mi"
 	minMemory     = "256Mi"
@@ -90,10 +117,36 @@ type Workload struct {
 	Memory       string          `json:"memory"`
 }
 
+// Relay is how a shim reaches the relay: Addr is dialled, the certificate is
+// checked against CA for ServerName. Addr is an IP so the stand-in's DNS
+// settings (often dnsPolicy None) do not matter.
+type Relay struct {
+	Addr       string `json:"addr"`
+	ServerName string `json:"serverName"`
+	CA         string `json:"ca"`
+}
+
+// ExecRequest is the first message a shim sends on the exec relay. The relay
+// builds the guest agent's request from it, so a shim can only exec.
+type ExecRequest struct {
+	Argv []string `json:"argv"`
+	TTY  bool     `json:"tty,omitempty"`
+	Rows uint16   `json:"rows,omitempty"`
+	Cols uint16   `json:"cols,omitempty"`
+}
+
 // Port is one TCP port of the workload.
 type Port struct {
 	Name string `json:"name"`
 	Port int32  `json:"port"`
+}
+
+// ShimImage is the stand-in's image: the env override, else the default.
+func ShimImage() string {
+	if v := os.Getenv(ShimImageEnv); v != "" {
+		return v
+	}
+	return ShimImageDefault
 }
 
 // ParseWorkload reads the Workload annotation of a stand-in.
@@ -275,17 +328,49 @@ func Rewrite(pod *corev1.Pod, shimImage string) (*corev1.Pod, error) {
 	// The microVM runs on the stand-in's node, so the stand-in must land on a
 	// node that runs KubeSwift kernels.
 	st.NodeSelector["kubeswift.io/kernel-node"] = "true"
-	st.Volumes = []corev1.Volume{{
-		Name: ShimVolume,
-		VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{
-			Items: []corev1.DownwardAPIVolumeFile{{
-				Path:     "annotations",
-				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.annotations"},
-			}},
-		}},
-	}}
+	st.Volumes = []corev1.Volume{ShimVolumeSource()}
 	st.Containers = []corev1.Container{StandInContainer(c, shimImage, w.Ports, shimPorts)}
 	return out, nil
+}
+
+// ShimVolumeSource is the stand-in's one volume: its annotations (target and
+// relay) and a ServiceAccount token whose only audience is the relay.
+func ShimVolumeSource() corev1.Volume {
+	return corev1.Volume{
+		Name: ShimVolume,
+		VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+			Sources: []corev1.VolumeProjection{
+				{DownwardAPI: &corev1.DownwardAPIProjection{
+					Items: []corev1.DownwardAPIVolumeFile{{
+						Path:     "annotations",
+						FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.annotations"},
+					}},
+				}},
+				{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+					Audience:          TokenAudience,
+					ExpirationSeconds: ptr.To(TokenExpirationSeconds),
+					Path:              "token",
+				}},
+			},
+		}},
+	}
+}
+
+// shimVolumeOK is whether v is the shim volume, with no token for any other
+// audience.
+func shimVolumeOK(v corev1.Volume) bool {
+	if v.Name != ShimVolume || v.Projected == nil {
+		return false
+	}
+	for _, src := range v.Projected.Sources {
+		switch {
+		case src.DownwardAPI != nil && src.ServiceAccountToken == nil && src.Secret == nil && src.ConfigMap == nil && src.ClusterTrustBundle == nil && src.PodCertificate == nil:
+		case src.ServiceAccountToken != nil && src.ServiceAccountToken.Audience == TokenAudience && src.DownwardAPI == nil && src.Secret == nil && src.ConfigMap == nil && src.ClusterTrustBundle == nil && src.PodCertificate == nil:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // StandInContainer is the stand-in's one container: the shim, under the
@@ -342,7 +427,7 @@ func ShapeOK(pod *corev1.Pod, shimImage string) bool {
 		return false
 	}
 	for _, v := range s.Volumes {
-		if v.Name != ShimVolume && !isInjectedToken(v) {
+		if !shimVolumeOK(v) && !isInjectedToken(v) {
 			return false
 		}
 	}

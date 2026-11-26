@@ -62,15 +62,16 @@ jobs:
                   kubeswift-dra-driver sandbox-materialize swiftletd
                   migration-stunnel kubeswift-gateway"
           # egress-conformance is published from the first release after
-          # v0.25.1. At an older tag it does not exist, which is reported, not
-          # failed; at any tag that has it, it must verify like the others.
-          OPTIONAL="egress-conformance"
+          # v0.25.1, pod-shim from the first after v0.26.0. At an older tag
+          # they do not exist, which is reported, not failed; at any tag that
+          # has one, it must verify like the others.
+          OPTIONAL="egress-conformance pod-shim"
           fail=0
           count=0
           for img in $IMAGES $OPTIONAL; do
             ref="${IMAGE_PREFIX}/${img}:${{ inputs.tag }}"
             if [[ " $OPTIONAL " == *" $img "* ]] && ! docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
-              echo "::notice::$img is not published at ${{ inputs.tag }} (added after v0.25.1)"
+              echo "::notice::$img is not published at ${{ inputs.tag }} (added in a later release)"
               continue
             fi
             count=$((count + 1))

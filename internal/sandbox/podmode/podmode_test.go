@@ -13,7 +13,7 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-const shim = "ghcr.io/kubeswift-io/kubeswift/sandbox-materialize:v0.27.0"
+const shim = "ghcr.io/kubeswift-io/kubeswift/pod-shim:v0.27.0"
 
 // sandboxdPod is shaped like agent-sandbox's sandboxd example after the API
 // server's defaulting and the ServiceAccount admission plugin.
@@ -86,7 +86,8 @@ func TestRewriteStandIn(t *testing.T) {
 	if s.NodeSelector["kubeswift.io/kernel-node"] != "true" || len(s.Tolerations) != 1 {
 		t.Errorf("scheduling not kept: %v %v", s.NodeSelector, s.Tolerations)
 	}
-	if len(s.Volumes) != 1 || s.Volumes[0].Name != ShimVolume || s.Volumes[0].DownwardAPI == nil {
+	if len(s.Volumes) != 1 || !shimVolumeOK(s.Volumes[0]) || len(s.Volumes[0].Projected.Sources) != 2 ||
+		s.Volumes[0].Projected.Sources[1].ServiceAccountToken == nil {
 		t.Errorf("volumes %+v", s.Volumes)
 	}
 	if len(s.Containers) != 1 {
@@ -215,7 +216,7 @@ func TestShapeOK(t *testing.T) {
 		}
 		return p
 	}
-	if p := fresh(); !ShapeOK(p, "ghcr.io/kubeswift-io/kubeswift/sandbox-materialize:v0.28.0") {
+	if p := fresh(); !ShapeOK(p, "ghcr.io/kubeswift-io/kubeswift/pod-shim:v0.28.0") {
 		t.Error("a stand-in from before an upgrade (older tag) must stay OK")
 	}
 	bad := map[string]func(*corev1.Pod){
@@ -226,6 +227,17 @@ func TestShapeOK(t *testing.T) {
 		"volume":    func(p *corev1.Pod) { p.Spec.Volumes = append(p.Spec.Volumes, corev1.Volume{Name: "host"}) },
 		"privileged": func(p *corev1.Pod) {
 			p.Spec.Containers[0].SecurityContext.Privileged = ptr.To(true)
+		},
+		"token for another audience": func(p *corev1.Pod) {
+			p.Spec.Volumes[0].Projected.Sources[1].ServiceAccountToken.Audience = "https://kubernetes.default.svc"
+		},
+		"secret in the shim volume": func(p *corev1.Pod) {
+			p.Spec.Volumes[0].Projected.Sources = append(p.Spec.Volumes[0].Projected.Sources,
+				corev1.VolumeProjection{Secret: &corev1.SecretProjection{}})
+		},
+		"downward API volume instead": func(p *corev1.Pod) {
+			p.Spec.Volumes[0].Projected = nil
+			p.Spec.Volumes[0].DownwardAPI = &corev1.DownwardAPIVolumeSource{}
 		},
 	}
 	for name, mut := range bad {

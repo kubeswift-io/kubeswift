@@ -222,6 +222,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Pod mode stand-in (distroless; sh/bash/env forward to the microVM).
+      - name: Build and push pod-shim
+        id: build-pod-shim
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./images/pod-shim/Containerfile
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/pod-shim:${{ steps.version.outputs.tag }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            GIT_COMMIT=${{ steps.version.outputs.git_commit }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Install cosign
         uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
 
@@ -258,6 +276,7 @@ jobs:
             echo "${{ env.IMAGE_PREFIX }}/swiftletd@${{ steps.build-swiftletd.outputs.digest }}"
             echo "${{ env.IMAGE_PREFIX }}/migration-stunnel@${{ steps.build-migration-stunnel.outputs.digest }}"
             echo "${{ env.IMAGE_PREFIX }}/egress-conformance@${{ steps.build-egress-conformance.outputs.digest }}"
+            echo "${{ env.IMAGE_PREFIX }}/pod-shim@${{ steps.build-pod-shim.outputs.digest }}"
             echo EOF
           } >> "$GITHUB_OUTPUT"
 
@@ -354,6 +373,7 @@ jobs:
             - `ghcr.io/kubeswift-io/kubeswift/kubeswift-dra-driver:${{ steps.version.outputs.tag }}`
             - `ghcr.io/kubeswift-io/kubeswift/sandbox-materialize:${{ steps.version.outputs.tag }}`
             - `ghcr.io/kubeswift-io/kubeswift/egress-conformance:${{ steps.version.outputs.tag }}`
+            - `ghcr.io/kubeswift-io/kubeswift/pod-shim:${{ steps.version.outputs.tag }}`
 
             ## Supply chain
 

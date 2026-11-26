@@ -178,6 +178,12 @@ sandboxMaterialize:
   podMode:
     enabled: false
     namespace: kubeswift-sandboxes
+    # The stand-in's image: the port forwarder, and the sh/bash/env that
+    # `kubectl exec` runs, which forward to the microVM (no local shell).
+    image:
+      registry: ghcr.io/kubeswift-io/kubeswift
+      # Default "latest" is overridden by chart to match published tags.
+      tag: latest
   # SPIFFE identity for proxied sandboxes (spec.identity.spiffe). Needs a
   # SPIFFE implementation in the cluster: SPIRE with its controller manager
   # is the reference. When enabled, the chart creates two ClusterSPIFFEIDs

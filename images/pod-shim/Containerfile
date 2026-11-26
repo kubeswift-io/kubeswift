@@ -1,0 +1,31 @@
+# pod-shim: the one container of a pod-mode stand-in Pod (internal/sandbox/podmode).
+# It has no shell on purpose: sh, bash and env are links to the shim, so
+# `kubectl exec <stand-in> -- sh` runs in the stand-in's microVM, never here.
+FROM golang:1.27-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea AS builder
+WORKDIR /build
+
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags "-X github.com/kubeswift-io/kubeswift/internal/version.Version=${VERSION} -X github.com/kubeswift-io/kubeswift/internal/version.GitCommit=${GIT_COMMIT}" \
+    -o /out/pod-shim ./cmd/pod-shim \
+    && mkdir -p /out/bin /out/usr/bin \
+    && ln -s /pod-shim /out/bin/sh \
+    && ln -s /pod-shim /out/bin/bash \
+    && ln -s /pod-shim /out/usr/bin/env
+
+FROM gcr.io/distroless/static:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
+COPY --from=builder /out/pod-shim /pod-shim
+COPY --from=builder /out/bin/ /bin/
+COPY --from=builder /out/usr/bin/ /usr/bin/
+USER 65532:65532
+ENTRYPOINT ["/pod-shim"]

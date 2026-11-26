@@ -87,9 +87,7 @@ func consoleBridge(namespace, guest string) string {
 
 // sandboxShellBridge bridges the sandbox's vsock socket to its in-guest agent.
 func sandboxShellBridge(namespace, pod string) string {
-	sock := runtimeDir(namespace, pod) + "/vsock.sock"
-	return fmt.Sprintf("for i in $(seq 1 10); do test -S %s && break; sleep 1; done; "+
-		"exec socat -t10 - UNIX-CONNECT:%s", sock, sock)
+	return cli.SandboxAgentBridgeCommand(runtimeDir(namespace, pod))
 }
 
 // sandboxLogsBridge reads the sandbox's console and workload logs.
