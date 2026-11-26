@@ -1208,6 +1208,7 @@ the NetworkPolicy stays until the pod is gone.
 - [Warm pools (fast start)](warm-pool.md) — pre-booted slots for sub-second checkout
 - [GPU sandboxes](gpu-sandboxes.md) — pass a GPU into a sandbox via the native SwiftGPU or DRA backend
 - [Scratch / persistent disks](scratch-disks.md) — attach a secondary block disk for build caches or datasets
+- [Pod mode](pod-mode.md) — run an ordinary Pod's container in a microVM with `runtimeClassName: kubeswift-microvm`
 - [Build your own](build-your-own.md) — custom sandbox kernels + base images (BYO / in-house library)
 - [`config/samples/sandbox/`](../../config/samples/sandbox/) — sample manifests and notes
 - [swiftctl reference](../swiftctl.md)

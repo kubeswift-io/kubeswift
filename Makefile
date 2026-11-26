@@ -50,7 +50,7 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
 	build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-snapshot-oras-image build-dra-driver-image build-gateway-image build-sandbox-materialize-image build-egress-conformance-image build-pod-shim-image generate deploy deploy-with-webhook deploy-with-mtls deploy-with-webhook-and-mtls undeploy load-images smoke-test smoke-test-cleanup \
 	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
-	b0-cross-node-tcp-test b0-cross-node-tcp-test-cleanup sandbox-tcp-receive-test sandbox-tcp-receive-test-cleanup sandbox-warm-checkout-test sandbox-warm-checkout-test-cleanup sandbox-hardening-test sandbox-hardening-test-cleanup sandbox-gpu-test sandbox-gpu-test-cleanup sandbox-egress-restricted-test sandbox-egress-restricted-test-cleanup sandbox-egress-proxied-test sandbox-egress-proxied-test-cleanup sandbox-egress-proxy-test sandbox-egress-proxy-test-cleanup sandbox-egress-preset-test sandbox-egress-preset-test-cleanup sandbox-credentials-test sandbox-credentials-test-cleanup e2e-tests \
+	b0-cross-node-tcp-test b0-cross-node-tcp-test-cleanup sandbox-tcp-receive-test sandbox-tcp-receive-test-cleanup sandbox-warm-checkout-test sandbox-warm-checkout-test-cleanup sandbox-hardening-test sandbox-hardening-test-cleanup sandbox-gpu-test sandbox-gpu-test-cleanup sandbox-pod-mode-test sandbox-pod-mode-test-cleanup sandbox-egress-restricted-test sandbox-egress-restricted-test-cleanup sandbox-egress-proxied-test sandbox-egress-proxied-test-cleanup sandbox-egress-proxy-test sandbox-egress-proxy-test-cleanup sandbox-egress-preset-test sandbox-egress-preset-test-cleanup sandbox-credentials-test sandbox-credentials-test-cleanup e2e-tests \
 	verify-e2e-scripts verify-kustomize-sync verify-base-image-pins \
 	preflight help push-images package-chart push-chart release-dev release-rc release-stable print-version
 
@@ -435,6 +435,16 @@ sandbox-hardening-test:
 
 sandbox-hardening-test-cleanup:
 	@test/sandbox/hardening.sh cleanup
+
+# Pod mode: Pods with runtimeClassName kubeswift-microvm run in microVMs
+# (fail-closed admission, Service, exec, logs, Secrets and ConfigMaps, exit
+# codes, restarts, relay authorization, teardown). Needs the chart with
+# sandboxMaterialize.podMode.enabled and a KVM node.
+sandbox-pod-mode-test:
+	@test/sandbox/pod-mode.sh validate
+
+sandbox-pod-mode-test-cleanup:
+	@test/sandbox/pod-mode.sh cleanup
 
 # The launcher refuses a memory snapshot of a GPU sandbox; with GPU_IMAGE, a
 # CUDA run. Needs a GPU node. Not part of e2e-tests.
