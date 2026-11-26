@@ -210,6 +210,21 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Pod mode stand-in (distroless; sh/bash/env forward to the microVM).
+      - name: Build and push pod-shim
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./images/pod-shim/Containerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/pod-shim:${{ steps.version.outputs.image_tag }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            GIT_COMMIT=${{ steps.version.outputs.git_commit }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Set up Helm
         uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:

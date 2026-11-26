@@ -18,11 +18,13 @@ package podmode
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -59,8 +61,21 @@ type Reconciler struct {
 	Recorder record.EventRecorder
 	// Namespace holds every pod-mode SwiftSandbox and launcher.
 	Namespace string
-	// ShimImage returns the image stand-ins run (sandbox-materialize).
+	// ShimImage returns the image stand-ins run (pod-shim).
 	ShimImage func() string
+	// Relay resolves where shims reach the exec and logs relay; nil when
+	// the relay is not served (no webhook server).
+	Relay func(ctx context.Context) (*podmode.Relay, error)
+	// RelayPeer is the controller-manager pods serving the relay, for the
+	// stand-in's egress policy.
+	RelayPeer *RelayPeer
+}
+
+// RelayPeer selects the pods that serve the relay.
+type RelayPeer struct {
+	Namespace string
+	Labels    map[string]string
+	Port      int32
 }
 
 // SandboxName is the SwiftSandbox of a stand-in.
@@ -295,7 +310,7 @@ func standInPeer(pod *corev1.Pod) networkingv1.NetworkPolicyPeer {
 
 // EgressPolicyFor is the tenant-namespace NetworkPolicy that lets a stand-in
 // reach its launcher's ports, and nothing else.
-func EgressPolicyFor(pod *corev1.Pod, wl *podmode.Workload, namespace string) *networkingv1.NetworkPolicy {
+func EgressPolicyFor(pod *corev1.Pod, wl *podmode.Workload, namespace string, relay *RelayPeer) *networkingv1.NetworkPolicy {
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      NetworkPolicyPrefix + string(pod.UID),
@@ -307,10 +322,20 @@ func EgressPolicyFor(pod *corev1.Pod, wl *podmode.Workload, namespace string) *n
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
 		},
 	}
+	tcp := corev1.ProtocolTCP
+	if relay != nil {
+		port := intstr.FromInt32(relay.Port)
+		np.Spec.Egress = append(np.Spec.Egress, networkingv1.NetworkPolicyEgressRule{
+			To: []networkingv1.NetworkPolicyPeer{{
+				NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{corev1.LabelMetadataName: relay.Namespace}},
+				PodSelector:       &metav1.LabelSelector{MatchLabels: relay.Labels},
+			}},
+			Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &port}},
+		})
+	}
 	if len(wl.Ports) == 0 {
 		return np
 	}
-	tcp := corev1.ProtocolTCP
 	rule := networkingv1.NetworkPolicyEgressRule{To: []networkingv1.NetworkPolicyPeer{{
 		NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{corev1.LabelMetadataName: namespace}},
 		PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{swiftsandbox.SandboxLabelKey: SandboxName(pod)}},
@@ -319,12 +344,12 @@ func EgressPolicyFor(pod *corev1.Pod, wl *podmode.Workload, namespace string) *n
 		port := intstr.FromInt32(p.Port)
 		rule.Ports = append(rule.Ports, networkingv1.NetworkPolicyPort{Protocol: &tcp, Port: &port})
 	}
-	np.Spec.Egress = []networkingv1.NetworkPolicyEgressRule{rule}
+	np.Spec.Egress = append(np.Spec.Egress, rule)
 	return np
 }
 
 func (r *Reconciler) ensureEgressPolicy(ctx context.Context, pod *corev1.Pod, wl *podmode.Workload) error {
-	want := EgressPolicyFor(pod, wl, r.Namespace)
+	want := EgressPolicyFor(pod, wl, r.Namespace, r.RelayPeer)
 	if err := controllerutil.SetControllerReference(pod, want, r.Scheme); err != nil {
 		return err
 	}
@@ -333,10 +358,14 @@ func (r *Reconciler) ensureEgressPolicy(ctx context.Context, pod *corev1.Pod, wl
 	if apierrors.IsNotFound(err) {
 		return client.IgnoreAlreadyExists(r.Create(ctx, want))
 	}
-	return err
+	if err != nil || equality.Semantic.DeepEqual(got.Spec, want.Spec) {
+		return err
+	}
+	got.Spec = want.Spec
+	return r.Update(ctx, &got)
 }
 
-// ensureTarget points the stand-in's shim at the launcher pod IP.
+// ensureTarget points the stand-in's shim at the launcher pod IP and the relay.
 func (r *Reconciler) ensureTarget(ctx context.Context, pod *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox) error {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(r.Namespace),
@@ -351,14 +380,35 @@ func (r *Reconciler) ensureTarget(ctx context.Context, pod *corev1.Pod, sb *sand
 			break
 		}
 	}
-	if ip == "" || pod.Annotations[podmode.AnnotationTarget] == ip {
-		return nil
+	want := map[string]string{}
+	if ip != "" {
+		want[podmode.AnnotationTarget] = ip
+	}
+	if r.Relay != nil {
+		rel, err := r.Relay(ctx)
+		if err != nil {
+			return err
+		}
+		b, err := json.Marshal(rel)
+		if err != nil {
+			return err
+		}
+		want[podmode.AnnotationRelay] = string(b)
 	}
 	patch := client.MergeFrom(pod.DeepCopy())
-	if pod.Annotations == nil {
-		pod.Annotations = map[string]string{}
+	changed := false
+	for k, v := range want {
+		if pod.Annotations[k] != v {
+			if pod.Annotations == nil {
+				pod.Annotations = map[string]string{}
+			}
+			pod.Annotations[k] = v
+			changed = true
+		}
 	}
-	pod.Annotations[podmode.AnnotationTarget] = ip
+	if !changed {
+		return nil
+	}
 	return r.Patch(ctx, pod, patch)
 }
 

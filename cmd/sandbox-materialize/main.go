@@ -48,8 +48,6 @@ func main() {
 			os.Exit(cleanOutputs(os.Args[2:]))
 		case "follow-console":
 			os.Exit(followConsole(os.Args[2:]))
-		case "pod-shim":
-			os.Exit(podShim(os.Args[2:]))
 		}
 	}
 	var (

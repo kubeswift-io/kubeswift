@@ -1,6 +1,6 @@
 package main
 
-// pod-shim is the one container of a pod-mode stand-in Pod. It forwards each
+// The stand-in's process forwards each
 // of the workload's TCP ports to the same port on the launcher of the
 // stand-in's microVM, whose address the controller writes into the stand-in's
 // podmode.kubeswift.io/target annotation (read through the downward API, which
@@ -8,7 +8,6 @@ package main
 // refused rather than held. It exits 0 on SIGTERM.
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -33,11 +32,13 @@ const (
 
 func podShim(args []string) int {
 	fs := flag.NewFlagSet("pod-shim", flag.ContinueOnError)
-	file := fs.String("annotations-file", "/etc/podmode/annotations", "downward API file with the pod's annotations")
+	file := fs.String("annotations-file", annotationsFile, "downward API file with the pod's annotations")
 	portList := fs.String("ports", "", "comma-separated TCP ports to forward")
+	logs := fs.Bool("logs", true, "stream the microVM's console to stdout")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	annotationsFile = *file
 	ports, err := parsePorts(*portList)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "pod-shim:", err)
@@ -59,6 +60,9 @@ func podShim(args []string) int {
 		}
 	}
 	refresh()
+	if *logs {
+		go followLogs(ctx, os.Stdout)
+	}
 
 	var wg sync.WaitGroup
 	for _, p := range ports {
@@ -102,31 +106,17 @@ func parsePorts(list string) ([]int, error) {
 	return out, nil
 }
 
-// readTarget returns the target annotation from a downward API annotations
-// file (lines of key="Go-quoted value"), "" when it is not set.
+// readTarget returns the launcher IP from the target annotation, "" when it
+// is not set.
 func readTarget(file string) (string, error) {
-	f, err := os.Open(file)
+	t, err := readAnnotation(file, podShimTargetKey)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64<<10), 1<<20)
-	for sc.Scan() {
-		k, v, ok := strings.Cut(sc.Text(), "=")
-		if !ok || k != podShimTargetKey {
-			continue
-		}
-		t, err := strconv.Unquote(v)
-		if err != nil {
-			return "", fmt.Errorf("%s: %w", k, err)
-		}
-		if t != "" && net.ParseIP(t) == nil {
-			return "", fmt.Errorf("%s: %q is not an IP address", k, t)
-		}
-		return t, nil
+	if t != "" && net.ParseIP(t) == nil {
+		return "", fmt.Errorf("%s: %q is not an IP address", podShimTargetKey, t)
 	}
-	return "", sc.Err()
+	return t, nil
 }
 
 func servePort(ctx context.Context, ln net.Listener, port int, target func() string) {

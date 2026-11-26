@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	shim  = "ghcr.io/kubeswift-io/kubeswift/sandbox-materialize:v0.27.0"
+	shim  = "ghcr.io/kubeswift-io/kubeswift/pod-shim:v0.27.0"
 	pmNS  = "kubeswift-sandboxes"
 	uid   = "0b0e4c4e-7a5b-4c2e-9d55-2f4a1c9e7d10"
 	sbKey = SandboxPrefix + uid
@@ -260,9 +260,18 @@ func TestOrphanAndStaleSandboxesDeleted(t *testing.T) {
 
 func TestEgressPolicyWithoutPortsDeniesAll(t *testing.T) {
 	np := EgressPolicyFor(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "tenant", UID: uid}},
-		&podmode.Workload{}, pmNS)
+		&podmode.Workload{}, pmNS, nil)
 	if len(np.Spec.Egress) != 0 || len(np.Spec.PolicyTypes) != 1 || np.Spec.PolicyTypes[0] != networkingv1.PolicyTypeEgress {
 		t.Errorf("policy %+v", np.Spec)
+	}
+	// With the relay, the only egress is to the relay's pods and port.
+	relay := &RelayPeer{Namespace: "kubeswift-system", Labels: map[string]string{"app": "cm"}, Port: 9443}
+	np = EgressPolicyFor(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "tenant", UID: uid}},
+		&podmode.Workload{}, pmNS, relay)
+	if len(np.Spec.Egress) != 1 || np.Spec.Egress[0].Ports[0].Port.IntVal != 9443 ||
+		np.Spec.Egress[0].To[0].NamespaceSelector.MatchLabels[corev1.LabelMetadataName] != "kubeswift-system" ||
+		np.Spec.Egress[0].To[0].PodSelector.MatchLabels["app"] != "cm" {
+		t.Errorf("relay policy %+v", np.Spec.Egress)
 	}
 	sb, err := SandboxFor(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "tenant", UID: uid}},
 		&podmode.Workload{Image: "i", CPU: 1, Memory: "512Mi"}, pmNS, "h")
@@ -279,5 +288,43 @@ func TestSplitStandIn(t *testing.T) {
 		if _, _, got := splitStandIn(in); got != ok {
 			t.Errorf("splitStandIn(%q) ok=%v", in, got)
 		}
+	}
+}
+
+func TestLinkWritesRelay(t *testing.T) {
+	r, c, _ := setup(t, standIn(t))
+	r.Relay = func(context.Context) (*podmode.Relay, error) {
+		return &podmode.Relay{Addr: "10.96.0.9:443", ServerName: "kubeswift-webhook-service.kubeswift-system.svc", CA: "PEM"}, nil
+	}
+	r.RelayPeer = &RelayPeer{Namespace: "kubeswift-system", Labels: map[string]string{"app": "cm"}, Port: 9443}
+	reconcileOnce(t, r, "tenant", "sb-1")
+	reconcileOnce(t, r, "tenant", "sb-1")
+
+	var pod corev1.Pod
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "sb-1"}, &pod); err != nil {
+		t.Fatal(err)
+	}
+	if got := pod.Annotations[podmode.AnnotationRelay]; got != `{"addr":"10.96.0.9:443","serverName":"kubeswift-webhook-service.kubeswift-system.svc","ca":"PEM"}` {
+		t.Errorf("relay annotation %q", got)
+	}
+	var np networkingv1.NetworkPolicy
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: NetworkPolicyPrefix + uid}, &np); err != nil {
+		t.Fatal(err)
+	}
+	if len(np.Spec.Egress) != 2 {
+		t.Errorf("egress rules %d, want relay + launcher", len(np.Spec.Egress))
+	}
+
+	// A policy from before the relay (PR 1) is brought up to date.
+	np.Spec.Egress = np.Spec.Egress[1:]
+	if err := c.Update(context.Background(), &np); err != nil {
+		t.Fatal(err)
+	}
+	reconcileOnce(t, r, "tenant", "sb-1")
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(&np), &np); err != nil {
+		t.Fatal(err)
+	}
+	if len(np.Spec.Egress) != 2 {
+		t.Errorf("egress rules after update %d", len(np.Spec.Egress))
 	}
 }
