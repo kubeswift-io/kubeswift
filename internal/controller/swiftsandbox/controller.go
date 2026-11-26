@@ -423,6 +423,13 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 			}
 		}
 	}
+	if msg, bad := coldEnvViolation(sb, ri.Exec.Env); bad {
+		apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
+			Type: sandboxv1alpha1.SwiftSandboxConditionResolved, Status: metav1.ConditionFalse,
+			Reason: reasonInvalidEnvName, Message: msg, ObservedGeneration: sb.Generation,
+		})
+		return r.fail(ctx, sb, reasonInvalidEnvName, msg)
+	}
 	if msg, bad := runAsNonRootViolation(ri.Exec.User); bad {
 		apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
 			Type: sandboxv1alpha1.SwiftSandboxConditionResolved, Status: metav1.ConditionFalse,

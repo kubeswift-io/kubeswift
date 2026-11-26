@@ -34,3 +34,11 @@ func TestValidateEnv(t *testing.T) {
 		}
 	}
 }
+
+func TestGuestEnvName(t *testing.T) {
+	for n, want := range map[string]bool{"A": true, "_x9": true, "PATH_2": true, "": false, "9A": false, "a.b": false, "a-b": false, "a b": false} {
+		if GuestEnvName(n) != want {
+			t.Errorf("%q: got %v", n, !want)
+		}
+	}
+}
