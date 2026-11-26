@@ -164,6 +164,20 @@ sandboxMaterialize:
   #     translatorArgs: ["--out", "/etc/kubeswift/egress-proxy/envoy.json"]
   #     listeners: {transparent: 15006, http: 3128}
   egressProxyPresets: {}
+  # Pod mode: a Pod that sets runtimeClassName: kubeswift-microvm, in a
+  # namespace labelled kubeswift.io/pod-mode=enabled, runs its container in a
+  # microVM. Admission turns the Pod into an unprivileged stand-in that keeps
+  # its name, labels, owner, scheduling and resource requests and forwards its
+  # TCP ports to the microVM's launcher; the microVM is a SwiftSandbox (mode
+  # restricted) in `namespace`, on the stand-in's node. Works with Deployments,
+  # Jobs and kubernetes-sigs/agent-sandbox unmodified. Pod fields the microVM
+  # cannot honour are refused by name. Needs webhook.enabled and
+  # ValidatingAdmissionPolicy (Kubernetes 1.30+), runs the controller-manager
+  # with at least 2 replicas and a PodDisruptionBudget (the webhook fails
+  # closed), and needs a SwiftKernel named `sandbox` in `namespace`.
+  podMode:
+    enabled: false
+    namespace: kubeswift-sandboxes
   # SPIFFE identity for proxied sandboxes (spec.identity.spiffe). Needs a
   # SPIFFE implementation in the cluster: SPIRE with its controller manager
   # is the reference. When enabled, the chart creates two ClusterSPIFFEIDs

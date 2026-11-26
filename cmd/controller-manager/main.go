@@ -29,6 +29,7 @@ import (
 	storagev1alpha1 "github.com/kubeswift-io/kubeswift/api/storage/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/migrationcert"
+	podmodecontroller "github.com/kubeswift-io/kubeswift/internal/controller/podmode"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftdrain"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftgpu"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
@@ -48,6 +49,7 @@ import (
 	"github.com/kubeswift-io/kubeswift/internal/scheme"
 	"github.com/kubeswift-io/kubeswift/internal/version"
 	evictionwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/eviction"
+	podmodewebhook "github.com/kubeswift-io/kubeswift/internal/webhook/podmode"
 	swiftguestwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftguest"
 	swiftimagewebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftimage"
 	swiftkernelwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftkernel"
@@ -86,6 +88,8 @@ func (s *stringSliceFlag) Set(v string) error {
 func main() {
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	webhookEnabled := flag.Bool("webhook-enabled", false, "Enable admission webhooks (requires TLS certs)")
+	podModeEnabled := flag.Bool("pod-mode-enabled", false, "Run Pods that name the kubeswift-microvm RuntimeClass in microVMs (pod mode): the stand-in controller, and with --webhook-enabled the pod-mode webhook")
+	podModeNamespace := flag.String("pod-mode-namespace", "kubeswift-sandboxes", "Namespace that holds every pod-mode SwiftSandbox and launcher")
 	migrationMTLSEnabled := flag.Bool("migration-mtls-enabled", false, "Enable the live-migration mTLS cert provisioner (Phase 3c; requires cert-manager)")
 	leaderElect := flag.Bool("leader-elect", false, "Enable leader election for controller manager")
 	scopedLauncherRBAC := flag.Bool("scoped-launcher-rbac", false,
@@ -531,6 +535,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Pod mode: a Pod naming the kubeswift-microvm RuntimeClass becomes an
+	// unprivileged stand-in (webhook below) whose workload runs in a
+	// SwiftSandbox in the pod-mode namespace.
+	if *podModeEnabled {
+		if err = (&podmodecontroller.Reconciler{
+			Client:    mgr.GetClient(),
+			Scheme:    mgr.GetScheme(),
+			Recorder:  mgr.GetEventRecorderFor("podmode-controller"),
+			Namespace: *podModeNamespace,
+			ShimImage: swiftsandbox.SandboxMaterializeImage,
+		}).SetupWithManager(mgr); err != nil {
+			klog.ErrorS(err, "unable to create pod-mode controller")
+			os.Exit(1)
+		}
+	}
+
 	if err = (&swiftsandbox.SwiftSandboxPoolReconciler{
 		Client:           mgr.GetClient(),
 		APIReader:        mgr.GetAPIReader(),
@@ -660,6 +680,13 @@ func main() {
 		mgr.GetWebhookServer().Register("/validate-pods-eviction",
 			&webhook.Admission{Handler: &evictionwebhook.Handler{Client: mgr.GetClient()}})
 		klog.InfoS("registered pods/eviction webhook at /validate-pods-eviction")
+		// Pod mode: failurePolicy Fail, scoped by namespace label and a match
+		// condition on the RuntimeClass. No network I/O in the handler.
+		if *podModeEnabled {
+			mgr.GetWebhookServer().Register(podmodewebhook.Path,
+				&webhook.Admission{Handler: &podmodewebhook.Handler{ShimImage: swiftsandbox.SandboxMaterializeImage}})
+			klog.InfoS("registered pod-mode webhook", "path", podmodewebhook.Path)
+		}
 	}
 
 	klog.InfoS("starting manager", "version", version.Version, "git", version.GitCommit)

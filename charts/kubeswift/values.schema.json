@@ -73,6 +73,14 @@
         "restrictedEgressDeny": { "type": "array", "items": { "type": "string" } },
         "launcherCPUPerVCPU": { "type": ["string", "number"] },
         "egressProxyImages": { "type": "array", "items": { "type": "string" } },
+        "podMode": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "namespace": { "type": "string", "minLength": 1 }
+          }
+        },
         "spiffe": {
           "type": "object",
           "additionalProperties": false,

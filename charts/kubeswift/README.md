@@ -98,6 +98,8 @@ key named instead of being silently ignored. Delete the key.
 | `sandboxMaterialize.launcherCPUPerVCPU` | CPU each sandbox launcher pod requests per guest vCPU (its memory request is always guest memory plus 64Mi). The default fits four vCPUs per requested core (no CPU limit is set); `1` reserves a core per vCPU, `0` requests no CPU | `250m` |
 | `sandboxMaterialize.console` | Give sandbox launcher pods an unprivileged `console` container, read with `kubectl logs <pod> -c console` (`get pods/log`, no exec) | `true` |
 | `sandboxMaterialize.artifactCache.evictLegacy` | Also evict entries written before v0.17 (counted, otherwise never evicted). Set once no pre-v0.17 launcher runs | `false` |
+| `sandboxMaterialize.podMode.enabled` | Pod mode: a Pod with `runtimeClassName: kubeswift-microvm` in a namespace labelled `kubeswift.io/pod-mode=enabled` runs its container in a microVM, behind an unprivileged stand-in Pod. Needs `webhook.enabled` and ValidatingAdmissionPolicy; runs the controller-manager with at least 2 replicas and a PodDisruptionBudget | `false` |
+| `sandboxMaterialize.podMode.namespace` | Namespace for every pod-mode SwiftSandbox and launcher (created, Pod Security `privileged`); needs a SwiftKernel named `sandbox` | `kubeswift-sandboxes` |
 
 ### Snapshot backend images
 

@@ -125,3 +125,12 @@ list items (empty string when neither is set). tlsAuto wins over a raw tls[].
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+The sandbox-materialize image: the sandbox init/console containers and the
+pod-mode stand-in shim. The controller's KUBESWIFT_SANDBOX_MATERIALIZE_IMAGE
+and the pod-mode admission policy must name the same string.
+*/}}
+{{- define "kubeswift.sandboxMaterializeImage" -}}
+{{ .Values.sandboxMaterialize.image.registry }}/sandbox-materialize:{{ include "kubeswift.imageTag" (dict "tag" .Values.sandboxMaterialize.image.tag "appVersion" .Chart.AppVersion) }}
+{{- end }}
