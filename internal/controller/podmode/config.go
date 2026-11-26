@@ -15,7 +15,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -60,6 +59,9 @@ type Config struct {
 	Data  map[string][]byte
 	Env   []corev1.EnvVar
 	Files []sandboxv1alpha1.SandboxSecretFile
+	// Skipped are envFrom keys left out because they cannot name a variable
+	// in the microVM (podmode.ShellName), as "<Kind> <name>: <key>".
+	Skipped []string
 }
 
 // ConfigSecretName is the copy Secret of a stand-in, in the pod-mode
@@ -158,6 +160,7 @@ func ResolveConfig(ctx context.Context, reader client.Reader, pod *corev1.Pod, w
 
 	// envFrom first, then env; a later variable of the same name wins.
 	var env []corev1.EnvVar
+	var skipped []string
 	at := map[string]int{}
 	set := func(e corev1.EnvVar) {
 		if i, ok := at[e.Name]; ok {
@@ -188,14 +191,19 @@ func ResolveConfig(ctx context.Context, reader client.Reader, pod *corev1.Pod, w
 			return nil, notFound(kind, ns, name)
 		}
 		for _, k := range sortedKeys(src.data) {
-			// The kubelet skips keys that are not variable names.
-			if len(validation.IsEnvVarName(ef.Prefix+k)) > 0 {
+			// Skipped as the kubelet skips keys that are not variable
+			// names, but by the guest's stricter rule; reported.
+			if !podmode.ShellName(ef.Prefix + k) {
+				skipped = append(skipped, fmt.Sprintf("%s %s: %s", kindName(kind), name, k))
 				continue
 			}
 			set(corev1.EnvVar{Name: ef.Prefix + k, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: c.ref(kind, name, k, src.data[k])}})
 		}
 	}
 	for _, e := range wl.Env {
+		if !podmode.ShellName(e.Name) {
+			return nil, configErrorf("env %q cannot name a variable in the microVM", e.Name)
+		}
 		vf := e.ValueFrom
 		if vf == nil || (vf.SecretKeyRef == nil && vf.ConfigMapKeyRef == nil) {
 			set(e)
@@ -277,7 +285,7 @@ func ResolveConfig(ctx context.Context, reader client.Reader, pod *corev1.Pod, w
 	if n := (len(items) + fileItemsPerEntry - 1) / fileItemsPerEntry; n > maxFileEntries {
 		return nil, configErrorf("%d files from Secret and ConfigMap volumes, at most %d", len(items), maxFileEntries*fileItemsPerEntry)
 	}
-	cfg := &Config{Data: c.data, Env: env}
+	cfg := &Config{Data: c.data, Env: env, Skipped: skipped}
 	for len(items) > 0 {
 		n := min(len(items), fileItemsPerEntry)
 		cfg.Files = append(cfg.Files, sandboxv1alpha1.SandboxSecretFile{SecretName: c.secret, Items: items[:n]})

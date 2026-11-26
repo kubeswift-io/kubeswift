@@ -217,7 +217,7 @@ func (e *RefusedError) Error() string {
 
 // Rewrite returns the stand-in for a Pod that wants the microVM RuntimeClass,
 // with the workload recorded in AnnotationWorkload. shimImage is the image the
-// stand-in's container runs (sandbox-materialize). It returns a *RefusedError
+// stand-in's container runs (pod-shim). It returns a *RefusedError
 // naming every field it cannot carry.
 func Rewrite(pod *corev1.Pod, shimImage string) (*corev1.Pod, error) {
 	var refused []string
@@ -261,6 +261,9 @@ func Rewrite(pod *corev1.Pod, shimImage string) (*corev1.Pod, error) {
 		refuse("%s.%s", p, k)
 	}
 	for _, e := range c.Env {
+		if !ShellName(e.Name) {
+			refuse("%s.env[%s] (the microVM takes only names of letters, digits and _, not starting with a digit)", p, e.Name)
+		}
 		if vf := e.ValueFrom; vf != nil && vf.SecretKeyRef == nil && vf.ConfigMapKeyRef == nil {
 			refuse("%s.env[%s].valueFrom (only secretKeyRef and configMapKeyRef)", p, e.Name)
 		}
@@ -392,6 +395,22 @@ func Rewrite(pod *corev1.Pod, shimImage string) (*corev1.Pod, error) {
 	st.Volumes = []corev1.Volume{ShimVolumeSource()}
 	st.Containers = []corev1.Container{StandInContainer(c, shimImage, w.Ports, shimPorts)}
 	return out, nil
+}
+
+// ShellName is whether s can name an environment variable in the microVM:
+// its init sets the workload's environment with the shell, which takes only
+// letters, digits and _, not starting with a digit. Kubernetes allows more.
+func ShellName(s string) bool {
+	if s == "" || (s[0] >= '0' && s[0] <= '9') {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c != '_' && (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return false
+		}
+	}
+	return true
 }
 
 // underGuestDir is whether p is in a directory mounted over the guest root

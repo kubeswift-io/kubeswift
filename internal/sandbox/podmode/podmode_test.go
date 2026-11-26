@@ -149,6 +149,7 @@ func TestRewriteRefusesByName(t *testing.T) {
 			p.Spec.Volumes[0].VolumeSource = corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "s"}}
 			p.Spec.Containers[0].VolumeMounts[0].MountPath = "/dev/creds"
 		}, "volumeMounts[workspace].mountPath"},
+		"dotted env name": {func(p *corev1.Pod) { p.Spec.Containers[0].Env[0].Name = "app.mode" }, "env[app.mode] (the microVM takes only names"},
 		"subPathExpr": {func(p *corev1.Pod) {
 			p.Spec.Volumes[0].VolumeSource = corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "c"}}}
 			p.Spec.Containers[0].VolumeMounts[0].SubPathExpr = "$(POD)"
@@ -361,5 +362,13 @@ func TestRewriteRecordsSecretsAndConfigMaps(t *testing.T) {
 	// The stand-in mounts none of it: only the shim volume.
 	if len(out.Spec.Volumes) != 1 || out.Spec.Volumes[0].Name != ShimVolume || len(out.Spec.Containers[0].EnvFrom) != 0 || len(out.Spec.Containers[0].Env) != 0 {
 		t.Errorf("stand-in volumes %+v env %+v", out.Spec.Volumes, out.Spec.Containers[0].Env)
+	}
+}
+
+func TestShellName(t *testing.T) {
+	for n, want := range map[string]bool{"A": true, "_x9": true, "PATH_2": true, "": false, "9A": false, "a.b": false, "a-b": false, "a b": false, "é": false} {
+		if ShellName(n) != want {
+			t.Errorf("%q: %v", n, !want)
+		}
 	}
 }

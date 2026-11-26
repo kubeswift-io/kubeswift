@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -413,6 +414,11 @@ func (r *Reconciler) ensureSandbox(ctx context.Context, pod *corev1.Pod, wl *pod
 		if err := r.ensureConfigSecret(ctx, pod, cfg.Data); err != nil {
 			return nil, err
 		}
+	}
+	if len(cfg.Skipped) > 0 {
+		r.Recorder.Eventf(pod, corev1.EventTypeWarning, "InvalidEnvironmentVariableNames",
+			"envFrom keys left out, they cannot name a variable in the microVM (letters, digits and _ only): %s",
+			strings.Join(cfg.Skipped, ", "))
 	}
 	want, err := SandboxFor(pod, wl, cfg, r.Namespace, hostname)
 	if err != nil {

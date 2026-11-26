@@ -89,8 +89,15 @@ func tenantConfig() []client.Object {
 }
 
 func TestSecretsAndConfigMapsReachTheMicroVM(t *testing.T) {
-	r, c, _ := setup(t, append(tenantConfig(), configStandIn(t))...)
+	r, c, rec := setup(t, append(tenantConfig(), configStandIn(t))...)
 	reconcileOnce(t, r, "tenant", "sb-1")
+	var events []string
+	for len(rec.Events) > 0 {
+		events = append(events, <-rec.Events)
+	}
+	if !strings.Contains(strings.Join(events, "\n"), "InvalidEnvironmentVariableNames envFrom keys left out, they cannot name a variable in the microVM (letters, digits and _ only): Secret db: bad-name") {
+		t.Errorf("events %q", events)
+	}
 
 	var copySecret corev1.Secret
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: pmNS, Name: sbKey}, &copySecret); err != nil {
@@ -117,7 +124,7 @@ func TestSecretsAndConfigMapsReachTheMicroVM(t *testing.T) {
 	}
 	want := map[string]string{
 		"DB_user": "literal:overridden", "DB_password": "s3cret-db", "PLAIN": "literal:v",
-		"TOKEN": "s3cret-token", "MODE": "fast", "DB_bad-name": "x",
+		"TOKEN": "s3cret-token", "MODE": "fast",
 	}
 	if len(env) != len(want) {
 		t.Errorf("env %v", env)
@@ -150,9 +157,9 @@ func TestSecretsAndConfigMapsReachTheMicroVM(t *testing.T) {
 			t.Errorf("%q is in the SwiftSandbox", s)
 		}
 	}
-	// db (3), creds/token, tls (2), settings (2).
-	if len(copySecret.Data) != 8 {
-		t.Errorf("copy holds %d keys, want 8", len(copySecret.Data))
+	// db (2: bad-name is skipped), creds/token, tls (2), settings (2).
+	if len(copySecret.Data) != 7 {
+		t.Errorf("copy holds %d keys, want 7", len(copySecret.Data))
 	}
 }
 
