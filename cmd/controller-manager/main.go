@@ -543,6 +543,7 @@ func main() {
 	if *podModeEnabled {
 		pm := &podmodecontroller.Reconciler{
 			Client:    mgr.GetClient(),
+			APIReader: mgr.GetAPIReader(),
 			Scheme:    mgr.GetScheme(),
 			Recorder:  mgr.GetEventRecorderFor("podmode-controller"),
 			Namespace: *podModeNamespace,

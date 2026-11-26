@@ -274,7 +274,7 @@ func TestEgressPolicyWithoutPortsDeniesAll(t *testing.T) {
 		t.Errorf("relay policy %+v", np.Spec.Egress)
 	}
 	sb, err := SandboxFor(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "tenant", UID: uid}},
-		&podmode.Workload{Image: "i", CPU: 1, Memory: "512Mi"}, pmNS, "h")
+		&podmode.Workload{Image: "i", CPU: 1, Memory: "512Mi"}, nil, pmNS, "h")
 	if err != nil {
 		t.Fatal(err)
 	}

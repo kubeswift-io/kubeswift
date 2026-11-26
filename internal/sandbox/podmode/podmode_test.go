@@ -139,9 +139,21 @@ func TestRewriteRefusesByName(t *testing.T) {
 		"host network":   {func(p *corev1.Pod) { p.Spec.HostNetwork = true }, "spec.hostNetwork"},
 		"host aliases":   {func(p *corev1.Pod) { p.Spec.HostAliases = []corev1.HostAlias{{IP: "1.2.3.4"}} }, "spec.hostAliases"},
 		"sysctls":        {func(p *corev1.Pod) { p.Spec.SecurityContext.Sysctls = []corev1.Sysctl{{Name: "a", Value: "1"}} }, "spec.securityContext.sysctls"},
-		"secret volume": {func(p *corev1.Pod) {
-			p.Spec.Volumes[0].VolumeSource = corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{}}
+		"hostPath volume": {func(p *corev1.Pod) {
+			p.Spec.Volumes[0].VolumeSource = corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/"}}
 		}, "spec.volumes[workspace]"},
+		"fieldRef": {func(p *corev1.Pod) {
+			p.Spec.Containers[0].Env[0].ValueFrom = &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}
+		}, "env[A].valueFrom (only secretKeyRef and configMapKeyRef)"},
+		"secret under /dev": {func(p *corev1.Pod) {
+			p.Spec.Volumes[0].VolumeSource = corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "s"}}
+			p.Spec.Containers[0].VolumeMounts[0].MountPath = "/dev/creds"
+		}, "volumeMounts[workspace].mountPath"},
+		"dotted env name": {func(p *corev1.Pod) { p.Spec.Containers[0].Env[0].Name = "app.mode" }, "env[app.mode] (the microVM takes only names"},
+		"subPathExpr": {func(p *corev1.Pod) {
+			p.Spec.Volumes[0].VolumeSource = corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "c"}}}
+			p.Spec.Containers[0].VolumeMounts[0].SubPathExpr = "$(POD)"
+		}, "volumeMounts[workspace].subPathExpr"},
 		"envFrom":        {func(p *corev1.Pod) { p.Spec.Containers[0].EnvFrom = []corev1.EnvFromSource{{}} }, "spec.containers[sandbox].envFrom"},
 		"valueFrom":      {func(p *corev1.Pod) { p.Spec.Containers[0].Env[0].ValueFrom = &corev1.EnvVarSource{} }, "env[A].valueFrom"},
 		"liveness":       {func(p *corev1.Pod) { p.Spec.Containers[0].LivenessProbe = &corev1.Probe{} }, "spec.containers[sandbox].livenessProbe"},
@@ -317,5 +329,46 @@ func TestRewriteAddsReadinessGateOnce(t *testing.T) {
 	}
 	if len(out.Spec.ReadinessGates) != 2 {
 		t.Errorf("gates %v", out.Spec.ReadinessGates)
+	}
+}
+
+func TestRewriteRecordsSecretsAndConfigMaps(t *testing.T) {
+	p := sandboxdPod()
+	c := &p.Spec.Containers[0]
+	c.Env = append(c.Env,
+		corev1.EnvVar{Name: "TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "creds"}, Key: "token"}}},
+		corev1.EnvVar{Name: "MODE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}, Key: "mode"}}})
+	c.EnvFrom = []corev1.EnvFromSource{{Prefix: "S_", SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "creds"}}}}
+	p.Spec.Volumes = append(p.Spec.Volumes,
+		corev1.Volume{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "tls"}}},
+		corev1.Volume{Name: "unused", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{}}})
+	c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "tls", MountPath: "/etc/tls/", SubPath: "certs/", ReadOnly: true})
+	out, err := Rewrite(p, shim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := ParseWorkload(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(w.Env) != 3 || w.Env[1].ValueFrom.SecretKeyRef.Name != "creds" || len(w.EnvFrom) != 1 || w.EnvFrom[0].Prefix != "S_" {
+		t.Errorf("env %+v envFrom %+v", w.Env, w.EnvFrom)
+	}
+	if len(w.Files) != 1 || w.Files[0].Path != "/etc/tls" || w.Files[0].SubPath != "certs" || w.Files[0].Secret.SecretName != "tls" {
+		t.Errorf("files %+v", w.Files)
+	}
+	// The stand-in mounts none of it: only the shim volume.
+	if len(out.Spec.Volumes) != 1 || out.Spec.Volumes[0].Name != ShimVolume || len(out.Spec.Containers[0].EnvFrom) != 0 || len(out.Spec.Containers[0].Env) != 0 {
+		t.Errorf("stand-in volumes %+v env %+v", out.Spec.Volumes, out.Spec.Containers[0].Env)
+	}
+}
+
+func TestShellName(t *testing.T) {
+	for n, want := range map[string]bool{"A": true, "_x9": true, "PATH_2": true, "": false, "9A": false, "a.b": false, "a-b": false, "a b": false, "é": false} {
+		if ShellName(n) != want {
+			t.Errorf("%q: %v", n, !want)
+		}
 	}
 }
