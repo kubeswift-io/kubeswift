@@ -2,8 +2,6 @@ package podmode
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"path"
@@ -79,13 +77,10 @@ type configResolver struct {
 	secret    string
 	cache     map[string]configSource
 	data      map[string][]byte
-}
-
-// copyKey is the key of a source key in the copy Secret: stable, valid and
-// short whatever the source names are.
-func copyKey(kind, name, key string) string {
-	h := sha256.Sum256([]byte(kind + "/" + name + "/" + key))
-	return kind[:1] + "-" + hex.EncodeToString(h[:10])
+	// keys names each copied source key in the copy Secret: k0, k1, ... in
+	// the order they are referenced, valid and short whatever the source
+	// names are. The copy is rewritten whole for each microVM.
+	keys map[string]string
 }
 
 func (c *configResolver) load(ctx context.Context, kind, name string) (configSource, error) {
@@ -130,7 +125,12 @@ func (c *configResolver) load(ctx context.Context, kind, name string) (configSou
 
 // ref copies one key and returns its key in the copy Secret.
 func (c *configResolver) ref(kind, name, key string, val []byte) *corev1.SecretKeySelector {
-	k := copyKey(kind, name, key)
+	id := kind + "/" + name + "/" + key
+	k, ok := c.keys[id]
+	if !ok {
+		k = fmt.Sprintf("k%d", len(c.keys))
+		c.keys[id] = k
+	}
 	c.data[k] = val
 	return &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: c.secret}, Key: k}
 }
@@ -155,7 +155,7 @@ func keyNotFound(kind, ns, name, key string) error {
 // non-optional reference, as the kubelet would not start the container.
 func ResolveConfig(ctx context.Context, reader client.Reader, pod *corev1.Pod, wl *podmode.Workload) (*Config, error) {
 	c := &configResolver{reader: reader, namespace: pod.Namespace, secret: ConfigSecretName(pod),
-		cache: map[string]configSource{}, data: map[string][]byte{}}
+		cache: map[string]configSource{}, data: map[string][]byte{}, keys: map[string]string{}}
 	ns := pod.Namespace
 
 	// envFrom first, then env; a later variable of the same name wins.
