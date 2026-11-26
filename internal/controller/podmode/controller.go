@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -147,18 +148,178 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, nil
 	}
 
+	if err := r.ensureEgressPolicy(ctx, &pod, wl); err != nil {
+		return ctrl.Result{}, err
+	}
+	// This run already ended: never boot it again, even if its SwiftSandbox
+	// was removed by someone else; only a restart starts a new run.
+	if run, code, ok := podmode.ParseExit(pod.Annotations[podmode.AnnotationExit]); ok && run == RunOf(&pod) {
+		var cur sandboxv1alpha1.SwiftSandbox
+		err := r.Get(ctx, types.NamespacedName{Namespace: r.Namespace, Name: SandboxName(&pod)}, &cur)
+		if apierrors.IsNotFound(err) {
+			return r.afterExit(ctx, &pod, nil, code)
+		}
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 	sb, err := r.ensureSandbox(ctx, &pod, wl)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if sb.Status.Phase == sandboxv1alpha1.SwiftSandboxFailed {
-		r.Recorder.Eventf(&pod, corev1.EventTypeWarning, "MicroVMFailed",
-			"SwiftSandbox %s/%s failed: %s", sb.Namespace, sb.Name, sb.Status.Message)
+	if sb.DeletionTimestamp != nil {
+		// The previous run's microVM is going (a restart); the next one is
+		// created once it is gone.
+		return ctrl.Result{RequeueAfter: deleteRequeue},
+			r.setReady(ctx, &pod, false, "MicroVMRestarting", "the previous microVM is being removed")
 	}
-	if err := r.ensureEgressPolicy(ctx, &pod, wl); err != nil {
+	if runOfSandbox(sb) != RunOf(&pod) {
+		// A microVM of another run (the controller restarted between
+		// numbering the run and deleting the old one).
+		return ctrl.Result{RequeueAfter: deleteRequeue}, client.IgnoreNotFound(r.Delete(ctx, sb))
+	}
+	switch sb.Status.Phase {
+	case sandboxv1alpha1.SwiftSandboxCompleted, sandboxv1alpha1.SwiftSandboxFailed:
+		return r.exited(ctx, &pod, sb)
+	}
+	if err := r.ensureTarget(ctx, &pod, sb); err != nil {
 		return ctrl.Result{}, err
 	}
-	return ctrl.Result{}, r.ensureTarget(ctx, &pod, sb)
+	if sb.Status.Phase == sandboxv1alpha1.SwiftSandboxRunning && pod.Annotations[podmode.AnnotationTarget] != "" {
+		return ctrl.Result{}, r.setReady(ctx, &pod, true, "MicroVMRunning", "")
+	}
+	return ctrl.Result{}, r.setReady(ctx, &pod, false, "MicroVMStarting",
+		fmt.Sprintf("SwiftSandbox %s/%s is %s", sb.Namespace, sb.Name, phaseOr(sb.Status.Phase)))
+}
+
+func phaseOr(p sandboxv1alpha1.SwiftSandboxPhase) string {
+	if p == "" {
+		return "Pending"
+	}
+	return string(p)
+}
+
+// RunOf is the stand-in's current run (AnnotationRun, 1 when unset).
+func RunOf(pod *corev1.Pod) int {
+	if n, err := strconv.Atoi(pod.Annotations[podmode.AnnotationRun]); err == nil && n > 0 {
+		return n
+	}
+	return 1
+}
+
+func runOfSandbox(sb *sandboxv1alpha1.SwiftSandbox) int {
+	if n, err := strconv.Atoi(sb.Annotations[podmode.AnnotationRun]); err == nil && n > 0 {
+		return n
+	}
+	return 1
+}
+
+// exitCode is the workload's exit code: the SwiftSandbox's when known, else
+// 0 for Completed and 1 for Failed.
+func exitCode(sb *sandboxv1alpha1.SwiftSandbox) int {
+	if sb.Status.ExitCode != nil {
+		return int(*sb.Status.ExitCode)
+	}
+	if sb.Status.Phase == sandboxv1alpha1.SwiftSandboxCompleted {
+		return 0
+	}
+	return 1
+}
+
+// shimStatus is the stand-in container's restart count and whether it runs.
+func shimStatus(pod *corev1.Pod) (restarts int, running bool) {
+	for _, cs := range pod.Status.ContainerStatuses {
+		return int(cs.RestartCount), cs.State.Running != nil
+	}
+	return 0, false
+}
+
+// exited handles a run whose workload ended. It tells the shim the exit code
+// (the shim exits with it, so the Pod ends as any Pod would); if the kubelet
+// then restarts the shim, as restartPolicy says it does, the next run gets a
+// new microVM.
+func (r *Reconciler) exited(ctx context.Context, pod *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox) (ctrl.Result, error) {
+	run, code := RunOf(pod), exitCode(sb)
+	restarts, _ := shimStatus(pod)
+	want := podmode.FormatExit(run, code)
+	if pod.Annotations[podmode.AnnotationExit] != want {
+		if sb.Status.Phase == sandboxv1alpha1.SwiftSandboxFailed {
+			r.Recorder.Eventf(pod, corev1.EventTypeWarning, "MicroVMFailed",
+				"SwiftSandbox %s/%s failed (exit code %d): %s", sb.Namespace, sb.Name, code, sb.Status.Message)
+		} else {
+			r.Recorder.Eventf(pod, corev1.EventTypeNormal, "MicroVMExited",
+				"the workload exited with code %d", code)
+		}
+		patch := client.MergeFrom(pod.DeepCopy())
+		if pod.Annotations == nil {
+			pod.Annotations = map[string]string{}
+		}
+		pod.Annotations[podmode.AnnotationExit] = want
+		pod.Annotations[podmode.AnnotationExitRestarts] = strconv.Itoa(restarts)
+		if err := r.Patch(ctx, pod, patch); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	return r.afterExit(ctx, pod, sb, code)
+}
+
+// afterExit keeps a run that ended not ready and, once the kubelet restarted
+// the shim as restartPolicy says, numbers the next run and removes this run's
+// microVM (sb, nil when already gone).
+func (r *Reconciler) afterExit(ctx context.Context, pod *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox, code int) (ctrl.Result, error) {
+	run := RunOf(pod)
+	restarts, running := shimStatus(pod)
+	if err := r.setReady(ctx, pod, false, "MicroVMExited", fmt.Sprintf("the workload exited with code %d", code)); err != nil {
+		return ctrl.Result{}, err
+	}
+	at, err := strconv.Atoi(pod.Annotations[podmode.AnnotationExitRestarts])
+	if err != nil || !podmode.Restarts(pod.Spec.RestartPolicy, code) || restarts <= at || !running {
+		return ctrl.Result{}, nil
+	}
+	// The kubelet restarted the shim: number the next run, then remove this
+	// run's microVM; the next reconcile creates the new one.
+	patch := client.MergeFrom(pod.DeepCopy())
+	pod.Annotations[podmode.AnnotationRun] = strconv.Itoa(run + 1)
+	if err := r.Patch(ctx, pod, patch); err != nil {
+		return ctrl.Result{}, err
+	}
+	r.Recorder.Eventf(pod, corev1.EventTypeNormal, "MicroVMRestarting", "starting run %d in a new microVM", run+1)
+	if sb == nil {
+		return ctrl.Result{Requeue: true}, nil
+	}
+	return ctrl.Result{RequeueAfter: deleteRequeue}, client.IgnoreNotFound(r.Delete(ctx, sb))
+}
+
+// setReady sets the stand-in's readiness gate condition.
+func (r *Reconciler) setReady(ctx context.Context, pod *corev1.Pod, ready bool, reason, msg string) error {
+	status := corev1.ConditionFalse
+	if ready {
+		status = corev1.ConditionTrue
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == podmode.ConditionMicroVMReady && c.Status == status && c.Reason == reason && c.Message == msg {
+			return nil
+		}
+	}
+	patch := client.StrategicMergeFrom(pod.DeepCopy())
+	cond := corev1.PodCondition{
+		Type: podmode.ConditionMicroVMReady, Status: status, Reason: reason, Message: msg,
+		LastTransitionTime: metav1.Now(),
+	}
+	replaced := false
+	for i, c := range pod.Status.Conditions {
+		if c.Type == podmode.ConditionMicroVMReady {
+			if c.Status == status {
+				cond.LastTransitionTime = c.LastTransitionTime
+			}
+			pod.Status.Conditions[i] = cond
+			replaced = true
+		}
+	}
+	if !replaced {
+		pod.Status.Conditions = append(pod.Status.Conditions, cond)
+	}
+	return r.Status().Patch(ctx, pod, patch)
 }
 
 // release deletes the stand-in's SwiftSandbox and drops the finalizer once it
@@ -271,7 +432,10 @@ func SandboxFor(pod *corev1.Pod, wl *podmode.Workload, namespace, hostname strin
 				podmode.LabelUID:              string(pod.UID),
 				podmode.LabelStandInNamespace: pod.Namespace,
 			},
-			Annotations: map[string]string{podmode.AnnotationStandIn: pod.Namespace + "/" + pod.Name},
+			Annotations: map[string]string{
+				podmode.AnnotationStandIn: pod.Namespace + "/" + pod.Name,
+				podmode.AnnotationRun:     strconv.Itoa(RunOf(pod)),
+			},
 		},
 		Spec: sandboxv1alpha1.SwiftSandboxSpec{
 			Image:        wl.Image,

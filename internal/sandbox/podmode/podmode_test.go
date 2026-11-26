@@ -280,3 +280,42 @@ func TestParseWorkloadRejects(t *testing.T) {
 		}
 	}
 }
+
+func TestExitAnnotation(t *testing.T) {
+	if v := FormatExit(3, 137); v != "3:137" {
+		t.Errorf("FormatExit %q", v)
+	}
+	if run, code, ok := ParseExit("3:137"); !ok || run != 3 || code != 137 {
+		t.Errorf("ParseExit %d %d %v", run, code, ok)
+	}
+	for _, bad := range []string{"", "3", "x:1", "0:1", "1:x"} {
+		if _, _, ok := ParseExit(bad); ok {
+			t.Errorf("ParseExit(%q) ok", bad)
+		}
+	}
+	for _, tc := range []struct {
+		policy corev1.RestartPolicy
+		code   int
+		want   bool
+	}{
+		{"", 0, true}, {corev1.RestartPolicyAlways, 0, true},
+		{corev1.RestartPolicyOnFailure, 0, false}, {corev1.RestartPolicyOnFailure, 1, true},
+		{corev1.RestartPolicyNever, 1, false},
+	} {
+		if got := Restarts(tc.policy, tc.code); got != tc.want {
+			t.Errorf("Restarts(%q, %d) = %v", tc.policy, tc.code, got)
+		}
+	}
+}
+
+func TestRewriteAddsReadinessGateOnce(t *testing.T) {
+	p := sandboxdPod()
+	p.Spec.ReadinessGates = []corev1.PodReadinessGate{{ConditionType: "example.com/ready"}, {ConditionType: ConditionMicroVMReady}}
+	out, err := Rewrite(p, shim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Spec.ReadinessGates) != 2 {
+		t.Errorf("gates %v", out.Spec.ReadinessGates)
+	}
+}

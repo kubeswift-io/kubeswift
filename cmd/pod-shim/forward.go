@@ -22,12 +22,15 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/kubeswift-io/kubeswift/internal/sandbox/podmode"
 )
 
 const (
 	podShimTargetKey = "podmode.kubeswift.io/target"
 	podShimPoll      = time.Second
 	podShimDial      = 5 * time.Second
+	podShimDrain     = 2 * time.Second
 )
 
 func podShim(args []string) int {
@@ -60,6 +63,10 @@ func podShim(args []string) int {
 		}
 	}
 	refresh()
+	// An exit already recorded when this process started belongs to an
+	// earlier run (the kubelet restarted the shim after it): wait for the
+	// next one.
+	exit0, _ := readAnnotation(annotationsFile, podmode.AnnotationExit)
 	if *logs {
 		go followLogs(ctx, os.Stdout)
 	}
@@ -87,6 +94,12 @@ func podShim(args []string) int {
 			return 0
 		case <-tick.C:
 			refresh()
+			if code, ok := workloadExit(exit0); ok {
+				fmt.Printf("pod-shim: the workload exited with code %d\n", code)
+				// Let the console stream catch up before the container ends.
+				time.Sleep(podShimDrain)
+				return code
+			}
 		}
 	}
 }
@@ -104,6 +117,24 @@ func parsePorts(list string) ([]int, error) {
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+// workloadExit returns the exit code once the controller recorded an exit
+// other than exit0, as a process exit code (0-255; a non-zero code never
+// becomes 0).
+func workloadExit(exit0 string) (int, bool) {
+	v, err := readAnnotation(annotationsFile, podmode.AnnotationExit)
+	if err != nil || v == "" || v == exit0 {
+		return 0, false
+	}
+	_, code, ok := podmode.ParseExit(v)
+	if !ok {
+		return 0, false
+	}
+	if c := code & 0xff; c != 0 || code == 0 {
+		return c, true
+	}
+	return 1, true
 }
 
 // readTarget returns the launcher IP from the target annotation, "" when it
