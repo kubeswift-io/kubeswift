@@ -37,6 +37,7 @@ import (
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/hotplug"
+	"github.com/kubeswift-io/kubeswift/internal/metrics"
 )
 
 // GuestIndex indexes SwiftVolumeAttachments by spec.guestRef.name.
@@ -169,6 +170,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 				return reconcile.Result{}, err
 			}
 			r.event(sva, corev1.EventTypeNormal, "VolumeDetached", "volume %s detached from SwiftGuest %s", sva.Spec.PVCRef.Name, sva.Spec.GuestRef.Name)
+			if sva.DeletionTimestamp != nil {
+				metrics.VolumeDetachSeconds.WithLabelValues(sva.Namespace).Observe(time.Since(sva.DeletionTimestamp.Time).Seconds())
+			}
 			continue
 		}
 		if sva.Status.Phase != swiftv1alpha1.VolumeAttachmentAttached && sva.Status.Phase != swiftv1alpha1.VolumeAttachmentFailed {
@@ -339,6 +343,7 @@ func (r *Reconciler) reconcileOne(
 		if sva.Status.Phase != swiftv1alpha1.VolumeAttachmentAttached {
 			r.event(sva, corev1.EventTypeNormal, "VolumeAttached", "volume %s attached to SwiftGuest %s as virtio serial %s",
 				sva.Spec.PVCRef.Name, sva.Spec.GuestRef.Name, st.Serial)
+			metrics.VolumeAttachSeconds.WithLabelValues(sva.Namespace).Observe(time.Since(sva.CreationTimestamp.Time).Seconds())
 		}
 		setPhase(sva, swiftv1alpha1.VolumeAttachmentAttached, swiftv1alpha1.VolumeAttachmentReasonAttached,
 			fmt.Sprintf("the guest sees the disk as /dev/disk/by-id/virtio-%s", st.Serial))
@@ -372,6 +377,7 @@ func (r *Reconciler) detach(ctx context.Context, sva *swiftv1alpha1.SwiftVolumeA
 		case ok && rep.State == hotplug.StateInUse:
 			if !apimeta.IsStatusConditionTrue(sva.Status.Conditions, swiftv1alpha1.VolumeAttachmentConditionInUse) {
 				r.event(sva, corev1.EventTypeWarning, "DetachBlocked", "the guest still uses the disk: %s", rep.Message)
+				metrics.VolumeDetachBlockedTotal.WithLabelValues(sva.Namespace, "InUse").Inc()
 			}
 			setInUse(sva, metav1.ConditionTrue, swiftv1alpha1.VolumeAttachmentReasonDetachBlocked, rep.Message)
 			msg = "the guest still uses the disk; unmount it in the guest, or set " +
