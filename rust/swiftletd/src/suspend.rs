@@ -96,14 +96,19 @@ impl FileId {
     }
 }
 
-/// The block rootfs in a sandbox's Cloud Hypervisor config: its first disk,
-/// read-only. None for a virtio-fs rootfs.
+/// The node's rootfs image cache (sandbox-materialize --cache-dir).
+const ROOTFS_CACHE: &str = "/var/lib/kubeswift/sandbox-rootfs/";
+
+/// The block rootfs in a sandbox's Cloud Hypervisor config: the disk from
+/// the node's rootfs cache. None for a virtio-fs rootfs, whose only disk is
+/// the config disk.
 fn rootfs_path(info: &serde_json::Value) -> Option<String> {
-    let d = info.pointer("/config/disks/0")?;
-    if d.get("readonly").and_then(|v| v.as_bool()) != Some(true) {
-        return None;
-    }
-    d.get("path").and_then(|v| v.as_str()).map(str::to_string)
+    info.pointer("/config/disks")?
+        .as_array()?
+        .iter()
+        .filter_map(|d| d.get("path").and_then(|v| v.as_str()))
+        .find(|p| p.starts_with(ROOTFS_CACHE))
+        .map(str::to_string)
 }
 
 /// Handle the `suspend` verb.
@@ -500,7 +505,8 @@ mod tests {
             rootfs_path(&block).as_deref(),
             Some("/var/lib/kubeswift/sandbox-rootfs/sha256-ab.ext4")
         );
-        let virtiofs = serde_json::json!({"config": {"disks": [{"path": "/run/exec.config", "readonly": false}]}});
+        // A virtio-fs rootfs: the config disk comes first and is read-only too.
+        let virtiofs = serde_json::json!({"config": {"disks": [{"path": "/run/exec.config", "readonly": true}]}});
         assert_eq!(rootfs_path(&virtiofs), None);
         assert_eq!(rootfs_path(&serde_json::json!({})), None);
     }
