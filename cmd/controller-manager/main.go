@@ -704,10 +704,11 @@ func main() {
 			&webhook.Admission{Handler: &evictionwebhook.Handler{Client: mgr.GetClient()}})
 		klog.InfoS("registered pods/eviction webhook at /validate-pods-eviction")
 		// Pod mode: failurePolicy Fail, scoped by namespace label and a match
-		// condition on the RuntimeClass. No network I/O in the handler.
+		// condition on the RuntimeClass. The handler reads only the cache.
 		if *podModeEnabled {
-			mgr.GetWebhookServer().Register(podmodewebhook.Path,
-				&webhook.Admission{Handler: &podmodewebhook.Handler{ShimImage: podmode.ShimImage}})
+			mgr.GetWebhookServer().Register(podmodewebhook.Path, &webhook.Admission{Handler: &podmodewebhook.Handler{
+				ShimImage: podmode.ShimImage, Reader: mgr.GetClient(), Namespace: *podModeNamespace,
+			}})
 			relay, err := podmodecontroller.NewRelay(mgr.GetAPIReader(), mgr.GetConfig(), *podModeNamespace, podmode.ShimImage)
 			if err != nil {
 				klog.ErrorS(err, "unable to create the pod-mode relay")

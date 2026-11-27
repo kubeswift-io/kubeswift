@@ -46,6 +46,18 @@ const (
 	// LabelUID is the stand-in's UID, on the stand-in (set by the controller)
 	// and on its SwiftSandbox. NetworkPolicies select the stand-in by it.
 	LabelUID = "podmode.kubeswift.io/uid"
+	// LabelSandbox is the name of the stand-in's SwiftSandbox, on the
+	// stand-in (set by the controller): SandboxPrefix plus its UID, or the
+	// suspended microVM of the same agent-sandbox Sandbox it resumed. A
+	// SwiftSandbox's ingress selects its stand-in by it, so it holds across
+	// a suspend.
+	LabelSandbox = "podmode.kubeswift.io/sandbox"
+	// LabelOwnerUID is the UID of the agent-sandbox Sandbox that owns the
+	// stand-in, on a SwiftSandbox suspended for it.
+	LabelOwnerUID = "podmode.kubeswift.io/owner-uid"
+	// AnnotationOwner is "<apiVersion>/<name>" of that Sandbox, on the same
+	// SwiftSandbox.
+	AnnotationOwner = "podmode.kubeswift.io/owner"
 	// LabelStandInNamespace is the stand-in's namespace, on its SwiftSandbox.
 	LabelStandInNamespace = "podmode.kubeswift.io/stand-in-namespace"
 	// AnnotationStandIn is "<namespace>/<name>" of the stand-in, on its

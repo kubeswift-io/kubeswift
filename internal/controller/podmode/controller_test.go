@@ -95,7 +95,7 @@ func TestLinkCreatesSandboxPoliciesAndTarget(t *testing.T) {
 		t.Errorf("sandbox metadata %v %v", sb.Labels, sb.Annotations)
 	}
 	from := sb.Spec.Network.Ingress.From
-	if len(from) != 1 || from[0].PodSelector.MatchLabels[podmode.LabelUID] != uid ||
+	if len(from) != 1 || from[0].PodSelector.MatchLabels[podmode.LabelSandbox] != SandboxPrefix+uid ||
 		from[0].NamespaceSelector.MatchLabels[corev1.LabelMetadataName] != "tenant" {
 		t.Errorf("ingress %+v", from)
 	}

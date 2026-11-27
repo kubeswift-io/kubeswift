@@ -93,7 +93,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	var pod corev1.Pod
 	if err := r.Get(ctx, req.NamespacedName, &pod); err != nil {
 		if apierrors.IsNotFound(err) {
-			_, err := r.deleteSandboxes(ctx, req.Namespace, req.Name, "")
+			_, held, err := r.deleteSandboxes(ctx, req.Namespace, req.Name, "")
+			if err == nil && held > 0 {
+				// A microVM suspended for an agent-sandbox Sandbox: kept
+				// while the Sandbox exists.
+				return ctrl.Result{RequeueAfter: suspendRecheck}, nil
+			}
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, err
@@ -104,6 +109,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	done := pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
 	if pod.DeletionTimestamp != nil || done {
+		if !done {
+			if res, handled, err := r.suspend(ctx, &pod); handled {
+				return res, err
+			}
+		}
 		return r.release(ctx, &pod)
 	}
 	if !podmode.ShapeOK(&pod, r.ShimImage()) {
@@ -129,19 +139,29 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, nil
 		}
 	}
-	if !controllerutil.ContainsFinalizer(&pod, podmode.Finalizer) || pod.Labels[podmode.LabelUID] != string(pod.UID) {
+	sbName, err := r.sandboxNameFor(ctx, &pod)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !controllerutil.ContainsFinalizer(&pod, podmode.Finalizer) || pod.Labels[podmode.LabelUID] != string(pod.UID) ||
+		pod.Labels[podmode.LabelSandbox] != sbName {
 		patch := client.MergeFrom(pod.DeepCopy())
 		controllerutil.AddFinalizer(&pod, podmode.Finalizer)
 		if pod.Labels == nil {
 			pod.Labels = map[string]string{}
 		}
 		pod.Labels[podmode.LabelUID] = string(pod.UID)
+		pod.Labels[podmode.LabelSandbox] = sbName
 		if err := r.Patch(ctx, &pod, patch); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
+	// The suspended microVM of the same agent-sandbox Sandbox, if any.
+	if err := r.adopt(ctx, &pod); err != nil {
+		return ctrl.Result{}, err
+	}
 	// A SwiftSandbox left by an earlier Pod of the same name.
-	if _, err := r.deleteSandboxes(ctx, pod.Namespace, pod.Name, pod.UID); err != nil {
+	if _, _, err := r.deleteSandboxes(ctx, pod.Namespace, pod.Name, pod.UID); err != nil {
 		return ctrl.Result{}, err
 	}
 	if pod.Spec.NodeName == "" {
@@ -160,7 +180,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// was removed by someone else; only a restart starts a new run.
 	if run, code, ok := podmode.ParseExit(pod.Annotations[podmode.AnnotationExit]); ok && run == RunOf(&pod) {
 		var cur sandboxv1alpha1.SwiftSandbox
-		err := r.Get(ctx, types.NamespacedName{Namespace: r.Namespace, Name: SandboxName(&pod)}, &cur)
+		err := r.Get(ctx, types.NamespacedName{Namespace: r.Namespace, Name: SandboxOf(&pod)}, &cur)
 		if apierrors.IsNotFound(err) {
 			return r.afterExit(ctx, &pod, nil, code)
 		}
@@ -188,6 +208,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// A microVM of another run (the controller restarted between
 		// numbering the run and deleting the old one).
 		return ctrl.Result{RequeueAfter: deleteRequeue}, client.IgnoreNotFound(r.Delete(ctx, sb))
+	}
+	if sb.Name != SandboxName(&pod) {
+		// A suspended microVM this stand-in claimed.
+		if res, done, err := r.resume(ctx, &pod, sb); done {
+			return res, err
+		}
 	}
 	switch sb.Status.Phase {
 	case sandboxv1alpha1.SwiftSandboxCompleted, sandboxv1alpha1.SwiftSandboxFailed:
@@ -336,7 +362,7 @@ func (r *Reconciler) setReady(ctx context.Context, pod *corev1.Pod, ready bool, 
 // release deletes the stand-in's SwiftSandbox and drops the finalizer once it
 // is gone (with its launcher: the SwiftSandbox holds its own finalizers).
 func (r *Reconciler) release(ctx context.Context, pod *corev1.Pod) (ctrl.Result, error) {
-	remaining, err := r.deleteSandboxes(ctx, pod.Namespace, pod.Name, "")
+	remaining, _, err := r.deleteSandboxes(ctx, pod.Namespace, pod.Name, "")
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -355,14 +381,15 @@ func (r *Reconciler) release(ctx context.Context, pod *corev1.Pod) (ctrl.Result,
 }
 
 // deleteSandboxes deletes the SwiftSandboxes of the stand-in namespace/name,
-// except the one of UID keep, and returns how many still exist.
-func (r *Reconciler) deleteSandboxes(ctx context.Context, namespace, name string, keep types.UID) (int, error) {
+// except the one of UID keep and those held for a suspended agent-sandbox
+// Sandbox, and returns how many still exist besides those and how many are
+// held.
+func (r *Reconciler) deleteSandboxes(ctx context.Context, namespace, name string, keep types.UID) (remaining, held int, err error) {
 	var list sandboxv1alpha1.SwiftSandboxList
 	if err := r.List(ctx, &list, client.InNamespace(r.Namespace),
 		client.MatchingLabels{podmode.LabelStandInNamespace: namespace}); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	remaining := 0
 	for i := range list.Items {
 		sb := &list.Items[i]
 		if sb.Annotations[podmode.AnnotationStandIn] != namespace+"/"+name {
@@ -371,17 +398,25 @@ func (r *Reconciler) deleteSandboxes(ctx context.Context, namespace, name string
 		if keep != "" && sb.Labels[podmode.LabelUID] == string(keep) {
 			continue
 		}
+		ok, err := r.held(ctx, sb)
+		if err != nil {
+			return 0, 0, err
+		}
+		if ok {
+			held++
+			continue
+		}
 		remaining++
 		if sb.DeletionTimestamp == nil {
 			if err := r.Delete(ctx, sb); client.IgnoreNotFound(err) != nil {
-				return 0, err
+				return 0, 0, err
 			}
 		}
 		if err := r.deleteConfigSecret(ctx, sb.Name); err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 	}
-	return remaining, nil
+	return remaining, held, nil
 }
 
 func (r *Reconciler) namespaceOptedIn(ctx context.Context, name string) (bool, error) {
@@ -397,7 +432,7 @@ func (r *Reconciler) namespaceOptedIn(ctx context.Context, name string) (bool, e
 // was at admission, and the workload annotation cannot change afterwards.
 func (r *Reconciler) ensureSandbox(ctx context.Context, pod *corev1.Pod, wl *podmode.Workload) (*sandboxv1alpha1.SwiftSandbox, error) {
 	var sb sandboxv1alpha1.SwiftSandbox
-	key := types.NamespacedName{Namespace: r.Namespace, Name: SandboxName(pod)}
+	key := types.NamespacedName{Namespace: r.Namespace, Name: SandboxOf(pod)}
 	err := r.Get(ctx, key, &sb)
 	if err == nil || !apierrors.IsNotFound(err) {
 		return &sb, err
@@ -511,7 +546,7 @@ func cfgFiles(cfg *Config) []sandboxv1alpha1.SandboxSecretFile {
 func standInPeer(pod *corev1.Pod) networkingv1.NetworkPolicyPeer {
 	return networkingv1.NetworkPolicyPeer{
 		NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{corev1.LabelMetadataName: pod.Namespace}},
-		PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{podmode.LabelUID: string(pod.UID)}},
+		PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{podmode.LabelSandbox: SandboxName(pod)}},
 	}
 }
 
@@ -545,7 +580,7 @@ func EgressPolicyFor(pod *corev1.Pod, wl *podmode.Workload, namespace string, re
 	}
 	rule := networkingv1.NetworkPolicyEgressRule{To: []networkingv1.NetworkPolicyPeer{{
 		NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{corev1.LabelMetadataName: namespace}},
-		PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{swiftsandbox.SandboxLabelKey: SandboxName(pod)}},
+		PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{swiftsandbox.SandboxLabelKey: SandboxOf(pod)}},
 	}}}
 	for _, p := range wl.Ports {
 		port := intstr.FromInt32(p.Port)
