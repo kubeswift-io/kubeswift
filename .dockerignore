@@ -1,0 +1,21 @@
+# Build context for `docker build -f images/<name>/Containerfile .`
+# None of the Containerfiles COPY these; without this file every image
+# build sends the whole repo (~50GB) to the builder.
+
+# Kernel/rootfs build trees and outputs
+build/
+
+# Local build outputs
+bin/
+rust/target/
+**/target/
+
+# Stray local binaries and dirs at the repo root
+/kubeswift-guest-agent
+/pod-shim
+/sandbox-materialize
+/,nested=on/
+
+# VCS and editor/tooling state
+.git/
+.wolf/
