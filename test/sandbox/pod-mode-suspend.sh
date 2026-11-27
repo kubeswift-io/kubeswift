@@ -114,7 +114,7 @@ validate() {
 	[ "$(kubectl -n "$NS" get pod a -o jsonpath='{.spec.nodeName}')" = "$node" ] || die "the new Pod is not on $node"
 	[ "$(sb "$vm" '{.status.conditions[?(@.type=="Suspended")].reason}')" = Resumed ] ||
 		die "SwiftSandbox $vm condition $(sb "$vm" '{.status.conditions[?(@.type=="Suspended")].reason}')"
-	[ "$(kubectl -n "$NS" exec a -- cat /tmp/marker)" = kept ] || die "the file written before the suspend is gone"
+	[ "$(kubectl -n "$NS" exec a -- sh -c 'cat /tmp/marker')" = kept ] || die "the file written before the suspend is gone"
 	sleep 3
 	c2=$(last_tick a)
 	[ -n "$c2" ] || die "no TICK in the logs of a after the resume"
