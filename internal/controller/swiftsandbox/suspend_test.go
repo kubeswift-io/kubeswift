@@ -458,4 +458,9 @@ func TestResume_RestoreErrorIsReported(t *testing.T) {
 	if got := restoreError(pod); got != "" {
 		t.Errorf("ok report gave %q", got)
 	}
+	// A guest that runs but was not synced is not a failed restore.
+	pod.Annotations[annResumed] = `{"ok":false,"error":"the guest agent did not answer"}`
+	if got := restoreError(pod); got != "" {
+		t.Errorf("sync failure read as a restore failure: %q", got)
+	}
 }

@@ -473,8 +473,15 @@ func restoreError(pod *corev1.Pod) string {
 	if raw, ok := pod.Annotations[annResumed]; !ok || json.Unmarshal([]byte(raw), &res) != nil || res.OK {
 		return ""
 	}
+	// swiftletd prefixes a restore that never started the guest; anything
+	// else is a guest that runs but was not synced.
+	if !strings.HasPrefix(res.Error, restoreErrorPrefix) {
+		return ""
+	}
 	return res.Error
 }
+
+const restoreErrorPrefix = "restore: "
 
 // finishResume: the restored sandbox runs; the saved state is gone (swiftletd
 // removes it once the guest is synced), so nothing on the node is left to clean.

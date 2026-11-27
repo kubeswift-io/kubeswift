@@ -662,6 +662,12 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 		// A restored guest runs once its clock and entropy are reset (or the
 		// launcher says it could not, or never says).
 		if resuming(sb) {
+			// The restore never started the guest: the saved state stays
+			// (and its cleanup finalizer), the sandbox fails.
+			if msg := restoreError(pod); msg != "" {
+				_ = r.Delete(ctx, pod)
+				return r.snapshotLost(ctx, sb, "the restore failed: "+msg)
+			}
 			if !r.resumeSettled(sb, pod) {
 				return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxResuming, "waiting for the restored guest's clock sync")
 			}

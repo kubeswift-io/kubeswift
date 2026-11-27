@@ -299,7 +299,7 @@ const RESUME_SYNC_WINDOW: std::time::Duration = std::time::Duration::from_secs(6
 
 /// After a restore: sets the guest's clock and adds host entropy through its
 /// agent (resume-sync), reports the result on the pod, and removes the
-/// snapshot once synced, so it is restored only once.
+/// snapshot, so it is restored only once.
 pub fn spawn_resume_sync(vsock: std::path::PathBuf, snapshot_dir: String) {
     let spawned = std::thread::Builder::new()
         .name("resume-sync".into())
@@ -340,10 +340,11 @@ pub fn spawn_resume_sync(vsock: std::path::PathBuf, snapshot_dir: String) {
                 result.clock_offset_ms,
                 result.error
             );
-            if result.ok {
-                if let Err(e) = std::fs::remove_dir_all(&snapshot_dir) {
-                    log::warn!("resume_sync: remove {}: {}", snapshot_dir, e);
-                }
+            // Cloud Hypervisor restored the guest in copy mode: its memory is
+            // in the hypervisor now, so the saved state is done with, synced
+            // or not (the controller drops its cleanup finalizer either way).
+            if let Err(e) = std::fs::remove_dir_all(&snapshot_dir) {
+                log::warn!("resume_sync: remove {}: {}", snapshot_dir, e);
             }
             let json = serde_json::to_string(&result).unwrap_or_default();
             if let (Ok(ns), Ok(n)) = (std::env::var("POD_NAMESPACE"), std::env::var("POD_NAME")) {
