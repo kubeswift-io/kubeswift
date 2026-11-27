@@ -111,7 +111,7 @@ The guest keeps its name and spec; only its root disk goes back to the snapshot.
 
 1. `Restoring`: the new PVC is created and bound while the guest keeps running. Then the guest is stopped (annotation `snapshot.kubeswift.io/disk-restore` holds it, so nothing restarts it from either disk) and the swap is made.
 2. `Resuming`: the guest boots from the restored disk.
-3. `Ready`: once the guest runs, the PVC it had before is deleted.
+3. `Ready`: once the guest runs, the PVC it had before is deleted, unless VolumeSnapshots were taken from it. Then it is kept with label `swift.kubeswift.io/role=root-disk-retired` and deleted once the last of them is gone: some CSI drivers (Longhorn) keep a snapshot inside its source volume, so deleting the PVC would destroy the snapshots, this restore's own among them. The guest controller checks on its reconciles; the guest deletes it at the latest.
 
 The previous PVC is kept until `Ready`. If the guest fails to start from the restored disk, the restore fails, the new PVC is deleted and the guest boots from its previous disk again. `status.rootDisk` names both PVCs.
 

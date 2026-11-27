@@ -695,6 +695,9 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 		rootDiskClone = res
 		// Override the PVC name to use the clone instead of the shared image PVC.
 		rg.PreparedImage.PVCName = res.PVCName
+		if err := r.gcRetiredRootDisks(ctx, &guest); err != nil {
+			logger.Error(err, "cleaning up retired root disks")
+		}
 	}
 
 	// Blank data disks: provision the guest-owned PVCs (and fill Filesystem

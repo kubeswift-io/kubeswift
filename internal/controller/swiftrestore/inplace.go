@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -296,18 +297,31 @@ func (r *SwiftRestoreReconciler) handleResumingCSIInPlace(
 		return false, 5 * time.Second, nil
 	}
 
+	kept := ""
 	if rd.PreviousClaimName != "" && rd.PreviousClaimName != rd.ClaimName {
 		var prev corev1.PersistentVolumeClaim
 		err := r.Get(ctx, client.ObjectKey{Name: rd.PreviousClaimName, Namespace: restore.Namespace}, &prev)
 		if err == nil && metav1.IsControlledBy(&prev, &guest) {
-			if err := r.Delete(ctx, &prev); err != nil && !apierrors.IsNotFound(err) {
-				return false, 0, fmt.Errorf("delete replaced root disk %s: %w", prev.Name, err)
-			}
 			// A finished pod still pins a PVC it mounts (pvc-protection), so
 			// the guest's own Jobs that filled the replaced disk (the image
-			// clone Job) go with it.
+			// clone Job) go first.
 			if err := r.deleteFinishedDiskJobs(ctx, &guest, prev.Name); err != nil {
 				return false, 0, err
+			}
+			snaps, err := rootdisk.SnapshotsOf(ctx, r.Client, restore.Namespace, prev.Name)
+			if err != nil {
+				return false, 0, err
+			}
+			if len(snaps) > 0 {
+				// Some drivers keep a snapshot inside its source volume:
+				// deleting the PVC would destroy the snapshots taken from
+				// it, this restore's own among them.
+				if err := r.retireRootDisk(ctx, &prev, guest.Name); err != nil {
+					return false, 0, err
+				}
+				kept = fmt.Sprintf("; %s kept until the VolumeSnapshots taken from it (%s) are deleted", prev.Name, strings.Join(snaps, ", "))
+			} else if err := r.Delete(ctx, &prev); err != nil && !apierrors.IsNotFound(err) {
+				return false, 0, fmt.Errorf("delete replaced root disk %s: %w", prev.Name, err)
 			}
 		} else if err != nil && !apierrors.IsNotFound(err) {
 			return false, 0, err
@@ -317,7 +331,7 @@ func (r *SwiftRestoreReconciler) handleResumingCSIInPlace(
 	status.CompletedAt = &now
 	setPhase(status, snapshotv1alpha1.SwiftRestorePhaseReady)
 	setReadyCondition(status, metav1.ConditionTrue, ReasonRestoreReady,
-		"SwiftGuest "+guest.Name+" runs from the restored root disk "+rd.ClaimName+"; "+rd.PreviousClaimName+" deleted")
+		readyMessage(guest.Name, rd, kept))
 	return true, 0, nil
 }
 
@@ -488,6 +502,34 @@ func (r *SwiftRestoreReconciler) setDiskRestoreAnnotation(ctx context.Context, g
 		return err
 	}
 	return r.Patch(ctx, guest, client.RawPatch(types.MergePatchType, data))
+}
+
+// readyMessage says what a Ready in-place restore did with the replaced disk.
+func readyMessage(guest string, rd *snapshotv1alpha1.SwiftRestoreRootDisk, kept string) string {
+	msg := "SwiftGuest " + guest + " runs from the restored root disk " + rd.ClaimName
+	if kept != "" {
+		return msg + kept
+	}
+	return msg + "; " + rd.PreviousClaimName + " deleted"
+}
+
+// retireRootDisk marks a replaced root disk retired: no longer any guest's
+// root disk, kept while VolumeSnapshots taken from it exist. The guest still
+// controls it, so it goes with the guest at the latest.
+func (r *SwiftRestoreReconciler) retireRootDisk(ctx context.Context, pvc *corev1.PersistentVolumeClaim, guest string) error {
+	if pvc.Labels[rootdisk.LabelRole] == rootdisk.RoleRetired && pvc.Labels[rootdisk.LabelGuest] == guest {
+		return nil
+	}
+	base := pvc.DeepCopy()
+	if pvc.Labels == nil {
+		pvc.Labels = map[string]string{}
+	}
+	pvc.Labels[rootdisk.LabelRole] = rootdisk.RoleRetired
+	pvc.Labels[rootdisk.LabelGuest] = guest
+	if err := r.Patch(ctx, pvc, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("retire root disk %s: %w", pvc.Name, err)
+	}
+	return nil
 }
 
 // deleteFinishedDiskJobs deletes the guest's Jobs whose finished pods mount

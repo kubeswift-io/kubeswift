@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	volumesnapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -135,5 +136,37 @@ func TestRootDiskStale(t *testing.T) {
 	}
 	if stale, err := r.rootDiskStale(context.Background(), guest, "swiftguest-root-vm-g1"); err != nil || stale {
 		t.Errorf("current claim: stale=%v err=%v, want not stale", stale, err)
+	}
+}
+
+// A retired root disk goes once no VolumeSnapshot was taken from it; one
+// that still has a snapshot stays.
+func TestGCRetiredRootDisks(t *testing.T) {
+	scheme := rootdiskScheme(t)
+	if err := volumesnapshotv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	guest := generationGuest()
+	retired := func(name string) *corev1.PersistentVolumeClaim {
+		p := genRootPVC(guest, name, "")
+		p.Labels[rootdisk.LabelRole] = rootdisk.RoleRetired
+		return p
+	}
+	src := "swiftguest-root-vm-g1"
+	vs := &volumesnapshotv1.VolumeSnapshot{
+		ObjectMeta: metav1.ObjectMeta{Name: "vs", Namespace: "ns"},
+		Spec:       volumesnapshotv1.VolumeSnapshotSpec{Source: volumesnapshotv1.VolumeSnapshotSource{PersistentVolumeClaimName: &src}},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, retired("swiftguest-root-vm"), retired(src), vs).Build()
+	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
+	if err := r.gcRetiredRootDisks(context.Background(), guest); err != nil {
+		t.Fatal(err)
+	}
+	var pvc corev1.PersistentVolumeClaim
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "swiftguest-root-vm", Namespace: "ns"}, &pvc); err == nil {
+		t.Error("retired disk without snapshots kept")
+	}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: src, Namespace: "ns"}, &pvc); err != nil {
+		t.Errorf("retired disk with a snapshot deleted: %v", err)
 	}
 }

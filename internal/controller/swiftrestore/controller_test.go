@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	volumesnapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -42,6 +43,9 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	metav1.AddToGroupVersion(s, gvSnap)
 	metav1.AddToGroupVersion(s, gvSwift)
 	metav1.AddToGroupVersion(s, gvMig)
+	if err := volumesnapshotv1.AddToScheme(s); err != nil {
+		t.Fatalf("volumesnapshot scheme: %v", err)
+	}
 	return s
 }
 

@@ -61,6 +61,36 @@ func (r *SwiftGuestReconciler) guestRootPVCName(ctx context.Context, namespace, 
 	return name, err
 }
 
+// gcRetiredRootDisks deletes the guest's retired root disks that no
+// VolumeSnapshot was taken from any more. An in-place restore retires the disk
+// it replaced instead of deleting it while snapshots of it exist: some CSI
+// drivers keep a snapshot inside its source volume.
+func (r *SwiftGuestReconciler) gcRetiredRootDisks(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) error {
+	var list corev1.PersistentVolumeClaimList
+	if err := r.List(ctx, &list, client.InNamespace(guest.Namespace),
+		client.MatchingLabels{rootdisk.LabelGuest: guest.Name, rootdisk.LabelRole: rootdisk.RoleRetired}); err != nil {
+		return err
+	}
+	for i := range list.Items {
+		pvc := &list.Items[i]
+		if pvc.DeletionTimestamp != nil || !metav1.IsControlledBy(pvc, guest) {
+			continue
+		}
+		snaps, err := rootdisk.SnapshotsOf(ctx, r.Client, guest.Namespace, pvc.Name)
+		if err != nil {
+			return err
+		}
+		if len(snaps) > 0 {
+			continue
+		}
+		if err := r.Delete(ctx, pvc); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("delete retired root disk %s: %w", pvc.Name, err)
+		}
+		log.FromContext(ctx).Info("deleted retired root disk: no VolumeSnapshot names it any more", "pvc", pvc.Name)
+	}
+	return nil
+}
+
 // CloneJobName returns the deterministic clone Job name for a guest.
 func CloneJobName(guestName string) string {
 	return names.JobName(CloneJobPrefix+guestName, "")

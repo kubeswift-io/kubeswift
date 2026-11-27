@@ -5,11 +5,13 @@
 # Checks, on a cluster with a snapshot-capable CSI driver:
 #   - a file written before the snapshot is back after the restore, and one
 #     written after it is gone;
-#   - the guest runs from swiftguest-root-<guest>-g1, and the PVC it had before
-#     is deleted only once the restore is Ready;
+#   - the guest runs from swiftguest-root-<guest>-g1; the PVC it had before is
+#     kept, retired, because the snapshot was taken from it (some drivers keep
+#     a snapshot inside its source volume);
 #   - a snapshot taken after the swap captures the swapped-in PVC;
 #   - a second rollback goes to generation 2 and deletes generation 1;
-#   - a launcher restart keeps the restored disk.
+#   - a launcher restart keeps the restored disk;
+#   - once the snapshots are deleted, the retired disks are deleted.
 #
 # Requires: kubectl; KubeSwift with CRDs; a disk-boot SwiftImage and a
 # SwiftGuestClass in $NAMESPACE; an SSH key whose public half goes into the
@@ -100,6 +102,7 @@ ssh_ready() { guest_exec "$GUEST" true; }
 restore_ready() { [ "$(k get swiftrestore "$1" -o jsonpath='{.status.phase}')" = Ready ]; }
 snap_ready() { [ "$(k get swiftsnapshot "$1" -o jsonpath='{.status.phase}')" = Ready ]; }
 pvc_gone() { ! k get pvc "$1"; }
+retired() { [ "$(k get pvc "$1" -o jsonpath='{.metadata.labels.swift\.kubeswift\.io/role}')" = root-disk-retired ]; }
 launcher_claim() {
   local pod
   pod=$(k get swiftguest "$GUEST" -o jsonpath='{.status.podRef.name}')
@@ -171,11 +174,11 @@ log "r1 Ready after $((SECONDS - start))s"
 gen1="swiftguest-root-$GUEST-g1"
 [ "$(k get swiftrestore ${GUEST}-r1 -o jsonpath='{.status.rootDisk.claimName}')" = "$gen1" ] || die "status.rootDisk.claimName"
 [ "$(launcher_claim)" = "$gen1" ] || die "launcher mounts $(launcher_claim), want $gen1"
-until_ok 120 "previous root disk $gen0 deleted" pvc_gone "$gen0"
+retired "$gen0" || die "$gen0 is not retired (s1 was taken from it)"
 until_ok "$TIMEOUT" "guest reachable after the rollback" ssh_ready
 [ "$(marker)" = before ] || die "marker is '$(marker)' after the rollback, want 'before'"
 [ -z "$(k get swiftguest $GUEST -o jsonpath='{.metadata.annotations.snapshot\.kubeswift\.io/disk-restore}')" ] || die "guest still held"
-log "rolled back: marker 'before', root disk $gen1, $gen0 deleted"
+log "rolled back: marker 'before', root disk $gen1, $gen0 retired"
 
 log "a snapshot after the swap captures $gen1"
 guest_exec "$GUEST" 'echo after2 | sudo tee /var/lib/ks-marker >/dev/null && sync'
@@ -189,16 +192,20 @@ restore ${GUEST}-r2 ${GUEST}-s1
 until_ok "$TIMEOUT" "restore r2 Ready" restore_ready ${GUEST}-r2
 gen2="swiftguest-root-$GUEST-g2"
 [ "$(launcher_claim)" = "$gen2" ] || die "launcher mounts $(launcher_claim), want $gen2"
-until_ok 120 "generation 1 deleted" pvc_gone "$gen1"
+retired "$gen1" || die "$gen1 is not retired (s2 was taken from it)"
 until_ok "$TIMEOUT" "guest reachable after the second rollback" ssh_ready
 [ "$(marker)" = before ] || die "marker is '$(marker)' after the second rollback"
 
-log "a launcher restart keeps $gen2"
+log "deleting the snapshots frees the retired disks; a launcher restart keeps $gen2"
+k delete swiftsnapshot ${GUEST}-s1 ${GUEST}-s2 --wait=true --timeout=180s >/dev/null
+vs_gone() { [ -z "$(k get volumesnapshot -o name | grep "swift-snap-${GUEST}-")" ]; }
+until_ok 180 "VolumeSnapshots deleted" vs_gone
 pod=$(k get swiftguest "$GUEST" -o jsonpath='{.status.podRef.name}')
 k delete pod "${pod:-$GUEST}" --wait=true >/dev/null
 until_ok "$TIMEOUT" "guest reachable after the restart" ssh_ready
 [ "$(launcher_claim)" = "$gen2" ] || die "after restart the launcher mounts $(launcher_claim)"
 [ "$(marker)" = before ] || die "marker is '$(marker)' after the restart"
-k get pvc "$gen0" >/dev/null 2>&1 && die "$gen0 was recreated"
+until_ok 180 "retired $gen0 deleted" pvc_gone "$gen0"
+until_ok 180 "retired $gen1 deleted" pvc_gone "$gen1"
 
 log "PASS: in-place rollback restores the disk and keeps the guest"

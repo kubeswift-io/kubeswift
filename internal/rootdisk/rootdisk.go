@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strconv"
 
+	volumesnapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,6 +33,12 @@ const (
 	LabelRole = "swift.kubeswift.io/role"
 	// RoleRootDisk is LabelRole's value on a root-disk PVC.
 	RoleRootDisk = "root-disk"
+	// RoleRetired is LabelRole's value on a root-disk PVC an in-place restore
+	// replaced but could not delete yet: VolumeSnapshots were taken from it,
+	// and some CSI drivers (Longhorn) keep a snapshot inside its source
+	// volume, so deleting the PVC would destroy them. The guest controller
+	// deletes it once no VolumeSnapshot names it.
+	RoleRetired = "root-disk-retired"
 	// AnnotationGeneration is the generation (1, 2, ...) of a root-disk PVC an
 	// in-place restore created. The generation-0 PVC does not carry it.
 	AnnotationGeneration = "swift.kubeswift.io/root-disk-generation"
@@ -93,4 +100,20 @@ func Claim(ctx context.Context, r client.Reader, guest metav1.Object) (string, i
 	}
 	name, gen := Select(guest, list.Items)
 	return name, gen, nil
+}
+
+// SnapshotsOf returns the names of the VolumeSnapshots in namespace taken from
+// PVC claim.
+func SnapshotsOf(ctx context.Context, r client.Reader, namespace, claim string) ([]string, error) {
+	var list volumesnapshotv1.VolumeSnapshotList
+	if err := r.List(ctx, &list, client.InNamespace(namespace)); err != nil {
+		return nil, fmt.Errorf("list VolumeSnapshots in %s: %w", namespace, err)
+	}
+	var out []string
+	for i := range list.Items {
+		if src := list.Items[i].Spec.Source.PersistentVolumeClaimName; src != nil && *src == claim {
+			out = append(out, list.Items[i].Name)
+		}
+	}
+	return out, nil
 }

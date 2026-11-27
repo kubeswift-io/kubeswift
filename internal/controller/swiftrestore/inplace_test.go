@@ -2,9 +2,11 @@ package swiftrestore
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	volumesnapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -395,5 +397,44 @@ func TestInPlaceCSI_ResumingReleasesALeftoverHold(t *testing.T) {
 	reconcile(t, r, "r1", "default")
 	if getGuest(t, c).Annotations[snapshotv1alpha1.AnnotationDiskRestore] != "other" {
 		t.Error("removed another restore's hold")
+	}
+}
+
+// A VolumeSnapshot taken from the replaced disk keeps it: some drivers
+// (Longhorn) keep a snapshot inside its source volume, so deleting the PVC
+// would destroy the snapshot, and a second rollback to it could never bind.
+func TestInPlaceCSI_ReplacedDiskWithSnapshotsIsRetired(t *testing.T) {
+	_, objs := inPlaceFixture()
+	src := "swiftguest-root-g1"
+	vs := &volumesnapshotv1.VolumeSnapshot{
+		ObjectMeta: metav1.ObjectMeta{Name: "vs1", Namespace: "default"},
+		Spec:       volumesnapshotv1.VolumeSnapshotSpec{Source: volumesnapshotv1.VolumeSnapshotSource{PersistentVolumeClaimName: &src}},
+	}
+	r, c := newReconciler(t, append(objs, vs)...)
+	swapToResuming(t, r, c)
+	started := time.Now()
+	if err := c.Create(context.Background(), launcherPod("g1", "swiftguest-root-g1-g1", started)); err != nil {
+		t.Fatal(err)
+	}
+	g := getGuest(t, c)
+	g.Status.Conditions = []metav1.Condition{{Type: conditionGuestRunning, Status: metav1.ConditionTrue, Reason: "VmRunning",
+		LastTransitionTime: metav1.NewTime(started.Add(time.Second))}}
+	if err := c.Update(context.Background(), g); err != nil {
+		t.Fatal(err)
+	}
+	reconcile(t, r, "r1", "default")
+	got := get(t, c, "r1", "default")
+	if got.Status.Phase != snapshotv1alpha1.SwiftRestorePhaseReady {
+		t.Fatalf("phase = %s", got.Status.Phase)
+	}
+	var pvc corev1.PersistentVolumeClaim
+	if err := c.Get(context.Background(), client.ObjectKey{Name: src, Namespace: "default"}, &pvc); err != nil {
+		t.Fatalf("replaced disk deleted although a VolumeSnapshot was taken from it: %v", err)
+	}
+	if pvc.Labels[rootdisk.LabelRole] != rootdisk.RoleRetired || pvc.Labels[rootdisk.LabelGuest] != "g1" {
+		t.Errorf("labels = %v, want retired for g1", pvc.Labels)
+	}
+	if msg := msgOrEmpty(findReady(got)); !strings.Contains(msg, "kept until the VolumeSnapshots taken from it (vs1)") {
+		t.Errorf("Ready message = %q", msg)
 	}
 }
