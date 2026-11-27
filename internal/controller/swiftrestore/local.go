@@ -158,8 +158,8 @@ func (r *SwiftRestoreReconciler) diskDivergence(
 		return "", nil
 	}
 	holds := "holds memory only"
-	instead := "A disk-consistent copy can only go to a new SwiftGuest: restore a csi-volume-snapshot of " +
-		guest.Name + " under a new name, while " + guest.Name + " still exists"
+	instead := "For a disk-consistent rollback, restore a csi-volume-snapshot of " + guest.Name +
+		" (in place with targetGuest.overwriteExisting=true, or under a new name)"
 	if snap.Spec.IncludeDisk {
 		holds = "carries the disk it was captured with, but an in-place restore reopens the guest's live disk"
 		instead = "To resume it with the disk it was captured with, clone it into a new SwiftGuest (spec.cloneFromSnapshot)"

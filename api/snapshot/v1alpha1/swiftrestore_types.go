@@ -53,6 +53,13 @@ type SwiftRestoreTarget struct {
 // Without this annotation that restore fails with reason DiskDiverged.
 const AnnotationAcceptDiskDivergence = "snapshot.kubeswift.io/accept-disk-divergence"
 
+// AnnotationDiskRestore is set on a SwiftGuest by an in-place
+// csi-volume-snapshot restore to the SwiftRestore's name while it swaps the
+// guest's root disk. The SwiftGuest controller starts no launcher for the guest
+// while that SwiftRestore exists and has not finished, so nothing boots the
+// guest from either disk mid-swap.
+const AnnotationDiskRestore = "snapshot.kubeswift.io/disk-restore"
+
 // IdentityRegenerationItem names a guest-identity attribute to regenerate
 // when the snapshot is cloned into a new VM.
 // +kubebuilder:validation:Enum=hostname;machineId;sshHostKeys;macAddresses
@@ -137,6 +144,25 @@ type SwiftRestoreStatus struct {
 	// byte report. Absent for local/csi restores (no download step).
 	// +optional
 	DownloadedBytes int64 `json:"downloadedBytes,omitempty"`
+
+	// RootDisk is the root-disk swap of an in-place csi-volume-snapshot
+	// restore: the PVC seeded from the snapshot, and the PVC it replaces. The
+	// replaced PVC is kept until the restore is Ready, and the guest goes back
+	// to it if the restore fails after the swap.
+	// +optional
+	RootDisk *SwiftRestoreRootDisk `json:"rootDisk,omitempty"`
+}
+
+// SwiftRestoreRootDisk records an in-place root-disk swap.
+type SwiftRestoreRootDisk struct {
+	// ClaimName is the root-disk PVC seeded from the snapshot.
+	ClaimName string `json:"claimName"`
+	// PreviousClaimName is the guest's root-disk PVC before the restore,
+	// deleted once the restore is Ready.
+	PreviousClaimName string `json:"previousClaimName"`
+	// Switched is true once the guest uses ClaimName.
+	// +optional
+	Switched bool `json:"switched,omitempty"`
 }
 
 // SwiftRestore restores a SwiftSnapshot into a new (or existing) SwiftGuest.

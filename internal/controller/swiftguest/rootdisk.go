@@ -17,6 +17,7 @@ import (
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
+	"github.com/kubeswift-io/kubeswift/internal/rootdisk"
 )
 
 var swiftGuestGVK = schema.GroupVersionKind{
@@ -26,7 +27,7 @@ var swiftGuestGVK = schema.GroupVersionKind{
 }
 
 const (
-	RootDiskPVCPrefix       = "swiftguest-root-"
+	RootDiskPVCPrefix       = rootdisk.Prefix
 	CloneJobPrefix          = "swiftguest-rootclone-"
 	ConditionRootDiskCloned = "RootDiskCloned"
 
@@ -38,9 +39,26 @@ const (
 	RestoreSeededLabel = "swift.kubeswift.io/restore-seeded"
 )
 
-// RootDiskCloneName returns the deterministic clone PVC name for a guest.
+// RootDiskCloneName returns the generation-0 root-disk PVC name of a guest:
+// the PVC a new guest gets. An existing guest's current root disk may be a
+// later generation after an in-place restore; resolve it with rootdisk.Claim.
 func RootDiskCloneName(guestName string) string {
-	return RootDiskPVCPrefix + guestName
+	return rootdisk.DefaultName(guestName)
+}
+
+// guestRootPVCName returns the current root-disk PVC name of another guest in
+// namespace, such as a snapshot's source: a later generation after an in-place
+// restore (#711), or the generation-0 name when the guest is gone.
+func (r *SwiftGuestReconciler) guestRootPVCName(ctx context.Context, namespace, guestName string) (string, error) {
+	var g swiftv1alpha1.SwiftGuest
+	if err := r.Get(ctx, client.ObjectKey{Name: guestName, Namespace: namespace}, &g); err != nil {
+		if errors.IsNotFound(err) {
+			return RootDiskCloneName(guestName), nil
+		}
+		return "", err
+	}
+	name, _, err := rootdisk.Claim(ctx, r.Client, &g)
+	return name, err
 }
 
 // CloneJobName returns the deterministic clone Job name for a guest.
@@ -104,6 +122,22 @@ func (r *SwiftGuestReconciler) EnsureRootDiskClone(
 	if rg != nil && rg.SharedBaseDisk {
 		return nil, fmt.Errorf("internal: shared-base guest %s/%s reached EnsureRootDiskClone; "+
 			"its disk is built by the materialise Job, never cloned", guest.Namespace, guest.Name)
+	}
+
+	// A root disk an in-place restore swapped in (#711) is the guest's disk
+	// from then on. Nothing below may run for it: each path works on the
+	// generation-0 PVC, and the copy path would clone the image over it.
+	if name, gen, err := rootdisk.Claim(ctx, r.Client, guest); err != nil {
+		return nil, err
+	} else if gen > 0 {
+		var pvc corev1.PersistentVolumeClaim
+		if err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: guest.Namespace}, &pvc); err != nil {
+			return nil, fmt.Errorf("get root disk PVC %s: %w", name, err)
+		}
+		if pvc.Status.Phase != corev1.ClaimBound {
+			return nil, fmt.Errorf("root disk PVC %s not yet Bound (phase=%s)", name, pvc.Status.Phase)
+		}
+		return &RootDiskCloneResult{PVCName: name}, nil
 	}
 
 	// Full-state cloneFromSnapshot (P4): the root disk is materialized from the

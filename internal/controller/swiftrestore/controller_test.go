@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	swiftguestctrl "github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
@@ -36,8 +37,11 @@ func testScheme(t *testing.T) *runtime.Scheme {
 		&swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{},
 		&swiftv1alpha1.SwiftVolumeAttachment{}, &swiftv1alpha1.SwiftVolumeAttachmentList{},
 	)
+	gvMig := schema.GroupVersion{Group: "migration.kubeswift.io", Version: "v1alpha1"}
+	s.AddKnownTypes(gvMig, &migrationv1alpha1.SwiftMigration{}, &migrationv1alpha1.SwiftMigrationList{})
 	metav1.AddToGroupVersion(s, gvSnap)
 	metav1.AddToGroupVersion(s, gvSwift)
+	metav1.AddToGroupVersion(s, gvMig)
 	return s
 }
 

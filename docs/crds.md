@@ -513,9 +513,10 @@ Restores a VM from a SwiftSnapshot — in-place (same target guest) or as a clon
 | Key field | Type | Description |
 |-----------|------|-------------|
 | `snapshotRef` | SwiftRestoreSnapshotRef | The Ready SwiftSnapshot to restore from. |
-| `targetGuest` | SwiftRestoreTarget | Target SwiftGuest name. `overwriteExisting: true` is required for an in-place memory restore (the only mode that can restore over an existing guest; others fail with `OverwriteUnsupported`). An in-place restore refuses a guest that ran on its disk after the capture (`DiskDiverged`) unless annotated `snapshot.kubeswift.io/accept-disk-divergence: "true"`. |
+| `targetGuest` | SwiftRestoreTarget | Target SwiftGuest name. `overwriteExisting: true` is required for an in-place restore onto the snapshot's own guest: a memory restore, or a csi-volume-snapshot disk rollback ([details](snapshots/csi-snapshots.md#roll-a-guest-back-in-place)). No restore can overwrite any other existing guest (`OverwriteUnsupported`). An in-place memory restore refuses a guest that ran on its disk after the capture (`DiskDiverged`) unless annotated `snapshot.kubeswift.io/accept-disk-divergence: "true"`. |
 | `targetNode` | string | Required for S3 (Tier C) restores; pins the download Job to a node. |
 | `identity` | IdentityRegeneration | Optional regeneration of `hostname`, `machineId`, `sshHostKeys`, `macAddresses`. |
+| `status.rootDisk` | SwiftRestoreRootDisk | In-place csi-volume-snapshot restore: `claimName` (the PVC seeded from the snapshot), `previousClaimName` (kept until `Ready`), `switched`. |
 
 > **Note:** a memory-snapshot clone resumes captured guest state byte-for-byte — cloud-init does not re-run, so identity fields are inherited from the source unless regenerated or the clone is rebooted. See [clone-from-snapshot](snapshots/clone-from-snapshot.md).
 

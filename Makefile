@@ -49,7 +49,7 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
 	build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-snapshot-oras-image build-dra-driver-image build-gateway-image build-sandbox-materialize-image build-egress-conformance-image build-pod-shim-image generate deploy deploy-with-webhook deploy-with-mtls deploy-with-webhook-and-mtls undeploy load-images smoke-test smoke-test-cleanup \
-	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
+	clonestrategy-test snapshot-test snapshot-inplace-test local-roundtrip-test local-clone-identity-test \
 	b0-cross-node-tcp-test b0-cross-node-tcp-test-cleanup sandbox-tcp-receive-test sandbox-tcp-receive-test-cleanup sandbox-warm-checkout-test sandbox-warm-checkout-test-cleanup sandbox-hardening-test sandbox-hardening-test-cleanup sandbox-suspend-test sandbox-suspend-test-cleanup sandbox-gpu-test sandbox-gpu-test-cleanup sandbox-pod-mode-test sandbox-pod-mode-test-cleanup sandbox-policy-test sandbox-policy-test-cleanup sandbox-pod-mode-suspend-test sandbox-pod-mode-suspend-test-cleanup sandbox-egress-restricted-test sandbox-egress-restricted-test-cleanup sandbox-egress-proxied-test sandbox-egress-proxied-test-cleanup sandbox-egress-proxy-test sandbox-egress-proxy-test-cleanup sandbox-egress-preset-test sandbox-egress-preset-test-cleanup sandbox-credentials-test sandbox-credentials-test-cleanup e2e-tests \
 	verify-e2e-scripts verify-kustomize-sync verify-base-image-pins \
 	preflight help push-images package-chart push-chart release-dev release-rc release-stable print-version
@@ -86,6 +86,7 @@ help:
 	@echo "  smoke-test-cleanup    Remove smoke-test resources (SwiftGuest, SwiftImage, etc.) for re-runs"
 	@echo "  clonestrategy-test    Run cloneStrategy: snapshot e2e (requires snapshot-capable CSI)"
 	@echo "  snapshot-test         Run Tier A (CSI VolumeSnapshot) snapshot+restore e2e"
+	@echo "  snapshot-inplace-test Run the in-place CSI disk rollback e2e (IMAGE=, CLASS=, NAMESPACE=)"
 	@echo "  local-roundtrip-test  Run Tier B (local hostPath) memory snapshot+in-place restore e2e"
 	@echo "  local-clone-identity-test  Run Tier B clone-identity-collision e2e"
 	@echo "  b0-cross-node-tcp-test     Run B0 cross-node TCP regression test (requires 2+ kernel-nodes)"
@@ -383,6 +384,11 @@ smoke-test-cleanup:
 # from the day SwiftRestore was added had it run in CI.
 snapshot-test:
 	@test/snapshot/snapshot-test.sh
+
+# In-place disk rollback (#711): a csi-volume-snapshot restore onto the
+# snapshot's own guest swaps its root disk; checks the disk content.
+snapshot-inplace-test:
+	@test/snapshot/inplace-rollback-test.sh
 
 # cloneStrategy: snapshot end-to-end: SwiftImage with status.cloneSeed,
 # fast per-guest PVC clone via dataSource: VolumeSnapshot.

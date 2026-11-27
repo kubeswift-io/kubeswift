@@ -806,6 +806,27 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 				"not starting a launcher: SwiftMigration %s holds the guest and starts it on its target node", mig)
 			return ctrl.Result{RequeueAfter: offlineMigrationHoldRetry}, nil
 		}
+		// An in-place disk restore swapping the root disk holds the guest
+		// until the swap is done (#711).
+		if rst, err := r.diskRestoreHold(ctx, live); err != nil {
+			return ctrl.Result{}, err
+		} else if rst != "" {
+			logger.Info("an in-place disk restore holds the guest; not creating a launcher", "swiftRestore", rst)
+			r.event(&guest, corev1.EventTypeNormal, "LauncherHeldByRestore",
+				"not starting a launcher: SwiftRestore %s is swapping the guest's root disk", rst)
+			return ctrl.Result{RequeueAfter: offlineMigrationHoldRetry}, nil
+		}
+		// The root disk this pod mounts was resolved from the cache. A swap
+		// that the cache has not seen yet would boot the replaced disk, so
+		// check it uncached at the moment of creation.
+		if rootDiskClone != nil {
+			if stale, err := r.rootDiskStale(ctx, live, rootDiskClone.PVCName); err != nil {
+				return ctrl.Result{}, err
+			} else if stale {
+				logger.Info("guest cache is behind its root disk; not creating a launcher", "cachedRootDisk", rootDiskClone.PVCName)
+				return ctrl.Result{RequeueAfter: time.Second}, nil
+			}
+		}
 		// Self-heal a stale migration PodRef before creating the pod.
 		// If status.PodRef points at a <guest>-mig-<uid> pod from a prior
 		// live migration that no longer exists, clear it so the next

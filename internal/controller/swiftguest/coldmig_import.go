@@ -70,7 +70,9 @@ func (r *SwiftGuestReconciler) maybeRootDiskFromOCI(
 		// matches its class when rg.Storage doesn't pin one — see
 		// resolvedStorageClassName which dereferences the source PVC).
 		var srcRoot corev1.PersistentVolumeClaim
-		_ = r.Get(ctx, client.ObjectKey{Name: RootDiskCloneName(snap.Spec.GuestRef.Name), Namespace: guest.Namespace}, &srcRoot)
+		if srcName, err := r.guestRootPVCName(ctx, guest.Namespace, snap.Spec.GuestRef.Name); err == nil {
+			_ = r.Get(ctx, client.ObjectKey{Name: srcName, Namespace: guest.Namespace}, &srcRoot)
+		}
 		p := &corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      cloneName,

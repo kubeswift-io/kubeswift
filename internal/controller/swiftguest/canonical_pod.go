@@ -10,7 +10,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
+	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/rootdisk"
 )
 
 // LauncherPod returns the guest's launcher pod, or nil when it has none: the
@@ -157,4 +159,43 @@ func (r *SwiftGuestReconciler) offlineMigrationHold(ctx context.Context, live *s
 		return "", nil // cut over: the launcher is the destination's
 	}
 	return name, nil
+}
+
+// diskRestoreHold returns the in-place disk restore that holds the guest, or "".
+// Such a restore stamped AnnotationDiskRestore, deleted the launcher, and swaps
+// the root disk; until it removes the stamp, no launcher may boot the guest from
+// either disk. A stamp whose SwiftRestore is gone or finished holds nothing, so
+// a restore deleted mid-swap cannot strand the guest. live is read uncached.
+func (r *SwiftGuestReconciler) diskRestoreHold(ctx context.Context, live *swiftv1alpha1.SwiftGuest) (string, error) {
+	name := live.Annotations[snapshotv1alpha1.AnnotationDiskRestore]
+	if name == "" {
+		return "", nil
+	}
+	var reader client.Reader = r.Client
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
+	var rst snapshotv1alpha1.SwiftRestore
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: live.Namespace, Name: name}, &rst); err != nil {
+		return "", client.IgnoreNotFound(err)
+	}
+	switch rst.Status.Phase {
+	case snapshotv1alpha1.SwiftRestorePhaseReady, snapshotv1alpha1.SwiftRestorePhaseFailed:
+		return "", nil
+	}
+	return name, nil
+}
+
+// rootDiskStale reports whether the guest's current root-disk PVC, read
+// uncached, is not claim: an in-place restore swapped the disk after the cache
+// was read.
+func (r *SwiftGuestReconciler) rootDiskStale(ctx context.Context, live *swiftv1alpha1.SwiftGuest, claim string) (bool, error) {
+	if r.APIReader == nil {
+		return false, nil
+	}
+	current, _, err := rootdisk.Claim(ctx, r.APIReader, live)
+	if err != nil {
+		return false, err
+	}
+	return current != claim, nil
 }
