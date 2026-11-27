@@ -192,6 +192,12 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	kernelName := resolveKernelProfile(&sb)
 
+	// spec.operatingMode: suspend a running sandbox, keep a suspended one
+	// without a launcher, hold one that was never started (suspend.go).
+	if handled, res, err := r.reconcileOperatingMode(ctx, &sb); handled || err != nil {
+		return res, err
+	}
+
 	// spec.poolRef: claim a warm slot from a SwiftSandboxPool (sub-second checkout) and
 	// inject the workload over vsock, else cold-fallback. Own path (its pod is a re-parented
 	// pool slot, or a cold pod named sb.Name — see reconcilePooled).

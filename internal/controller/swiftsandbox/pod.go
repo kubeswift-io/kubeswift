@@ -507,6 +507,9 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		{Name: "runtime-intent", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: intentConfigMapName(sb)}}}},
 		{Name: "run", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{Name: "dev-kvm", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev/kvm", Type: &charDev}}},
+		// spec.operatingMode Suspended: the launcher writes the microVM's
+		// state under SuspendRoot/<uid> (swiftletd suspend.rs checks the path).
+		{Name: "sandbox-suspend", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: SuspendRoot, Type: &dirCreate}}},
 	}
 	volumes = append(volumes, verifyVolumes...)
 	if sb.Spec.Model != nil {
@@ -620,6 +623,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 					{Name: "runtime-intent", MountPath: swiftguest.IntentPath},
 					{Name: "run", MountPath: swiftguest.RunDirPath},
 					{Name: "dev-kvm", MountPath: "/dev/kvm"},
+					{Name: "sandbox-suspend", MountPath: SuspendRoot},
 				},
 			}},
 			Volumes: volumes,

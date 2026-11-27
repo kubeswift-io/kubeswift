@@ -964,7 +964,7 @@ func (r *SwiftSandboxReconciler) finishOutputs(ctx context.Context, sb *sandboxv
 // to its sandbox.
 func exportObjectToSandbox(_ context.Context, obj client.Object) []reconcile.Request {
 	c := obj.GetLabels()[exportComponentLabel]
-	if c != exportComponentJob && c != exportComponentClean {
+	if c != exportComponentJob && c != exportComponentClean && c != suspendCleanupComponent {
 		return nil
 	}
 	ns, name, ok := strings.Cut(obj.GetAnnotations()[exportForAnnotation], "/")

@@ -29,6 +29,10 @@ spec:
     - jsonPath: .status.network.primaryIP
       name: Guest IP
       type: string
+    - jsonPath: .spec.operatingMode
+      name: Mode
+      priority: 1
+      type: string
     - jsonPath: .status.network.podIP
       name: Pod IP
       type: string
@@ -1465,6 +1469,23 @@ spec:
                 description: NodeSelector constrains the sandbox to matching (kernel)
                   nodes.
                 type: object
+              operatingMode:
+                default: Running
+                description: |-
+                  OperatingMode is Running (the default) or Suspended. Suspended on a
+                  running sandbox pauses its microVM, writes its memory and device state
+                  to the node, and stops the launcher pod; the sandbox keeps its
+                  identity, NetworkPolicy and ServiceAccount. Running again restores it
+                  on the same node from where it stopped. A sandbox created Suspended is
+                  not started until it is set to Running. Not supported for a sandbox
+                  with a GPU, spec.outputs, spec.poolRef or network.egress.credentials
+                  (condition Suspended=False, reason SuspendUnsupported), nor on a kernel
+                  whose bridge lacks resume-sync (kernels/sandbox 6.6.25,
+                  gpu-sandbox 6.6.15 or later).
+                enum:
+                - Running
+                - Suspended
+                type: string
               outputs:
                 description: |-
                   Outputs are directories the workload writes and KubeSwift exports, when
@@ -2394,6 +2415,9 @@ spec:
                 - Exporting
                 - Completed
                 - Failed
+                - Suspending
+                - Suspended
+                - Resuming
                 type: string
               podRef:
                 description: PodRef is the launcher pod name.
@@ -2447,6 +2471,44 @@ spec:
                 description: StartedAt is when the guest began running.
                 format: date-time
                 type: string
+              suspendedState:
+                description: |-
+                  SuspendedState is where the suspended microVM's state is kept. Set
+                  when a suspend starts (before anything is written to the node) and
+                  cleared once a resume has restored it.
+                properties:
+                  guestIP:
+                    description: GuestIP is the guest's address when it was suspended;
+                      it keeps it.
+                    type: string
+                  hypervisorVersion:
+                    description: HypervisorVersion is the Cloud Hypervisor version
+                      that wrote it.
+                    type: string
+                  launcherImage:
+                    description: |-
+                      LauncherImage is the launcher image that wrote the state; the sandbox
+                      resumes with the same one, so Cloud Hypervisor reads its own format.
+                    type: string
+                  nodeName:
+                    description: NodeName is the node holding the state; the sandbox
+                      resumes there.
+                    type: string
+                  path:
+                    description: Path is the directory on that node.
+                    type: string
+                  sizeBytes:
+                    description: SizeBytes is the state's size on disk.
+                    format: int64
+                    type: integer
+                  takenAt:
+                    description: TakenAt is when the state was written.
+                    format: date-time
+                    type: string
+                required:
+                - nodeName
+                - path
+                type: object
               terminalAt:
                 description: |-
                   TerminalAt is when the sandbox first reached a terminal phase

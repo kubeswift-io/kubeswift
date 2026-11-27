@@ -264,3 +264,62 @@ func TestValidateSpec_Model(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateUpdate_OperatingModeMutable(t *testing.T) {
+	v := &Validator{}
+	old := sb("alpine:3.20")
+	sus := old.DeepCopy()
+	sus.Spec.OperatingMode = sandboxv1alpha1.SandboxOperatingSuspended
+	if _, err := v.ValidateUpdate(context.Background(), old, sus); err != nil {
+		t.Errorf("Running -> Suspended should be allowed: %v", err)
+	}
+	back := sus.DeepCopy()
+	back.Spec.OperatingMode = sandboxv1alpha1.SandboxOperatingRunning
+	if _, err := v.ValidateUpdate(context.Background(), sus, back); err != nil {
+		t.Errorf("Suspended -> Running should be allowed: %v", err)
+	}
+	// Suspending does not open the rest of the spec.
+	both := sus.DeepCopy()
+	both.Spec.Image = "alpine:3.21"
+	if _, err := v.ValidateUpdate(context.Background(), old, both); err == nil {
+		t.Error("image change with operatingMode should still be rejected")
+	}
+}
+
+func TestValidateOperatingMode_Unsupported(t *testing.T) {
+	v := &Validator{}
+	cases := map[string]func(*sandboxv1alpha1.SwiftSandbox){
+		"gpu profile": func(s *sandboxv1alpha1.SwiftSandbox) {
+			s.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "g"}
+		},
+		"gpu claim": func(s *sandboxv1alpha1.SwiftSandbox) {
+			s.Spec.GPUResourceClaim = &swiftv1alpha1.GPUResourceClaimSpec{}
+		},
+		"outputs": func(s *sandboxv1alpha1.SwiftSandbox) {
+			s.Spec.Outputs = []sandboxv1alpha1.SandboxOutput{{Name: "o"}}
+		},
+		"poolRef": func(s *sandboxv1alpha1.SwiftSandbox) {
+			s.Spec.PoolRef = &corev1.LocalObjectReference{Name: "p"}
+		},
+		"credentials": func(s *sandboxv1alpha1.SwiftSandbox) {
+			s.Spec.Network = sandboxv1alpha1.SandboxNetwork{Egress: &sandboxv1alpha1.SandboxEgress{
+				Credentials: []sandboxv1alpha1.SandboxEgressCredential{{Name: "c"}}}}
+		},
+	}
+	for name, mutate := range cases {
+		s := sb("alpine:3.20")
+		mutate(s)
+		if why := SuspendUnsupported(&s.Spec); why == "" {
+			t.Errorf("%s: SuspendUnsupported empty", name)
+		}
+		s.Spec.OperatingMode = sandboxv1alpha1.SandboxOperatingSuspended
+		if err := ValidateOperatingMode(&s.Spec); err == nil {
+			t.Errorf("%s: Suspended accepted", name)
+		}
+	}
+	plain := sb("alpine:3.20")
+	plain.Spec.OperatingMode = sandboxv1alpha1.SandboxOperatingSuspended
+	if _, err := v.ValidateCreate(context.Background(), plain); err != nil {
+		t.Errorf("plain sandbox created Suspended rejected: %v", err)
+	}
+}

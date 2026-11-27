@@ -46,7 +46,7 @@ func (v *Validator) ValidateUpdate(_ context.Context, oldObj, newObj runtime.Obj
 	// A sandbox is ephemeral: its launch-affecting spec is immutable once created
 	// (recreate to change). spec.ttl is the exception — retention is adjustable.
 	if launchSpecChanged(&oldSb.Spec, &newSb.Spec) {
-		return nil, fmt.Errorf("SwiftSandbox spec is immutable except spec.ttl; recreate the sandbox to change image/resources/command/network")
+		return nil, fmt.Errorf("SwiftSandbox spec is immutable except spec.ttl and spec.operatingMode; recreate the sandbox to change image/resources/command/network")
 	}
 	return nil, validateSpec(&newSb.Spec)
 }
@@ -69,6 +69,9 @@ func validateSpec(s *sandboxv1alpha1.SwiftSandboxSpec) error {
 		return fmt.Errorf("spec.verifyKeySecretRef.name is required when verifyKeySecretRef is set")
 	}
 	if err := ValidateNetwork(s.Network); err != nil {
+		return err
+	}
+	if err := ValidateOperatingMode(s); err != nil {
 		return err
 	}
 	if err := ValidateIdentity(s.Identity, s.Network); err != nil {
@@ -159,6 +162,7 @@ func launchSpecChanged(oldS, newS *sandboxv1alpha1.SwiftSandboxSpec) bool {
 	o := oldS.DeepCopy()
 	n := newS.DeepCopy()
 	o.TTL, n.TTL = nil, nil
+	o.OperatingMode, n.OperatingMode = "", ""
 	return !apiequality.Semantic.DeepEqual(o, n)
 }
 
@@ -169,6 +173,34 @@ func ValidateTermination(t *sandboxv1alpha1.SandboxTermination) error {
 	}
 	if d := t.DrainPeriod.Duration; d < 0 || d > sandboxv1alpha1.TerminationMaxDrainPeriod {
 		return fmt.Errorf("spec.termination.drainPeriod %s must be between 0s and %s", d, sandboxv1alpha1.TerminationMaxDrainPeriod)
+	}
+	return nil
+}
+
+// SuspendUnsupported names why a sandbox of this shape cannot be suspended
+// ("" when it can). The controller checks it again: webhooks may be off.
+func SuspendUnsupported(s *sandboxv1alpha1.SwiftSandboxSpec) string {
+	switch {
+	case s.GPUProfileRef != nil || s.GPUResourceClaim != nil:
+		return "a sandbox with a GPU cannot be suspended (its device state is not saved)"
+	case len(s.Outputs) > 0:
+		return "a sandbox with spec.outputs cannot be suspended (its output images live with the launcher)"
+	case s.PoolRef != nil:
+		return "a sandbox with spec.poolRef cannot be suspended (its workload runs over the warm slot's exec stream)"
+	case s.Network.Egress != nil && len(s.Network.Egress.Credentials) > 0:
+		return "a sandbox with network.egress.credentials cannot be suspended (the guest trusts a certificate authority that exists only in its launcher)"
+	}
+	return ""
+}
+
+// ValidateOperatingMode refuses spec.operatingMode Suspended on a sandbox
+// that cannot be suspended.
+func ValidateOperatingMode(s *sandboxv1alpha1.SwiftSandboxSpec) error {
+	if !s.Suspended() {
+		return nil
+	}
+	if why := SuspendUnsupported(s); why != "" {
+		return fmt.Errorf("spec.operatingMode Suspended: %s", why)
 	}
 	return nil
 }
