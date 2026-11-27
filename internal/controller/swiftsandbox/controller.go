@@ -849,7 +849,11 @@ func (r *SwiftSandboxReconciler) waitForReference(ctx context.Context, sb *sandb
 		Type: sandboxv1alpha1.SwiftSandboxConditionResolved, Status: metav1.ConditionFalse,
 		Reason: reason, Message: msg, ObservedGeneration: sb.Generation,
 	})
-	sb.Status.Phase = sandboxv1alpha1.SwiftSandboxPending
+	// A resume waits as Resuming: Pending would drop the resume, and the
+	// next pass would boot the sandbox cold (suspend.go).
+	if !resuming(sb) {
+		sb.Status.Phase = sandboxv1alpha1.SwiftSandboxPending
+	}
 	sb.Status.Message = msg
 	if err := r.Status().Update(ctx, sb); err != nil {
 		return ctrl.Result{}, err
@@ -1111,7 +1115,7 @@ func (r *SwiftSandboxReconciler) lookup(sb *sandboxv1alpha1.SwiftSandbox) lookup
 func (r *SwiftSandboxReconciler) waitForRegistry(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox) (ctrl.Result, error) {
 	const reason, msg = "Resolving", "waiting for the registry to answer"
 	if c := apimeta.FindStatusCondition(sb.Status.Conditions, sandboxv1alpha1.SwiftSandboxConditionResolved); c == nil ||
-		c.Reason != reason || sb.Status.Phase != sandboxv1alpha1.SwiftSandboxPending {
+		c.Reason != reason || (sb.Status.Phase != sandboxv1alpha1.SwiftSandboxPending && !resuming(sb)) {
 		if _, err := r.waitForReference(ctx, sb, reason, msg); err != nil {
 			return ctrl.Result{}, err
 		}

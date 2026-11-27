@@ -74,7 +74,7 @@ spec:
   operatingMode: $2
   network:
     mode: restricted
-    ports: [{port: 8000}]
+    ports: [{name: http, port: 8000}]
   readinessProbe: {tcpSocket: {port: 8000}, periodSeconds: 1}
 $3
   command: [sh, -c]
@@ -157,9 +157,11 @@ EOF
 		die "SwiftKernel sandbox not Ready in $NS"
 
 	log "admission refuses Suspended with spec.poolRef"
-	if sandbox refused Suspended "  poolRef: {name: none}" 2>/dev/null; then
+	local out
+	if out=$(sandbox refused Suspended "  poolRef: {name: none}" 2>&1); then
 		die "a Suspended sandbox with poolRef was admitted"
 	fi
+	case "$out" in *poolRef*) ;; *) die "refused for another reason: $out" ;; esac
 
 	log "created Suspended: not started"
 	sandbox later Suspended ""

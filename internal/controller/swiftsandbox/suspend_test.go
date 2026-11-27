@@ -402,3 +402,28 @@ func TestResume_Settled(t *testing.T) {
 		t.Errorf("no report in time: %+v", suspendedCond(sb))
 	}
 }
+
+// Waiting for something (the old launcher to stop, the registry) during a
+// resume keeps it Resuming: Pending dropped the resume and the next pass
+// booted the sandbox cold (found on a dev cluster).
+func TestResume_WaitKeepsResuming(t *testing.T) {
+	r, c := suspendedFixture(t, sandboxv1alpha1.SandboxOperatingRunning, false)
+	sb := getSandbox(t, c, "sb")
+	sb.Status.Phase = sandboxv1alpha1.SwiftSandboxResuming
+	if _, err := r.waitForReference(context.Background(), sb, "PreviousLauncherStopping", "waiting"); err != nil {
+		t.Fatal(err)
+	}
+	if got := getSandbox(t, c, "sb"); got.Status.Phase != sandboxv1alpha1.SwiftSandboxResuming || !resuming(got) {
+		t.Fatalf("phase %s after a wait", got.Status.Phase)
+	}
+	// A cold start still waits as Pending.
+	cold := getSandbox(t, c, "sb")
+	cold.Status.Phase = sandboxv1alpha1.SwiftSandboxMaterializing
+	cold.Status.SuspendedState = nil
+	if _, err := r.waitForReference(context.Background(), cold, "KernelNotReady", "waiting"); err != nil {
+		t.Fatal(err)
+	}
+	if got := getSandbox(t, c, "sb"); got.Status.Phase != sandboxv1alpha1.SwiftSandboxPending {
+		t.Fatalf("cold wait phase %s", got.Status.Phase)
+	}
+}
