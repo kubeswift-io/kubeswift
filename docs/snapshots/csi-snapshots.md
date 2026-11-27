@@ -107,7 +107,7 @@ spec:
   targetGuest: {name: db, overwriteExisting: true}
 ```
 
-The guest keeps its name, spec, MAC and IP; only its root disk goes back to the snapshot. A PVC cannot be renamed, so the restore seeds a new root-disk PVC from the VolumeSnapshot, `swiftguest-root-<guest>-g<n>`, and swaps the guest onto it:
+The guest keeps its name and spec; only its root disk goes back to the snapshot. It gets a new launcher, so a default-network (pod-local NAT) guest can come back with a different `192.168.99.x` address, as after any launcher restart. A PVC cannot be renamed, so the restore seeds a new root-disk PVC from the VolumeSnapshot, `swiftguest-root-<guest>-g<n>`, and swaps the guest onto it:
 
 1. `Restoring`: the new PVC is created and bound while the guest keeps running. Then the guest is stopped (annotation `snapshot.kubeswift.io/disk-restore` holds it, so nothing restarts it from either disk) and the swap is made.
 2. `Resuming`: the guest boots from the restored disk.

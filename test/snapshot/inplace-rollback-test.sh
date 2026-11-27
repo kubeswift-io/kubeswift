@@ -17,13 +17,14 @@
 #
 # Usage:
 #   ./inplace-rollback-test.sh [--vsclass <name>] [--image <swiftimage>]
-#       [--class <swiftguestclass>] [--namespace <ns>] [--no-cleanup]
+#       [--class <swiftguestclass>] [--node <node>] [--namespace <ns>] [--no-cleanup]
 
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-default}"
 IMAGE="${IMAGE:-ubuntu-noble}"
 CLASS="${CLASS:-default}"
+NODE="${NODE:-}"
 VSCLASS=""
 NO_CLEANUP=false
 IDENTITY="${KUBESWIFT_TEST_IDENTITY:-${HOME}/.ssh/id_ed25519}"
@@ -36,6 +37,7 @@ while [[ $# -gt 0 ]]; do
     --vsclass)    VSCLASS="$2"; shift 2 ;;
     --image)      IMAGE="$2"; shift 2 ;;
     --class)      CLASS="$2"; shift 2 ;;
+    --node)       NODE="$2"; shift 2 ;;
     --namespace)  NAMESPACE="$2"; shift 2 ;;
     --identity)   IDENTITY="$2"; shift 2 ;;
     --no-cleanup) NO_CLEANUP=true; shift ;;
@@ -149,6 +151,7 @@ spec:
   guestClassRef: {name: $CLASS}
   seedProfileRef: {name: ${GUEST}-seed}
   runPolicy: Running
+${NODE:+  nodeName: $NODE}
 EOF
 until_ok "$TIMEOUT" "guest reachable by ssh" ssh_ready
 gen0="swiftguest-root-$GUEST"
