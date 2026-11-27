@@ -8,7 +8,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 )
@@ -68,7 +67,8 @@ func TestDiskDivergence_FullStateGuestLeftStoppedProceeds(t *testing.T) {
 }
 
 // The memory-only refusal used to send the operator to a csi-volume-snapshot
-// "for a disk-consistent restore", which cannot restore in place either (#711).
+// "for a disk-consistent restore"; a csi-volume-snapshot now restores in place
+// too (#711), and the advice says how.
 func TestDiskDivergence_MemoryOnlyAdviceIsWhatCanBeDone(t *testing.T) {
 	snap := makeLocalSnapWithBackend("snap1", "default", "g1", "/var/lib/kubeswift/snapshots/default_snap1", "v51.1")
 	snap.Spec.ResumeAfterSnapshot = true
@@ -77,39 +77,12 @@ func TestDiskDivergence_MemoryOnlyAdviceIsWhatCanBeDone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"holds memory only", "can only go to a new SwiftGuest", "under a new name, while g1 still exists", snapshotv1alpha1.AnnotationAcceptDiskDivergence} {
+	for _, want := range []string{"holds memory only", "restore a csi-volume-snapshot of g1", "in place with targetGuest.overwriteExisting=true", snapshotv1alpha1.AnnotationAcceptDiskDivergence} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message lacks %q:\n%s", want, msg)
 		}
 	}
 	if strings.Contains(msg, "Use a csi-volume-snapshot for a disk-consistent restore") {
 		t.Errorf("the old advice is back:\n%s", msg)
-	}
-}
-
-// A csi-volume-snapshot restore onto the snapshot's own guest cannot work,
-// with or without overwriteExisting, and deleting the guest first does not
-// help: the restore copies its spec. Both refusals say so (#711).
-func TestCSI_RestoreOntoTheSnapshotsOwnGuestSaysRestoreToANewName(t *testing.T) {
-	for _, overwrite := range []bool{false, true} {
-		snap := makeReadySnapshot("snap1", "default", "g1", "vs1", 40<<30)
-		restore := makeRestore("r1", "default", "snap1", "g1", true)
-		restore.Spec.TargetGuest.OverwriteExisting = overwrite
-		r, c := newReconciler(t, restore, snap, runningGuest("g1"))
-		reconcile(t, r, "r1", "default")
-
-		want := ReasonTargetConflict
-		if overwrite {
-			want = ReasonOverwriteUnsupported
-		}
-		wantFailedWith(t, c, want)
-		cond := findReady(get(t, c, "r1", "default"))
-		if msg := msgOrEmpty(cond); !strings.Contains(msg, "restore to a new name while g1 still exists") || strings.Contains(msg, "delete it first") {
-			t.Errorf("overwriteExisting=%v: %q", overwrite, msg)
-		}
-		var g client.Object = runningGuest("g1")
-		if err := c.Get(context.Background(), client.ObjectKeyFromObject(g), g); err != nil {
-			t.Errorf("the guest must be left alone: %v", err)
-		}
 	}
 }

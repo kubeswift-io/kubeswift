@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 func srcRootPVC(name string, modes []corev1.PersistentVolumeAccessMode, vm *corev1.PersistentVolumeMode, sc string) *corev1.PersistentVolumeClaim {
@@ -36,7 +37,7 @@ func TestSourceDiskShapePreservesBlockAndRWX(t *testing.T) {
 		Build()
 	r := &SwiftRestoreReconciler{Client: cl, Scheme: scheme.Scheme}
 
-	shape, err := r.sourceDiskShapeFor(context.Background(), "default", "src")
+	shape, err := r.sourceDiskShapeFor(context.Background(), &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "src", Namespace: "default"}})
 	if err != nil {
 		t.Fatalf("sourceDiskShapeFor: %v", err)
 	}
@@ -60,7 +61,7 @@ func TestSourceDiskShapePreservesFilesystemAndRWO(t *testing.T) {
 		Build()
 	r := &SwiftRestoreReconciler{Client: cl, Scheme: scheme.Scheme}
 
-	shape, err := r.sourceDiskShapeFor(context.Background(), "default", "src")
+	shape, err := r.sourceDiskShapeFor(context.Background(), &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "src", Namespace: "default"}})
 	if err != nil {
 		t.Fatalf("sourceDiskShapeFor: %v", err)
 	}

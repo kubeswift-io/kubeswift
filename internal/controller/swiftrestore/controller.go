@@ -37,6 +37,9 @@ import (
 type SwiftRestoreReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// APIReader reads uncached where a stale guest would mishandle an
+	// in-place restore's hold. Nil falls back to the cached client.
+	APIReader client.Reader
 
 	// CurrentHypervisorVersion is the Cloud Hypervisor version that restores
 	// (e.g. "v54.0"). Empty means clonecommon.CloudHypervisorVersion, the one
@@ -201,6 +204,10 @@ func (r *SwiftRestoreReconciler) releaseInPlaceTarget(
 	restore *snapshotv1alpha1.SwiftRestore,
 	status *snapshotv1alpha1.SwiftRestoreStatus,
 ) error {
+	// An in-place disk restore puts the guest back on its previous disk.
+	if status.RootDisk != nil {
+		return r.rollbackInPlaceDisk(ctx, restore, status)
+	}
 	if status.GuestRef == nil {
 		return nil // never got as far as stamping a guest
 	}
@@ -269,35 +276,26 @@ func (r *SwiftRestoreReconciler) handlePending(
 	// Target SwiftGuest conflict check.
 	var existingTarget swiftv1alpha1.SwiftGuest
 	getErr := r.Get(ctx, client.ObjectKey{Name: restore.Spec.TargetGuest.Name, Namespace: restore.Namespace}, &existingTarget)
+	// The snapshot's own guest: roll its root disk back in place (#711).
+	if getErr == nil && isInPlaceCSI(&snap, restore) {
+		return r.handlePendingCSIInPlace(ctx, restore, &existingTarget, status)
+	}
 	// A target this restore created itself (a re-run whose status write lagged)
 	// is not a conflict.
 	if getErr == nil && existingTarget.Labels[swiftRestoreOwnerLabel] != names.LabelValue(restore.Name) {
 		setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
-		// The snapshot's own guest cannot be the target at all: the restore
-		// creates a new guest from that one's spec, so deleting it first does
-		// not help either (#711).
-		if restore.Spec.TargetGuest.Name == snap.Spec.GuestRef.Name {
-			reason := ReasonTargetConflict
-			if restore.Spec.TargetGuest.OverwriteExisting {
-				reason = ReasonOverwriteUnsupported
-			}
-			setReadyCondition(status, metav1.ConditionFalse, reason,
-				"the csi-volume-snapshot backend cannot restore SwiftGuest "+snap.Spec.GuestRef.Name+" in place: "+
-					"it creates a new SwiftGuest from "+snap.Spec.GuestRef.Name+"'s spec and the snapshot's disk, "+
-					"so restore to a new name while "+snap.Spec.GuestRef.Name+" still exists")
-			return true, 0, nil
-		}
 		if !restore.Spec.TargetGuest.OverwriteExisting {
 			setReadyCondition(status, metav1.ConditionFalse, ReasonTargetConflict,
 				"SwiftGuest "+restore.Spec.TargetGuest.Name+" already exists; set targetGuest.overwriteExisting=true to replace")
 			return true, 0, nil
 		}
-		// The disk restore seeds a NEW root-disk PVC and creates the guest
-		// around it. Over an existing guest both already exist, so every step
-		// was a no-op and the restore reported Ready with nothing restored.
+		// A restore to a new name seeds a NEW root-disk PVC and creates the
+		// guest around it. Over another existing guest both already exist, so
+		// every step was a no-op and the restore reported Ready with nothing
+		// restored. Only the snapshot's own guest can be restored in place.
 		setReadyCondition(status, metav1.ConditionFalse, ReasonOverwriteUnsupported,
-			"the csi-volume-snapshot backend cannot restore over existing SwiftGuest "+restore.Spec.TargetGuest.Name+
-				" (its current disk would be kept and nothing restored); delete it first, or restore to a new name")
+			"the csi-volume-snapshot backend cannot restore over SwiftGuest "+restore.Spec.TargetGuest.Name+
+				": only the snapshot's own guest ("+snap.Spec.GuestRef.Name+") can be restored in place; restore to a new name")
 		return true, 0, nil
 	}
 	if getErr != nil && !isNotFound(getErr) {
@@ -339,6 +337,10 @@ func (r *SwiftRestoreReconciler) handleRestoring(
 		return false, 0, "SwiftSnapshot VolumeSnapshot is in a different namespace: " + vsNS, nil
 	}
 
+	if isInPlaceCSI(&snap, restore) {
+		return r.handleRestoringCSIInPlace(ctx, restore, &snap, vsName, rootDisk.SizeBytes, status)
+	}
+
 	// Resolve source SwiftGuest for spec copy + StorageClassName.
 	var source swiftv1alpha1.SwiftGuest
 	if err := r.Get(ctx, client.ObjectKey{Name: snap.Spec.GuestRef.Name, Namespace: restore.Namespace}, &source); err != nil {
@@ -350,7 +352,7 @@ func (r *SwiftRestoreReconciler) handleRestoring(
 		return false, 0, "", err
 	}
 
-	shape, err := r.sourceDiskShapeFor(ctx, restore.Namespace, source.Name)
+	shape, err := r.sourceDiskShapeFor(ctx, &source)
 	if err != nil {
 		return false, 0, "", err
 	}
@@ -401,6 +403,9 @@ func (r *SwiftRestoreReconciler) handleResuming(
 	restore *snapshotv1alpha1.SwiftRestore,
 	status *snapshotv1alpha1.SwiftRestoreStatus,
 ) (bool, time.Duration, error) {
+	if status.RootDisk != nil {
+		return r.handleResumingCSIInPlace(ctx, restore, status)
+	}
 	var target swiftv1alpha1.SwiftGuest
 	if err := r.Get(ctx, client.ObjectKey{Name: restore.Spec.TargetGuest.Name, Namespace: restore.Namespace}, &target); err != nil {
 		if isNotFound(err) {

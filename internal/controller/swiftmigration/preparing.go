@@ -13,7 +13,7 @@ import (
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
-	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
+	"github.com/kubeswift-io/kubeswift/internal/rootdisk"
 )
 
 // PodTerminationGracePeriod is the grace period passed to Delete(pod)
@@ -178,7 +178,10 @@ func (r *SwiftMigrationReconciler) handlePreparing(
 	// Pod is gone. Now wait for the per-guest root PVC's
 	// VolumeAttachment to be GC'd. Without this gate, the destination
 	// pod can hit a Multi-Attach error on RWO storage.
-	pvcName := swiftguest.RootDiskCloneName(guest.Name)
+	pvcName, _, err := rootdisk.Claim(ctx, r.Client, &guest)
+	if err != nil {
+		return phaseTransient(err)
+	}
 	attached, err := r.isPVCStillAttached(ctx, guest.Namespace, pvcName)
 	if err != nil {
 		return phaseTransient(err)

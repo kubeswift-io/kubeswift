@@ -16,12 +16,13 @@ import (
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	swiftguestctrl "github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/names"
+	"github.com/kubeswift-io/kubeswift/internal/rootdisk"
 )
 
-// rootPVCName returns the per-guest root-disk clone PVC name. Mirrors
-// internal/controller/swiftguest.RootDiskCloneName.
+// rootPVCName returns the generation-0 root-disk PVC name: the one a new
+// target guest gets.
 func rootPVCName(guestName string) string {
-	return swiftguestctrl.RootDiskPVCPrefix + guestName
+	return rootdisk.DefaultName(guestName)
 }
 
 // SnapshotHandle decodes a SwiftSnapshot disk Handle ("<ns>/<vs-name>") into
@@ -176,11 +177,20 @@ type sourceDiskShape struct {
 	VolumeMode       *corev1.PersistentVolumeMode
 }
 
-func (r *SwiftRestoreReconciler) sourceDiskShapeFor(ctx context.Context, namespace, sourceGuestName string) (sourceDiskShape, error) {
+func (r *SwiftRestoreReconciler) sourceDiskShapeFor(ctx context.Context, source *swiftv1alpha1.SwiftGuest) (sourceDiskShape, error) {
+	name, _, err := rootdisk.Claim(ctx, r.Client, source)
+	if err != nil {
+		return sourceDiskShape{}, err
+	}
 	var pvc corev1.PersistentVolumeClaim
-	if err := r.Get(ctx, client.ObjectKey{Name: rootPVCName(sourceGuestName), Namespace: namespace}, &pvc); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: source.Namespace}, &pvc); err != nil {
 		return sourceDiskShape{}, fmt.Errorf("get source per-guest PVC: %w", err)
 	}
+	return shapeOf(&pvc)
+}
+
+// shapeOf reads the storage shape of a root-disk PVC.
+func shapeOf(pvc *corev1.PersistentVolumeClaim) (sourceDiskShape, error) {
 	if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName == "" {
 		return sourceDiskShape{}, fmt.Errorf("source PVC %s has no storage class", pvc.Name)
 	}

@@ -237,6 +237,28 @@ spec:
                 - Ready
                 - Failed
                 type: string
+              rootDisk:
+                description: |-
+                  RootDisk is the root-disk swap of an in-place csi-volume-snapshot
+                  restore: the PVC seeded from the snapshot, and the PVC it replaces. The
+                  replaced PVC is kept until the restore is Ready, and the guest goes back
+                  to it if the restore fails after the swap.
+                properties:
+                  claimName:
+                    description: ClaimName is the root-disk PVC seeded from the snapshot.
+                    type: string
+                  previousClaimName:
+                    description: |-
+                      PreviousClaimName is the guest's root-disk PVC before the restore,
+                      deleted once the restore is Ready.
+                    type: string
+                  switched:
+                    description: Switched is true once the guest uses ClaimName.
+                    type: boolean
+                required:
+                - claimName
+                - previousClaimName
+                type: object
               startedAt:
                 format: date-time
                 type: string

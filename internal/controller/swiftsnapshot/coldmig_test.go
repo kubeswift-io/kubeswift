@@ -13,6 +13,7 @@ import (
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
+	"github.com/kubeswift-io/kubeswift/internal/rootdisk"
 )
 
 func TestOCIDiskTagAndReference(t *testing.T) {
@@ -26,7 +27,7 @@ func TestOCIDiskTagAndReference(t *testing.T) {
 }
 
 func TestBuildDiskChunkJob_Filesystem(t *testing.T) {
-	job := buildChunkJob(ociSnap(nil), "oras:img", "worker-2", diskChunkJobName(ociSnap(nil)), ociDiskTag(ociSnap(nil)), rootDiskPVCName("g1"), false)
+	job := buildChunkJob(ociSnap(nil), "oras:img", "worker-2", diskChunkJobName(ociSnap(nil)), ociDiskTag(ociSnap(nil)), rootdisk.DefaultName("g1"), false)
 	pod := job.Spec.Template.Spec
 	if pod.NodeName != "worker-2" {
 		t.Errorf("disk chunk Job must be pinned to the capture node; got %q", pod.NodeName)
@@ -67,7 +68,7 @@ func TestBuildDiskChunkJob_Filesystem(t *testing.T) {
 }
 
 func TestBuildDiskChunkJob_Block(t *testing.T) {
-	job := buildChunkJob(ociSnap(nil), "oras:img", "worker-1", diskChunkJobName(ociSnap(nil)), ociDiskTag(ociSnap(nil)), rootDiskPVCName("g1"), true)
+	job := buildChunkJob(ociSnap(nil), "oras:img", "worker-1", diskChunkJobName(ociSnap(nil)), ociDiskTag(ociSnap(nil)), rootdisk.DefaultName("g1"), true)
 	c := job.Spec.Template.Spec.Containers[0]
 	if !strings.Contains(strings.Join(c.Args, " "), "--file=/dev/kubeswift-root") {
 		t.Errorf("Block root must chunk the raw device; got %q", strings.Join(c.Args, " "))
@@ -91,7 +92,7 @@ func TestBuildDiskChunkJob_InsecureAndCreds(t *testing.T) {
 		o.Insecure = true
 		o.CredentialsSecretRef = &snapshotv1alpha1.SecretObjectReference{Name: "reg-creds"}
 	})
-	job := buildChunkJob(snap, "oras:img", "worker-2", diskChunkJobName(snap), ociDiskTag(snap), rootDiskPVCName("g1"), false)
+	job := buildChunkJob(snap, "oras:img", "worker-2", diskChunkJobName(snap), ociDiskTag(snap), rootdisk.DefaultName("g1"), false)
 	c := job.Spec.Template.Spec.Containers[0]
 	if !strings.Contains(strings.Join(c.Args, " "), "--insecure") {
 		t.Errorf("--insecure must be present; got %q", strings.Join(c.Args, " "))

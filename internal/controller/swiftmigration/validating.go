@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
+	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/sharedbase"
@@ -61,6 +62,16 @@ func (r *SwiftMigrationReconciler) handleValidating(
 	} else if shared {
 		return phaseFailure(sharedbase.MigrationRefusal(mig.Spec.GuestRef.Name, className),
 			migrationv1alpha1.FailureReasonEligibilityMismatch)
+	}
+
+	// An in-place disk restore swapping the guest's root disk (#711) has
+	// stopped it and holds it; a migration now would move the wrong disk.
+	if rst, err := r.diskRestoreInProgress(ctx, mig); err != nil {
+		return phaseTransient(err)
+	} else if rst != "" {
+		setReadyCondition(status, metav1.ConditionFalse, ReasonValidating,
+			fmt.Sprintf("waiting: SwiftRestore %q is restoring the root disk of SwiftGuest %q", rst, mig.Spec.GuestRef.Name))
+		return phaseRequeue(10 * time.Second)
 	}
 
 	// Phase 3a auto-mode pre-resolution. When spec.Mode=auto and
@@ -412,4 +423,26 @@ func nodeReady(node *corev1.Node) bool {
 		}
 	}
 	return false
+}
+
+// diskRestoreInProgress returns the in-place disk restore that holds the
+// migration's guest, or "".
+func (r *SwiftMigrationReconciler) diskRestoreInProgress(ctx context.Context, mig *migrationv1alpha1.SwiftMigration) (string, error) {
+	var guest swiftv1alpha1.SwiftGuest
+	if err := r.Get(ctx, client.ObjectKey{Name: mig.Spec.GuestRef.Name, Namespace: mig.Namespace}, &guest); err != nil {
+		return "", client.IgnoreNotFound(err)
+	}
+	name := guest.Annotations[snapshotv1alpha1.AnnotationDiskRestore]
+	if name == "" {
+		return "", nil
+	}
+	var rst snapshotv1alpha1.SwiftRestore
+	if err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: mig.Namespace}, &rst); err != nil {
+		return "", client.IgnoreNotFound(err)
+	}
+	switch rst.Status.Phase {
+	case snapshotv1alpha1.SwiftRestorePhaseReady, snapshotv1alpha1.SwiftRestorePhaseFailed:
+		return "", nil
+	}
+	return name, nil
 }

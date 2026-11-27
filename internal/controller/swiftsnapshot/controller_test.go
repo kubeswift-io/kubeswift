@@ -22,6 +22,7 @@ import (
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	storagev1alpha1 "github.com/kubeswift-io/kubeswift/api/storage/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/rootdisk"
 )
 
 func testScheme(t *testing.T) *runtime.Scheme {
@@ -108,7 +109,7 @@ func makeSwiftSnapshot(name, ns, guestName, vsClass string) *snapshotv1alpha1.Sw
 
 func makeBoundClonePVC(ns, guestName string) *corev1.PersistentVolumeClaim {
 	return &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: rootPVCName(guestName), Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: rootdisk.DefaultName(guestName), Namespace: ns},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("40Gi")},
@@ -290,8 +291,8 @@ func TestPending_AdvancesToCapturing_AndCreatesVolumeSnapshot(t *testing.T) {
 	if vs.Spec.VolumeSnapshotClassName == nil || *vs.Spec.VolumeSnapshotClassName != "csi-hostpath-snapclass" {
 		t.Errorf("VolumeSnapshotClassName = %v, want csi-hostpath-snapclass", vs.Spec.VolumeSnapshotClassName)
 	}
-	if vs.Spec.Source.PersistentVolumeClaimName == nil || *vs.Spec.Source.PersistentVolumeClaimName != rootPVCName("g1") {
-		t.Errorf("source PVC = %v, want %s", vs.Spec.Source.PersistentVolumeClaimName, rootPVCName("g1"))
+	if vs.Spec.Source.PersistentVolumeClaimName == nil || *vs.Spec.Source.PersistentVolumeClaimName != rootdisk.DefaultName("g1") {
+		t.Errorf("source PVC = %v, want %s", vs.Spec.Source.PersistentVolumeClaimName, rootdisk.DefaultName("g1"))
 	}
 }
 

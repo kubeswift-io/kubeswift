@@ -15,7 +15,7 @@
 KubeSwift Phase 1 ships disk-only, crash-consistent VM snapshots backed by `snapshot.storage.k8s.io/VolumeSnapshot`:
 
 - **`SwiftSnapshot`** captures a SwiftGuest's per-guest root disk PVC at a point in time.
-- **`SwiftRestore`** materialises a SwiftSnapshot as a new SwiftGuest, copying the source guest's spec.
+- **`SwiftRestore`** materialises a SwiftSnapshot as a new SwiftGuest, copying the source guest's spec, or rolls the snapshot's own guest back to it in place.
 
 The VM is **not paused** during snapshot. The capture is crash-consistent — equivalent to a hard reboot at restore time. Memory snapshots are out of scope for Phase 1; an early spike showed Cloud Hypervisor's snapshot/restore is incompatible with VFIO and unsuitable as a Phase 1 baseline.
 
@@ -70,7 +70,7 @@ swiftctl restore create r1 --snapshot db-2026-04-25 --target db-restored
 Optional flags:
 
 - `--no-resume` — leave the restored guest in `runPolicy=Stopped` for inspection.
-- `--overwrite-existing` — replace an existing SwiftGuest at the target name.
+- `--overwrite-existing` — with `--target` set to the snapshot's own guest, roll that guest back in place (next section). It cannot replace any other existing guest.
 
 Equivalent CR:
 
@@ -91,6 +91,35 @@ State machine: `Pending → Restoring → Resuming → Ready`. With `resumeAfter
 The controller copies the source guest's spec to the target, pre-creates the target's per-guest root-disk PVC sourced from the snapshot's VolumeSnapshot (label `swift.kubeswift.io/restore-seeded=true` so the SwiftGuest controller skips the Copy Job), and finally creates the SwiftGuest. The source SwiftGuest must still exist at restore time — its spec is read by the controller.
 
 > **The `Restoring → Resuming` transition can take 30–90 s on full-copy CSI drivers.** Most of that time is the per-guest PVC clone from the snapshot reaching `Bound` at the SwiftGuestClass-driven target size. On copy-on-write drivers (Rook Ceph RBD, EBS, GCE PD) the same step is near-instantaneous; on Longhorn (full-copy) it scales linearly with disk size. If your restore stays in `Restoring` longer than expected, the PVC clone is the place to inspect — see the per-driver behaviour in [Storage class compatibility](../images/clone-strategies.md#storage-class-compatibility-matrix).
+
+## Roll a guest back in place
+
+Restore the snapshot onto its own guest, with `overwriteExisting: true`:
+
+```yaml
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftRestore
+metadata:
+  name: db-rollback
+  namespace: prod
+spec:
+  snapshotRef: {name: db-2026-04-25}
+  targetGuest: {name: db, overwriteExisting: true}
+```
+
+The guest keeps its name and spec; only its root disk goes back to the snapshot. It gets a new launcher, so a default-network (pod-local NAT) guest can come back with a different `192.168.99.x` address, as after any launcher restart. A PVC cannot be renamed, so the restore seeds a new root-disk PVC from the VolumeSnapshot, `swiftguest-root-<guest>-g<n>`, and swaps the guest onto it:
+
+1. `Restoring`: the new PVC is created and bound while the guest keeps running. Then the guest is stopped (annotation `snapshot.kubeswift.io/disk-restore` holds it, so nothing restarts it from either disk) and the swap is made.
+2. `Resuming`: the guest boots from the restored disk.
+3. `Ready`: once the guest runs, the PVC it had before is deleted, unless VolumeSnapshots were taken from it. Then it is kept with label `swift.kubeswift.io/role=root-disk-retired` and deleted once the last of them is gone: some CSI drivers (Longhorn) keep a snapshot inside its source volume, so deleting the PVC would destroy the snapshots, this restore's own among them. The guest controller checks on its reconciles; the guest deletes it at the latest.
+
+The previous PVC is kept until `Ready`. If the guest fails to start from the restored disk, the restore fails, the new PVC is deleted and the guest boots from its previous disk again. `status.rootDisk` names both PVCs.
+
+- The guest restarts: in-guest state since the snapshot is lost, as with any disk rollback. `resumeAfterRestore: false` is refused (`InPlaceUnsupported`); set the guest's `runPolicy: Stopped` first to keep it stopped, and the restore is `Ready` after the swap.
+- Only the root disk is restored. Data disks keep their current contents.
+- Not for kernel-boot guests or shared-base root disks (`InPlaceUnsupported`).
+- A restore waits (`GuestBusy`) while a SwiftMigration or another restore holds the guest, and a migration waits for the restore.
+- A guest whose disk was swapped resolves its root disk by the PVC labels `swift.kubeswift.io/guest` and `swift.kubeswift.io/role=root-disk` plus the annotation `swift.kubeswift.io/root-disk-generation`: the highest generation it controls wins. Snapshots, clones and migrations of the guest use that PVC.
 
 ## Constraints
 
@@ -119,8 +148,10 @@ The controller deletes the underlying VolumeSnapshot via owner reference. The CS
 | `Phase=Pending` with `Ready=False reason=RootPVCNotFound` | SwiftGuest still provisioning | Wait — the per-guest PVC takes 1–2 min to create on cold start |
 | `Phase=Failed reason=SnapshotFailed` | CSI driver returned a snapshot error | `kubectl describe volumesnapshot swift-snap-<name>` for the driver message |
 | `Phase=Failed reason=UnsupportedBackend` | `backend.type` is `local` or `s3` | Phase 1 only — use `csi-volume-snapshot` |
-| Restore `Phase=Failed reason=TargetConflict` | Target name already in use | Pick a different name. Deleting the existing SwiftGuest first works only when it is not the snapshot's own guest (see the next row) |
-| Restore `Phase=Failed reason=OverwriteUnsupported` | `overwriteExisting: true` over an existing guest | A csi-volume-snapshot restores into a new SwiftGuest only; it cannot replace a guest's disk in place. Restore to a new name. Deleting the target first works only when it is not the snapshot's own guest: the restore copies that guest's spec, so it must still exist |
+| Restore `Phase=Failed reason=TargetConflict` | Target name already in use, or an in-place restore without `overwriteExisting: true` | Pick a different name, or set `overwriteExisting: true` to roll the snapshot's own guest back |
+| Restore `Phase=Failed reason=OverwriteUnsupported` | `overwriteExisting: true` over a guest that is not the snapshot's own | Only the snapshot's own guest can be restored in place. Restore to a new name |
+| Restore `Phase=Failed reason=InPlaceUnsupported` | In-place restore of a kernel-boot or shared-base guest, or with `resumeAfterRestore: false` | See [Roll a guest back in place](#roll-a-guest-back-in-place) |
+| Restore `Phase=Pending reason=GuestBusy` | A SwiftMigration or another restore holds the guest | Wait; it continues when that finishes |
 | Restore `Phase=Pending reason=SnapshotNotReady` | Source SwiftSnapshot not yet `Ready` | Wait for the snapshot to complete first |
 | Restore stuck in `Restoring` for 30–90 s | Per-guest PVC clone from snapshot still binding (Longhorn full-copy) | Wait — this is normal on full-copy CSI drivers. `kubectl describe pvc swiftguest-root-<target>` shows the bind progress. |
 | Restore `Ready` but restored guest looks like a fresh boot | Per-guest PVC has no `dataSource` and no `swift.kubeswift.io/restore-seeded` label | The SwiftGuest controller fell back to the SwiftImage Copy Job. `kubectl get pvc swiftguest-root-<target> -o yaml` will show the missing fields; this should not happen on KubeSwift versions that include PR #21. |

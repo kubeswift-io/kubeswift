@@ -30,6 +30,13 @@ const (
 	// ReasonKernelBootUnsupported: the snapshot's source boots from a kernel
 	// (spec.kernelRef); the restore launcher serves disk-boot guests only.
 	ReasonKernelBootUnsupported = "KernelBootUnsupported"
+	// ReasonInPlaceUnsupported: an in-place csi-volume-snapshot restore of a
+	// guest whose disk it cannot swap (kernel boot, shared-base disk), or with
+	// resumeAfterRestore=false.
+	ReasonInPlaceUnsupported = "InPlaceUnsupported"
+	// ReasonGuestBusy: an in-place restore waits while a migration or another
+	// restore holds the guest.
+	ReasonGuestBusy = "GuestBusy"
 )
 
 func setPhase(status *snapshotv1alpha1.SwiftRestoreStatus, phase snapshotv1alpha1.SwiftRestorePhase) {

@@ -28,17 +28,14 @@ import (
 )
 
 const (
-	// Root-disk PVC name + in-launcher disk paths, mirrored from
+	// In-launcher disk paths, mirrored from
 	// internal/controller/swiftguest (a local copy avoids a controller import
 	// cycle; these are stable on-disk contract paths).
-	rootDiskPVCPrefix  = "swiftguest-root-"
 	rootDiskDevicePath = "/dev/kubeswift-root" // Block root disk (raw device)
 	// diskChunkMount is where the chunk Job mounts a Filesystem root PVC (the disk
 	// is image.raw under it).
 	diskChunkMount = "/rootdisk"
 )
-
-func rootDiskPVCName(guestName string) string { return rootDiskPVCPrefix + guestName }
 
 // ociDiskTag is the disk artifact's tag — the memory tag + "-disk" so both
 // artifacts share the repository but are distinct manifests.
@@ -68,8 +65,12 @@ func dataDiskChunkJobName(snap *snapshotv1alpha1.SwiftSnapshot, disk string) str
 // vs Filesystem (image.raw file). Defaults to Filesystem when the PVC or its
 // volumeMode is absent.
 func (r *SwiftSnapshotReconciler) rootDiskIsBlock(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) (bool, error) {
+	name, err := r.guestRootPVCName(ctx, snap.Namespace, snap.Spec.GuestRef.Name)
+	if err != nil {
+		return false, err
+	}
 	var pvc corev1.PersistentVolumeClaim
-	err := r.Get(ctx, client.ObjectKey{Name: rootDiskPVCName(snap.Spec.GuestRef.Name), Namespace: snap.Namespace}, &pvc)
+	err = r.Get(ctx, client.ObjectKey{Name: name, Namespace: snap.Namespace}, &pvc)
 	if apierrors.IsNotFound(err) {
 		return false, nil
 	}
@@ -133,10 +134,14 @@ func (r *SwiftSnapshotReconciler) handleFullStateDiskCapture(ctx context.Context
 	if berr != nil {
 		return false, "", berr
 	}
+	rootPVC, perr := r.guestRootPVCName(ctx, snap.Namespace, snap.Spec.GuestRef.Name)
+	if perr != nil {
+		return false, "", perr
+	}
 	targets := []chunkTarget{{
 		jobName: diskChunkJobName(snap),
 		tag:     ociDiskTag(snap),
-		pvcName: rootDiskPVCName(snap.Spec.GuestRef.Name),
+		pvcName: rootPVC,
 		block:   rootBlock,
 	}}
 	if status.GuestSpec != nil {

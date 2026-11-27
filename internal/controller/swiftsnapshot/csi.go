@@ -12,7 +12,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/names"
+	"github.com/kubeswift-io/kubeswift/internal/rootdisk"
 )
 
 // VolumeSnapshotNamePrefix is prepended to the SwiftSnapshot name to derive
@@ -104,21 +106,31 @@ func (r *SwiftSnapshotReconciler) createVolumeSnapshot(
 	return nil
 }
 
-// rootPVCName returns the per-guest root-disk clone PVC name (the same name
-// the SwiftGuest controller uses; we don't want to snapshot the shared
-// SwiftImage PVC).
-func rootPVCName(guestName string) string {
-	// Keep this in lockstep with internal/controller/swiftguest.RootDiskCloneName.
-	// We hardcode the prefix here to avoid a swiftguest -> swiftsnapshot import
-	// cycle (swiftguest will eventually import shared snapshot helpers).
-	return "swiftguest-root-" + guestName
+// guestRootPVCName returns the name of the guest's current root-disk PVC (the
+// guest controller's, never the shared SwiftImage PVC). An in-place restore may
+// have swapped it for a later generation (#711). A guest that is gone resolves
+// to the generation-0 name.
+func (r *SwiftSnapshotReconciler) guestRootPVCName(ctx context.Context, namespace, guestName string) (string, error) {
+	var guest swiftv1alpha1.SwiftGuest
+	if err := r.Get(ctx, client.ObjectKey{Name: guestName, Namespace: namespace}, &guest); err != nil {
+		if errors.IsNotFound(err) {
+			return rootdisk.DefaultName(guestName), nil
+		}
+		return "", err
+	}
+	name, _, err := rootdisk.Claim(ctx, r.Client, &guest)
+	return name, err
 }
 
 // guestRootPVC reads the per-guest root-disk clone PVC and returns nil if
 // it doesn't exist yet (caller waits and retries).
 func (r *SwiftSnapshotReconciler) guestRootPVC(ctx context.Context, namespace, guestName string) (*corev1.PersistentVolumeClaim, error) {
+	name, err := r.guestRootPVCName(ctx, namespace, guestName)
+	if err != nil {
+		return nil, err
+	}
 	var pvc corev1.PersistentVolumeClaim
-	if err := r.Get(ctx, client.ObjectKey{Name: rootPVCName(guestName), Namespace: namespace}, &pvc); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &pvc); err != nil {
 		if errors.IsNotFound(err) {
 			return nil, nil
 		}

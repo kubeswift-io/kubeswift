@@ -389,7 +389,7 @@ func (r *SwiftSnapshotReconciler) handleCapturing(
 	}
 	if pvc == nil {
 		// PVC vanished mid-capture — fail the snapshot rather than spin.
-		return false, "per-guest root-disk PVC " + rootPVCName(snap.Spec.GuestRef.Name) + " disappeared during snapshot", nil
+		return false, "the root-disk PVC of SwiftGuest " + snap.Spec.GuestRef.Name + " disappeared during snapshot", nil
 	}
 
 	ready, restoreSize, errMsg, err := r.ensureVolumeSnapshot(ctx, snap, pvc.Name)

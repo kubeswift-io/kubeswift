@@ -555,7 +555,10 @@ func (r *SwiftGuestReconciler) maybeRootDiskFromSourceClone(
 		return false, nil, nil
 	}
 
-	sourceRootPVC := RootDiskCloneName(snap.Spec.GuestRef.Name)
+	sourceRootPVC, err := r.guestRootPVCName(ctx, guest.Namespace, snap.Spec.GuestRef.Name)
+	if err != nil {
+		return true, nil, err
+	}
 	cloneName := RootDiskCloneName(guest.Name)
 
 	// The source guest's root PVC supplies the disk. A memory-only clone is
