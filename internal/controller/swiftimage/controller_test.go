@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
+	storagev1alpha1 "github.com/kubeswift-io/kubeswift/api/storage/v1alpha1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -23,6 +24,11 @@ func testScheme() *runtime.Scheme {
 	_ = clientgoscheme.AddToScheme(s)
 	gvImage := schema.GroupVersion{Group: "image.kubeswift.io", Version: "v1alpha1"}
 	s.AddKnownTypes(gvImage, &imagev1alpha1.SwiftImage{}, &imagev1alpha1.SwiftImageList{})
+	gvStorage := schema.GroupVersion{Group: storagev1alpha1.GroupName, Version: storagev1alpha1.Version}
+	s.AddKnownTypes(gvStorage,
+		&storagev1alpha1.SwiftClusterStorageLocation{}, &storagev1alpha1.SwiftClusterStorageLocationList{},
+		&storagev1alpha1.SwiftStorageLocation{}, &storagev1alpha1.SwiftStorageLocationList{})
+	metav1.AddToGroupVersion(s, gvStorage)
 	return s
 }
 

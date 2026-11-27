@@ -52,6 +52,7 @@ func (r *SwiftSnapshotReconciler) resolveLocation(ctx context.Context, snap *sna
 			Repository:            c.Repository,
 			Tag:                   c.Tag,
 			Insecure:              c.Insecure,
+			CABundle:              c.CABundle,
 			CredentialsSecretName: c.CredentialsSecretName,
 			SigningKeySecretName:  c.SigningKeySecretName,
 		}, nil, "", nil

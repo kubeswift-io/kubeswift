@@ -200,6 +200,12 @@ spec:
                               locationRef's, else the namespace's default SwiftStorageLocation, else
                               the cluster's default SwiftClusterStorageLocation.
                             properties:
+                              caBundle:
+                                description: |-
+                                  CABundle is PEM-encoded CA certificates to trust for this registry, in
+                                  addition to the system roots, for a registry behind a private CA.
+                                  Recorded in status.location, so restores and clones use it too.
+                                type: string
                               credentialsSecretRef:
                                 description: |-
                                   CredentialsSecretRef references a Secret (same namespace) holding registry

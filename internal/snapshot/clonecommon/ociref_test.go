@@ -127,7 +127,8 @@ func TestLocationOCITag(t *testing.T) {
 func TestSnapshotOCI(t *testing.T) {
 	s := ociRefSnap("team-a", "s1", "zot.svc:5000/vm", "")
 	s.Spec.Backend.OCI.CredentialsSecretRef = &snapshotv1alpha1.SecretObjectReference{Name: "zot-creds"}
-	if c, ok := SnapshotOCI(s); !ok || c.Repository != "zot.svc:5000/vm" || c.Tag != "team-a-s1" || c.CredentialsSecretName != "zot-creds" {
+	s.Spec.Backend.OCI.CABundle = "explicit-pem"
+	if c, ok := SnapshotOCI(s); !ok || c.Repository != "zot.svc:5000/vm" || c.Tag != "team-a-s1" || c.CredentialsSecretName != "zot-creds" || c.CABundle != "explicit-pem" {
 		t.Errorf("legacy snapshot: %+v ok=%v", c, ok)
 	}
 	s.Status.Location = &snapshotv1alpha1.SnapshotLocation{Source: "SwiftClusterStorageLocation/main", Repository: "registry.example.com/k/team-a/snapshots", Tag: "s1-12345678", CABundle: "pem"}

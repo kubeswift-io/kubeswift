@@ -141,6 +141,11 @@ spec:
                     description: OCI pulls a golden raw disk artifact from an OCI
                       registry (P3).
                     properties:
+                      caBundle:
+                        description: |-
+                          CABundle is PEM-encoded CA certificates to trust for this registry, in
+                          addition to the system roots, for a registry behind a private CA.
+                        type: string
                       credentialsSecretRef:
                         description: |-
                           CredentialsSecretRef references a kubernetes.io/dockerconfigjson Secret
@@ -162,6 +167,34 @@ spec:
                           Insecure allows a plaintext (http) registry. UNSAFE — in-cluster / test
                           registry only.
                         type: boolean
+                      locationRef:
+                        description: |-
+                          LocationRef names the storage location whose connection settings
+                          (credentials Secret name, insecure, CA bundle, verify key) the pull
+                          uses. It applies only when none of insecure, caBundle,
+                          credentialsSecretRef and verifyKeySecretRef is set, and only if the
+                          location's registry host is the repository's. Without it, the
+                          namespace's default SwiftStorageLocation, else the cluster's default
+                          SwiftClusterStorageLocation, applies the same way. status.source records
+                          what was used.
+                        properties:
+                          kind:
+                            default: SwiftStorageLocation
+                            description: |-
+                              Kind is SwiftStorageLocation (the default) or
+                              SwiftClusterStorageLocation.
+                            enum:
+                            - SwiftStorageLocation
+                            - SwiftClusterStorageLocation
+                            type: string
+                          name:
+                            description: Name is the location's name.
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                        required:
+                        - name
+                        type: object
                       repository:
                         description: |-
                           Repository is the OCI repository WITHOUT a tag
@@ -191,6 +224,13 @@ spec:
                     required:
                     - repository
                     type: object
+                    x-kubernetes-validations:
+                    - message: locationRef takes the connection settings from a storage
+                        location; it cannot be combined with insecure, caBundle, credentialsSecretRef
+                        or verifyKeySecretRef
+                      rule: '!has(self.locationRef) || ((!has(self.insecure) || !self.insecure)
+                        && !has(self.caBundle) && !has(self.credentialsSecretRef)
+                        && !has(self.verifyKeySecretRef))'
                   pvcClone:
                     description: PVCClone copies a disk from a PVC in the image's
                       namespace.
@@ -363,6 +403,39 @@ spec:
                   between Validating and Preparing phases.
                 format: int64
                 type: integer
+              source:
+                description: Source records the connection settings an oci source
+                  was pulled with.
+                properties:
+                  caBundle:
+                    description: CABundle is the CA bundle used, if any.
+                    type: string
+                  credentialsSecretName:
+                    description: CredentialsSecretName is the dockerconfigjson Secret
+                      used, if any.
+                    type: string
+                  insecure:
+                    description: Insecure is the plaintext-registry setting used.
+                    type: boolean
+                  location:
+                    description: |-
+                      Location is where the connection settings came from: Explicit (the
+                      source sets them), <Kind>/<name> of a storage location, or None
+                      (anonymous, system roots).
+                    type: string
+                  verifyKey:
+                    description: |-
+                      VerifyKey is the cosign public key (PEM) the artifact was verified
+                      with, taken from a storage location.
+                    type: string
+                  verifyKeySecretName:
+                    description: |-
+                      VerifyKeySecretName is the Secret holding the cosign public key the
+                      artifact was verified with (explicit verifyKeySecretRef).
+                    type: string
+                required:
+                - location
+                type: object
               sourceFormat:
                 description: DiskFormat is the disk image format.
                 enum:

@@ -100,6 +100,8 @@ spec:
       # Prefer digest (immutable) over tag for reproducibility:
       digest: sha256:1a2b...        # OR: tag: noble-24.04
       # insecure: true              # plaintext in-cluster registry only
+      # caBundle: |                 # PEM, for a registry behind a private CA
+      #   -----BEGIN CERTIFICATE-----
       # credentialsSecretRef:       # kubernetes.io/dockerconfigjson, same namespace
       #   name: regcreds
 ```
@@ -172,6 +174,36 @@ then pulls by the **same** digest (so a tag can't be swapped between verify and
 pull). Because `cosign verify` is HTTPS-only, `verifyKeySecretRef` together with
 `insecure: true` is **rejected at admission** — verify-on-pull requires a TLS
 registry.
+
+### Connection settings from a storage location
+
+A source that sets none of `insecure`, `caBundle`, `credentialsSecretRef` and
+`verifyKeySecretRef` takes them from a storage location: `source.oci.locationRef`,
+else the namespace's default SwiftStorageLocation, else the cluster's default
+SwiftClusterStorageLocation. The location gives the credentials Secret name
+(looked up in the image's namespace), `insecure`, its CA bundle and its
+`verifyKey`; the repository stays the image's own. It applies only when the
+location's registry host is the repository's host:
+
+- a default for another registry applies nothing, and the pull is anonymous as
+  before;
+- a `locationRef` for another registry makes the image wait
+  (`StorageLocationInvalid`);
+- a missing credentials Secret makes it wait (`RegistryCredentialsMissing`).
+
+```yaml
+spec:
+  source:
+    oci:
+      repository: registry.example.com/golden/noble   # same host as the location
+      digest: sha256:1a2b...
+      # locationRef: {kind: SwiftClusterStorageLocation, name: main}   # else the defaults
+```
+
+Setting any connection field uses the source's fields as written, all or
+nothing; `locationRef` together with one is refused at admission. Either way
+`status.source` records what the import used (`location`: `Explicit`, the
+location's `<Kind>/<name>`, or `None`), resolved once before the import starts.
 
 ## See also
 
