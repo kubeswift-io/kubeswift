@@ -37,6 +37,9 @@ import (
 type SwiftRestoreReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// APIReader reads uncached where a stale guest would mishandle an
+	// in-place restore's hold. Nil falls back to the cached client.
+	APIReader client.Reader
 
 	// CurrentHypervisorVersion is the Cloud Hypervisor version that restores
 	// (e.g. "v54.0"). Empty means clonecommon.CloudHypervisorVersion, the one

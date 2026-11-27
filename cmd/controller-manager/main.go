@@ -421,6 +421,7 @@ func main() {
 
 	if err = (&swiftrestore.SwiftRestoreReconciler{
 		Client:            mgr.GetClient(),
+		APIReader:         mgr.GetAPIReader(),
 		Scheme:            mgr.GetScheme(),
 		SnapshotS3Image:   swiftsnapshot.SnapshotS3Image(),
 		SnapshotORASImage: swiftsnapshot.SnapshotORASImage(),

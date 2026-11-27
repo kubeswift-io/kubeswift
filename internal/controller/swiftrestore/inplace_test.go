@@ -5,9 +5,11 @@ import (
 	"testing"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
@@ -285,5 +287,113 @@ func TestInPlaceCSI_WaitsForAMigration(t *testing.T) {
 	got := get(t, c, "r1", "default")
 	if got.Status.Phase != snapshotv1alpha1.SwiftRestorePhasePending || reasonOrEmpty(findReady(got)) != ReasonGuestBusy {
 		t.Fatalf("phase %s reason %s, want Pending GuestBusy", got.Status.Phase, reasonOrEmpty(findReady(got)))
+	}
+}
+
+// The image clone Job that filled the replaced disk leaves a finished pod that
+// pins the PVC (pvc-protection); the restore deletes that Job at Ready, and
+// leaves a Job that is not the guest's alone.
+func TestInPlaceCSI_ReadyDeletesTheGuestsFinishedDiskJobs(t *testing.T) {
+	_, objs := inPlaceFixture()
+	isController := true
+	cloneJob := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "swiftguest-rootclone-g1", Namespace: "default", OwnerReferences: guestControllerRef("g1")}}
+	foreignJob := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "backup", Namespace: "default"}}
+	finished := func(name, job string) *corev1.Pod {
+		p := launcherPod(name, "swiftguest-root-g1", time.Now().Add(-2*time.Hour))
+		p.Spec.Volumes[0].Name = "dst"
+		p.OwnerReferences = []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: job, UID: "j-" + types.UID(job), Controller: &isController}}
+		p.Status.Phase = corev1.PodSucceeded
+		return p
+	}
+	r, c := newReconciler(t, append(objs, cloneJob, foreignJob, finished("clone-pod", cloneJob.Name), finished("backup-pod", foreignJob.Name))...)
+	swapToResuming(t, r, c)
+
+	started := time.Now()
+	if err := c.Create(context.Background(), launcherPod("g1", "swiftguest-root-g1-g1", started)); err != nil {
+		t.Fatal(err)
+	}
+	g := getGuest(t, c)
+	g.Status.Conditions = []metav1.Condition{{Type: conditionGuestRunning, Status: metav1.ConditionTrue, Reason: "VmRunning",
+		LastTransitionTime: metav1.NewTime(started.Add(time.Second))}}
+	if err := c.Update(context.Background(), g); err != nil {
+		t.Fatal(err)
+	}
+	reconcile(t, r, "r1", "default")
+	if got := get(t, c, "r1", "default"); got.Status.Phase != snapshotv1alpha1.SwiftRestorePhaseReady {
+		t.Fatalf("phase = %s", got.Status.Phase)
+	}
+	var job batchv1.Job
+	if err := c.Get(context.Background(), client.ObjectKey{Name: cloneJob.Name, Namespace: "default"}, &job); !apierrors.IsNotFound(err) {
+		t.Errorf("the guest's clone Job was kept: %v", err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: foreignJob.Name, Namespace: "default"}, &job); err != nil {
+		t.Errorf("a Job that is not the guest's was deleted: %v", err)
+	}
+}
+
+// A status write lost after the swap (a conflict) re-runs Restoring with
+// switched=false. The PVC says the swap happened: the launcher already running
+// from the restored disk is left alone, and a hold the lost pass did not
+// release is released.
+func TestInPlaceCSI_LostStatusAfterTheSwapDoesNotStopTheGuest(t *testing.T) {
+	_, objs := inPlaceFixture()
+	r, c := newReconciler(t, objs...)
+	swapToResuming(t, r, c)
+
+	// The guest controller started the guest on the restored disk.
+	if err := c.Create(context.Background(), launcherPod("g1", "swiftguest-root-g1-g1", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	// Roll the restore's status back to before the swap, and put the hold
+	// back, as if both writes of the swap pass were lost.
+	got := get(t, c, "r1", "default")
+	got.Status.Phase = snapshotv1alpha1.SwiftRestorePhaseRestoring
+	got.Status.RootDisk.Switched = false
+	if err := c.Status().Update(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+	g := getGuest(t, c)
+	g.Annotations = map[string]string{snapshotv1alpha1.AnnotationDiskRestore: "r1"}
+	if err := c.Update(context.Background(), g); err != nil {
+		t.Fatal(err)
+	}
+
+	reconcile(t, r, "r1", "default")
+	var pod corev1.Pod
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "g1", Namespace: "default"}, &pod); err != nil {
+		t.Fatalf("the launcher on the restored disk was deleted: %v", err)
+	}
+	if got := get(t, c, "r1", "default"); got.Status.Phase != snapshotv1alpha1.SwiftRestorePhaseResuming || !got.Status.RootDisk.Switched {
+		t.Fatalf("phase %s switched %v, want Resuming after the swap", got.Status.Phase, got.Status.RootDisk.Switched)
+	}
+	if getGuest(t, c).Annotations[snapshotv1alpha1.AnnotationDiskRestore] != "" {
+		t.Error("hold not released")
+	}
+}
+
+// A hold left on the guest after the swap (its release lost) is released in
+// Resuming, so the guest can start.
+func TestInPlaceCSI_ResumingReleasesALeftoverHold(t *testing.T) {
+	_, objs := inPlaceFixture()
+	r, c := newReconciler(t, objs...)
+	swapToResuming(t, r, c)
+	g := getGuest(t, c)
+	g.Annotations = map[string]string{snapshotv1alpha1.AnnotationDiskRestore: "r1"}
+	if err := c.Update(context.Background(), g); err != nil {
+		t.Fatal(err)
+	}
+	reconcile(t, r, "r1", "default")
+	if getGuest(t, c).Annotations[snapshotv1alpha1.AnnotationDiskRestore] != "" {
+		t.Error("leftover hold not released in Resuming")
+	}
+	// Another restore's hold is not this one's to remove.
+	g = getGuest(t, c)
+	g.Annotations = map[string]string{snapshotv1alpha1.AnnotationDiskRestore: "other"}
+	if err := c.Update(context.Background(), g); err != nil {
+		t.Fatal(err)
+	}
+	reconcile(t, r, "r1", "default")
+	if getGuest(t, c).Annotations[snapshotv1alpha1.AnnotationDiskRestore] != "other" {
+		t.Error("removed another restore's hold")
 	}
 }

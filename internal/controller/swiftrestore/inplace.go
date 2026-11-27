@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -163,6 +164,22 @@ func (r *SwiftRestoreReconciler) handleRestoringCSIInPlace(
 		return false, time.Second, "", nil
 	}
 	rd := status.RootDisk
+	gen := 1
+	if n, err := generationOf(rd.ClaimName, guest.Name); err == nil {
+		gen = n
+	}
+
+	// Whether the swap happened is read from the PVC, never only from
+	// status: a status write lost after the swap must not make the next pass
+	// stop the guest that already runs from the restored disk.
+	var pvc corev1.PersistentVolumeClaim
+	pvcErr := r.Get(ctx, client.ObjectKey{Name: rd.ClaimName, Namespace: restore.Namespace}, &pvc)
+	if pvcErr != nil && !apierrors.IsNotFound(pvcErr) {
+		return false, 0, "", pvcErr
+	}
+	if pvcErr == nil && rootdisk.Generation(&guest, &pvc) == gen {
+		rd.Switched = true
+	}
 
 	if !rd.Switched {
 		shape, err := r.diskShapeOf(ctx, restore.Namespace, rd.PreviousClaimName)
@@ -172,7 +189,6 @@ func (r *SwiftRestoreReconciler) handleRestoringCSIInPlace(
 		if err := r.ensureInPlaceRestorePVC(ctx, restore, &guest, rd.ClaimName, vsName, shape, sizeBytes); err != nil {
 			return false, 0, "", err
 		}
-		var pvc corev1.PersistentVolumeClaim
 		if err := r.Get(ctx, client.ObjectKey{Name: rd.ClaimName, Namespace: restore.Namespace}, &pvc); err != nil {
 			return false, 0, "", err
 		}
@@ -183,11 +199,10 @@ func (r *SwiftRestoreReconciler) handleRestoringCSIInPlace(
 		}
 
 		// Stop the guest: hold it, so the guest controller starts no launcher
-		// from either disk, then delete its launcher.
-		if guest.Annotations[snapshotv1alpha1.AnnotationDiskRestore] != restore.Name {
-			if err := r.setDiskRestoreAnnotation(ctx, &guest, &restore.Name); err != nil {
-				return false, 0, "", fmt.Errorf("hold SwiftGuest %s: %w", guest.Name, err)
-			}
+		// from either disk, then delete its launcher. The hold is set on every
+		// pass until the swap: a merge patch of the same value is a no-op.
+		if err := r.setDiskRestoreAnnotation(ctx, &guest, &restore.Name); err != nil {
+			return false, 0, "", fmt.Errorf("hold SwiftGuest %s: %w", guest.Name, err)
 		}
 		running, err := r.rootDiskLaunchers(ctx, &guest)
 		if err != nil {
@@ -208,20 +223,14 @@ func (r *SwiftRestoreReconciler) handleRestoringCSIInPlace(
 		}
 
 		// Swap: the new PVC becomes the guest's root disk.
-		gen := 1
-		if n, err := generationOf(rd.ClaimName, guest.Name); err == nil {
-			gen = n
-		}
 		if err := r.makeRootDisk(ctx, &pvc, &guest, gen); err != nil {
 			return false, 0, "", err
 		}
 		rd.Switched = true
 	}
 
-	if guest.Annotations[snapshotv1alpha1.AnnotationDiskRestore] == restore.Name {
-		if err := r.setDiskRestoreAnnotation(ctx, &guest, nil); err != nil {
-			return false, 0, "", fmt.Errorf("release SwiftGuest %s: %w", guest.Name, err)
-		}
+	if err := r.releaseDiskRestoreHold(ctx, &guest, restore.Name); err != nil {
+		return false, 0, "", err
 	}
 	setPhase(status, snapshotv1alpha1.SwiftRestorePhaseResuming)
 	setReadyCondition(status, metav1.ConditionFalse, ReasonResuming,
@@ -245,6 +254,12 @@ func (r *SwiftRestoreReconciler) handleResumingCSIInPlace(
 				"SwiftGuest "+restore.Spec.TargetGuest.Name+" was deleted during the restore")
 			return true, 0, nil
 		}
+		return false, 0, err
+	}
+
+	// The swap released the hold; release it again in case that patch was
+	// lost with the status write that followed it.
+	if err := r.releaseDiskRestoreHold(ctx, &guest, restore.Name); err != nil {
 		return false, 0, err
 	}
 
@@ -287,6 +302,12 @@ func (r *SwiftRestoreReconciler) handleResumingCSIInPlace(
 		if err == nil && metav1.IsControlledBy(&prev, &guest) {
 			if err := r.Delete(ctx, &prev); err != nil && !apierrors.IsNotFound(err) {
 				return false, 0, fmt.Errorf("delete replaced root disk %s: %w", prev.Name, err)
+			}
+			// A finished pod still pins a PVC it mounts (pvc-protection), so
+			// the guest's own Jobs that filled the replaced disk (the image
+			// clone Job) go with it.
+			if err := r.deleteFinishedDiskJobs(ctx, &guest, prev.Name); err != nil {
+				return false, 0, err
 			}
 		} else if err != nil && !apierrors.IsNotFound(err) {
 			return false, 0, err
@@ -346,10 +367,7 @@ func (r *SwiftRestoreReconciler) rollbackInPlaceDisk(
 			}
 		}
 	}
-	if guest.Annotations[snapshotv1alpha1.AnnotationDiskRestore] == restore.Name {
-		return r.setDiskRestoreAnnotation(ctx, &guest, nil)
-	}
-	return nil
+	return r.releaseDiskRestoreHold(ctx, &guest, restore.Name)
 }
 
 // ensureInPlaceRestorePVC creates (idempotent) the PVC an in-place restore
@@ -431,6 +449,31 @@ func (r *SwiftRestoreReconciler) makeRootDisk(ctx context.Context, pvc *corev1.P
 	return nil
 }
 
+// releaseDiskRestoreHold removes AnnotationDiskRestore from guest if, read
+// uncached, it names restore: a cached guest may not show a hold set a moment
+// ago, and a hold another restore set later is not this one's to remove. The
+// patch carries the resourceVersion it read, so a change in between conflicts
+// and is retried.
+func (r *SwiftRestoreReconciler) releaseDiskRestoreHold(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, restore string) error {
+	var reader client.Reader = r.Client
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
+	var live swiftv1alpha1.SwiftGuest
+	if err := reader.Get(ctx, client.ObjectKeyFromObject(guest), &live); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if live.Annotations[snapshotv1alpha1.AnnotationDiskRestore] != restore {
+		return nil
+	}
+	base := live.DeepCopy()
+	delete(live.Annotations, snapshotv1alpha1.AnnotationDiskRestore)
+	if err := r.Patch(ctx, &live, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("release SwiftGuest %s: %w", guest.Name, err)
+	}
+	return nil
+}
+
 // setDiskRestoreAnnotation sets AnnotationDiskRestore on guest to *name, or
 // removes it when name is nil.
 func (r *SwiftRestoreReconciler) setDiskRestoreAnnotation(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, name *string) error {
@@ -445,6 +488,54 @@ func (r *SwiftRestoreReconciler) setDiskRestoreAnnotation(ctx context.Context, g
 		return err
 	}
 	return r.Patch(ctx, guest, client.RawPatch(types.MergePatchType, data))
+}
+
+// deleteFinishedDiskJobs deletes the guest's Jobs whose finished pods mount
+// claim: those pods would keep the deleted PVC Terminating. Only Jobs the guest
+// controls are touched; anything else that mounts the PVC keeps it until it
+// goes.
+func (r *SwiftRestoreReconciler) deleteFinishedDiskJobs(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, claim string) error {
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(guest.Namespace)); err != nil {
+		return err
+	}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed {
+			continue
+		}
+		if !mountsClaim(pod, claim) {
+			continue
+		}
+		owner := metav1.GetControllerOf(pod)
+		if owner == nil || owner.Kind != "Job" {
+			continue
+		}
+		var job batchv1.Job
+		if err := r.Get(ctx, client.ObjectKey{Name: owner.Name, Namespace: guest.Namespace}, &job); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return err
+		}
+		if !metav1.IsControlledBy(&job, guest) {
+			continue
+		}
+		if err := r.Delete(ctx, &job, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete Job %s: %w", job.Name, err)
+		}
+	}
+	return nil
+}
+
+// mountsClaim reports whether pod mounts PVC claim.
+func mountsClaim(pod *corev1.Pod, claim string) bool {
+	for _, v := range pod.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == claim {
+			return true
+		}
+	}
+	return false
 }
 
 // rootDiskLaunchers lists the guest's pods that mount a root disk: its
