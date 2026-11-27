@@ -372,3 +372,43 @@ func TestShellName(t *testing.T) {
 		}
 	}
 }
+
+func TestPinToNodeAddsToEveryTerm(t *testing.T) {
+	p := &corev1.Pod{}
+	PinToNode(p, "n1")
+	terms := p.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) != 1 || terms[0].MatchFields[0].Values[0] != "n1" {
+		t.Fatalf("terms %+v", terms)
+	}
+
+	p = &corev1.Pod{Spec: corev1.PodSpec{Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{
+			{MatchExpressions: []corev1.NodeSelectorRequirement{{Key: "zone", Operator: corev1.NodeSelectorOpIn, Values: []string{"a"}}}},
+			{MatchExpressions: []corev1.NodeSelectorRequirement{{Key: "zone", Operator: corev1.NodeSelectorOpIn, Values: []string{"b"}}}},
+		}},
+	}}}}
+	PinToNode(p, "n1")
+	for i, term := range p.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
+		if len(term.MatchExpressions) != 1 || len(term.MatchFields) != 1 || term.MatchFields[0].Values[0] != "n1" {
+			t.Errorf("term %d %+v", i, term)
+		}
+	}
+}
+
+func TestAgentSandboxOwner(t *testing.T) {
+	ctl := true
+	for name, c := range map[string]struct {
+		ref  metav1.OwnerReference
+		want bool
+	}{
+		"agent-sandbox Sandbox": {metav1.OwnerReference{APIVersion: "agents.x-k8s.io/v1beta1", Kind: "Sandbox", Name: "s", UID: "u", Controller: &ctl}, true},
+		"other group":           {metav1.OwnerReference{APIVersion: "example.com/v1", Kind: "Sandbox", Name: "s", UID: "u", Controller: &ctl}, false},
+		"not the controller":    {metav1.OwnerReference{APIVersion: "agents.x-k8s.io/v1beta1", Kind: "Sandbox", Name: "s", UID: "u"}, false},
+		"other kind":            {metav1.OwnerReference{APIVersion: "agents.x-k8s.io/v1beta1", Kind: "SandboxClaim", Name: "s", UID: "u", Controller: &ctl}, false},
+	} {
+		p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{OwnerReferences: []metav1.OwnerReference{c.ref}}}
+		if got := AgentSandboxOwner(p) != nil; got != c.want {
+			t.Errorf("%s: %v", name, got)
+		}
+	}
+}

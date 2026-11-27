@@ -42,6 +42,10 @@ or `ResumeSyncFailed` if the guest's agent did not answer.
 Suspend and resume take a few seconds; pausing and writing the state of a
 256 MiB sandbox takes about 50 ms, and its state is about 55 MB on disk.
 
+In [pod mode](pod-mode.md), an agent-sandbox `Sandbox` set to
+`operatingMode: Suspended` suspends its microVM this way, and resumes it when
+set back to `Running`.
+
 ## Requirements and limits
 
 - A kernel whose bridge has `resume-sync`: `kernels/sandbox:6.6.25`,

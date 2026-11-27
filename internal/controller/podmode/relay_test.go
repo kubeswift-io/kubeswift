@@ -40,6 +40,7 @@ func linked(t *testing.T) []client.Object {
 	return []client.Object{
 		pod,
 		&sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: sbKey, Namespace: pmNS,
+			Labels:      map[string]string{podmode.LabelUID: uid},
 			Annotations: map[string]string{podmode.AnnotationStandIn: "tenant/sb-1"}}},
 		&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Name: sbKey, Namespace: pmNS, Labels: map[string]string{swiftsandbox.SandboxLabelKey: sbKey}},

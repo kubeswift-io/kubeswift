@@ -28,7 +28,8 @@ name, labels, annotations, owner, scheduling, resource requests and readiness
 probe. It runs one container, the `pod-shim`: unprivileged, no shell, Pod
 Security `restricted`. The workload runs in a SwiftSandbox `pm-<pod uid>` in
 the pod-mode namespace (`kubeswift-sandboxes`), on the stand-in's node, with
-network mode `restricted`. Deleting the Pod deletes the microVM.
+network mode `restricted`. Deleting the Pod deletes the microVM, except when
+an agent-sandbox Sandbox suspends it (below).
 
 | On the Pod | Where it goes |
 |---|---|
@@ -117,6 +118,36 @@ event.
 Unlike on a Pod, files are written once when the microVM starts, are not
 refreshed, and are writable in the guest.
 
+## agent-sandbox suspend and resume
+
+An agent-sandbox `Sandbox` suspends by deleting its Pod and resumes by
+creating a Pod of the same name. In pod mode its microVM is
+[suspended](suspend.md) instead of deleted, so the workload's memory, files
+and processes survive a suspend, which agent-sandbox alone does not promise:
+
+1. The Sandbox's `spec.operatingMode` becomes `Suspended`; agent-sandbox
+   deletes the Pod. The stand-in is held while its SwiftSandbox is suspended
+   (a few seconds), then goes. The microVM's state stays on its node; nothing
+   runs.
+2. `operatingMode: Running`: agent-sandbox creates the Pod again. Admission
+   pins it to the node holding the state, and the new stand-in resumes the
+   same SwiftSandbox. It keeps its `pm-<first pod uid>` name; the stand-in's
+   label `podmode.kubeswift.io/sandbox` names it.
+
+The microVM is deleted, and the Pod gets a new one (a cold boot), when it
+cannot be suspended (its kernel lacks `resume-sync`: `kernels/sandbox:6.6.25`
+or later) or cannot be resumed (that node is gone, so the Pod is not pinned
+and lands elsewhere, or the saved state is lost: `SnapshotLost`). That is all agent-sandbox promises anyway: only PVC data
+survives a suspend. Deleting the Sandbox, or its expiry, deletes the suspended
+microVM and its state within 30 s.
+
+Open TCP connections and `kubectl exec` sessions do not survive; the Pod's IP
+changes. A Pod pinned to a node that is full stays `Pending` until there is
+room there.
+
+Test: `make sandbox-pod-mode-suspend-test` (`test/sandbox/pod-mode-suspend.sh`,
+needs agent-sandbox installed).
+
 ## Security
 
 - The stand-in is unprivileged and runs nothing but the shim. A
@@ -150,6 +181,10 @@ refreshed, and are writable in the guest.
 | `MicroVMConfigError` | a referenced Secret, ConfigMap or key is missing |
 | `MicroVMRestarting` | the previous run's microVM is being removed before the next boots |
 | `MicroVMExited` | the workload ended |
+| `MicroVMSuspending` / `MicroVMResuming` | an agent-sandbox suspend or resume is in progress |
+| event `MicroVMSuspended` | the microVM is suspended; it resumes with the Sandbox |
+| event `MicroVMSuspendUnsupported`, `MicroVMSuspendFailed` | the microVM could not be suspended and was deleted |
+| event `MicroVMResumeFailed` | the suspended microVM could not be resumed; a new one boots |
 | event `NamespaceNotOptedIn` | a stand-in label in a namespace without `kubeswift.io/pod-mode=enabled` |
 | event `StandInTampered` | the stand-in was changed; it and its microVM are deleted |
 
@@ -157,7 +192,8 @@ A Deployment or Job in a namespace that enforces Pod Security `restricted` may
 warn `would violate PodSecurity` when it is created. The warning is about the
 Pod template as written. Its Pods are rewritten into stand-ins, which pass.
 
-The microVM itself is `kubectl -n kubeswift-sandboxes get swiftsandbox pm-<pod uid>`.
+The microVM itself is `kubectl -n kubeswift-sandboxes get swiftsandbox pm-<pod uid>`
+(after a resume, the name in the stand-in's label `podmode.kubeswift.io/sandbox`).
 
 ## Limits
 

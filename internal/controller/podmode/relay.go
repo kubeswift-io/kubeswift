@@ -171,11 +171,11 @@ func (r *Relay) resolve(req *http.Request) (*target, error) {
 		return nil, refuse(http.StatusForbidden, "%s was changed and is no longer a stand-in", key)
 	}
 	var sb sandboxv1alpha1.SwiftSandbox
-	sbKey := types.NamespacedName{Namespace: r.Namespace, Name: SandboxPrefix + uid}
+	sbKey := types.NamespacedName{Namespace: r.Namespace, Name: SandboxOf(&pod)}
 	if err := r.Client.Get(req.Context(), sbKey, &sb); err != nil {
 		return nil, refuse(http.StatusServiceUnavailable, "the microVM of %s does not exist yet", key)
 	}
-	if sb.Annotations[podmode.AnnotationStandIn] != key.String() {
+	if !owns(&pod, &sb) {
 		return nil, refuse(http.StatusForbidden, "%s does not belong to %s", sbKey, key)
 	}
 	var pods corev1.PodList
