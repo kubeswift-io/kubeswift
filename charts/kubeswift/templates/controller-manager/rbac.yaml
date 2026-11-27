@@ -292,14 +292,6 @@ rules:
   - apiGroups: ["authorization.k8s.io"]
     resources: ["subjectaccessreviews"]
     verbs: ["create"]
-  {{- if .Values.sandboxMaterialize.podMode.enabled }}
-  # Pod mode: read the agent-sandbox Sandbox that owns a stand-in, to tell its
-  # suspend (spec.operatingMode Suspended: the microVM is suspended, not
-  # deleted) from a deletion. Uncached reads only, so no list or watch.
-  - apiGroups: ["agents.x-k8s.io"]
-    resources: ["sandboxes"]
-    verbs: ["get"]
-  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
