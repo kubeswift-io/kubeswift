@@ -85,7 +85,7 @@ done
 # run-as-user: the USER/NNP/NONROOT lines below. landlock, vmgenid: the kernel's
 # own (CONFIG_SECURITY_LANDLOCK, CONFIG_VMGENID), listed so swiftletd can ask.
 # egress-vsock: kubeswift.egress= below (network.mode brokered).
-BRIDGE_FEATURES="files mounts warm-mounts outputs workload-stream run-as-user landlock vmgenid egress-vsock"
+BRIDGE_FEATURES="files mounts warm-mounts outputs workload-stream run-as-user landlock vmgenid egress-vsock resume-sync"
 echo "sandbox-bridge: features: $BRIDGE_FEATURES"
 
 # fail ends the sandbox. It reports an exit code first (125), as a workload

@@ -41,7 +41,7 @@ set -euo pipefail
 NS="${NS:-pod-mode-test}"
 OTHER_NS="${OTHER_NS:-pod-mode-test-other}"
 PM_NS="${PM_NS:-kubeswift-sandboxes}"
-KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.24}"
+KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.25}"
 IMAGE="${IMAGE:-docker.io/library/busybox:1.37.0}"
 CURL_IMAGE="${CURL_IMAGE:-docker.io/curlimages/curl:8.11.1}"
 TIMEOUT="${TIMEOUT:-300}"

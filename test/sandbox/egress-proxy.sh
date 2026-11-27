@@ -48,7 +48,7 @@
 set -euo pipefail
 
 NS="${NS:-sandbox-egress-proxy}"
-KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.24}"
+KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.25}"
 IMAGE="${IMAGE:-docker.io/curlimages/curl:8.11.1}"
 TARGET_IMAGE="${TARGET_IMAGE:-docker.io/library/busybox:1.36}"
 PROXY_IMAGE="${PROXY_IMAGE:-docker.io/envoyproxy/envoy:v1.36.2}"

@@ -53,6 +53,7 @@ fn minimum_kernels(feature: &str) -> (&'static str, &'static str) {
         "workload-stream" => ("6.6.18", "6.6.7"),
         "run-as-user" | "landlock" | "vmgenid" => ("6.6.22", "6.6.12"),
         "egress-vsock" => ("6.6.24", "6.6.14"),
+        "resume-sync" => ("6.6.25", "6.6.15"),
         _ => ("6.6.14", "6.6.3"),
     }
 }
@@ -98,5 +99,6 @@ mod tests {
     fn names_the_kernels_that_have_a_feature() {
         assert_eq!(minimum_kernels("warm-mounts"), ("6.6.15", "6.6.4"));
         assert_eq!(minimum_kernels("files"), ("6.6.14", "6.6.3"));
+        assert_eq!(minimum_kernels("resume-sync"), ("6.6.25", "6.6.15"));
     }
 }

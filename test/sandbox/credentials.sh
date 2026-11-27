@@ -36,7 +36,7 @@
 set -euo pipefail
 
 NS="${NS:-sandbox-credentials}"
-KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.24}"
+KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.25}"
 IMAGE="${IMAGE:-docker.io/curlimages/curl:8.11.1}"
 PRESET="${PRESET:-envoy}"
 DEST="${DEST:-postman-echo.com}"

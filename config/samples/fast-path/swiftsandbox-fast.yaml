@@ -56,7 +56,7 @@ metadata:
     step: prepare
 spec:
   ociRef:
-    image: ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.24@sha256:d8a77c63e631ebc27858f347d2e10a2e7bb69ff94d728361f75104c4ef739f50
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.25@sha256:9a4318fe12e8e64d8b828ea1c3974bf1330299f0a13be1332d9e2af48b86b622
   kernelCmdline: "console=ttyS0"
   profile: sandbox
 ---

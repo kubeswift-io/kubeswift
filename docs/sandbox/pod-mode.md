@@ -60,7 +60,7 @@ least 1 vCPU) and memory limit (else request, else 512Mi, at least 256Mi).
    spec:
      profile: sandbox
      kernelCmdline: console=ttyS0
-     ociRef: {image: ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.24}
+     ociRef: {image: ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.25}
    ```
 
 3. Opt a namespace in:

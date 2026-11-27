@@ -38,7 +38,7 @@
 set -euo pipefail
 
 NS="${NS:-sandbox-hardening}"
-KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.24}"
+KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.25}"
 ROOT_IMAGE="${ROOT_IMAGE:-docker.io/library/busybox:1.36}"
 # An image whose config names a non-root USER and has a shell.
 USER_IMAGE="${USER_IMAGE:-docker.io/curlimages/curl:8.11.1}"
