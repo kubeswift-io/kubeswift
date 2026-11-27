@@ -475,10 +475,11 @@ func restoreError(pod *corev1.Pod) string {
 	}
 	// swiftletd prefixes a restore that never started the guest; anything
 	// else is a guest that runs but was not synced.
-	if !strings.HasPrefix(res.Error, restoreErrorPrefix) {
+	msg, ok := strings.CutPrefix(res.Error, restoreErrorPrefix)
+	if !ok {
 		return ""
 	}
-	return res.Error
+	return msg
 }
 
 const restoreErrorPrefix = "restore: "
