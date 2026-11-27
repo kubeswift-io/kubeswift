@@ -1209,6 +1209,7 @@ the NetworkPolicy stays until the pod is gone.
 - [GPU sandboxes](gpu-sandboxes.md) — pass a GPU into a sandbox via the native SwiftGPU or DRA backend
 - [Scratch / persistent disks](scratch-disks.md) — attach a secondary block disk for build caches or datasets
 - [Pod mode](pod-mode.md) — run an ordinary Pod's container in a microVM with `runtimeClassName: kubeswift-microvm`
+- [Suspend and resume](suspend.md) — pause a running sandbox to its node with `spec.operatingMode: Suspended`, and resume it where it stopped
 - [Build your own](build-your-own.md) — custom sandbox kernels + base images (BYO / in-house library)
 - [`config/samples/sandbox/`](../../config/samples/sandbox/) — sample manifests and notes
 - [swiftctl reference](../swiftctl.md)

@@ -204,6 +204,48 @@ pub struct PingResponse {
     pub error: Option<String>,
 }
 
+/// Reply to a `resume-sync`. Field names match the agent's `SyncResult`.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
+pub struct ResumeSyncResponse {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// What the agent did: "clock", "entropy".
+    #[serde(default)]
+    pub synced: Vec<String>,
+    /// Guest time minus the host time sent, before the step.
+    #[serde(
+        rename = "clockOffsetMs",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub clock_offset_ms: Option<i64>,
+}
+
+/// Ask the guest agent to set its clock to `now_ns` (unix ns, the host's time
+/// when the request is built) and mix `entropy` into its pool (`resume-sync`,
+/// for a guest restored from a snapshot). An error means the agent did not
+/// answer; a reply with `ok == false` names what it could not do.
+pub fn resume_sync(
+    socket_path: &Path,
+    now_ns: i64,
+    entropy: &[u8],
+    timeout: Duration,
+) -> Result<ResumeSyncResponse, VsockError> {
+    let req = serde_json::json!({
+        "v": PROTOCOL_VERSION,
+        "op": "resume-sync",
+        "now": now_ns,
+        "entropy": base64_std(entropy),
+    });
+    let line = serde_json::to_vec(&req).map_err(|e| VsockError::Decode(e.to_string()))?;
+    let raw = request_line(socket_path, AGENT_PORT, &line, timeout)?;
+    let trimmed = trim_trailing_newline(&raw);
+    serde_json::from_slice(trimmed)
+        .map_err(|e| VsockError::Decode(format!("{}: {}", e, String::from_utf8_lossy(trimmed))))
+}
+
 /// Ask the guest agent whether it is up. An error means nothing answered on
 /// [`AGENT_PORT`] (no socket yet, the guest still booting, or no agent).
 pub fn ping(socket_path: &Path, timeout: Duration) -> Result<PingResponse, VsockError> {
@@ -492,6 +534,25 @@ fn read_full(
     Ok(())
 }
 
+/// Standard base64 with padding: how Go's encoding/json carries a []byte.
+fn base64_std(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for c in data.chunks(3) {
+        let n = (c[0] as u32) << 16
+            | (*c.get(1).unwrap_or(&0) as u32) << 8
+            | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= c.len() {
+                out.push(T[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
 fn trim_trailing_newline(b: &[u8]) -> &[u8] {
     let mut end = b.len();
     while end > 0 && (b[end - 1] == b'\n' || b[end - 1] == b'\r') {
@@ -502,6 +563,16 @@ fn trim_trailing_newline(b: &[u8]) -> &[u8] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn base64_matches_go_encoding() {
+        // Go: base64.StdEncoding.EncodeToString
+        assert_eq!(super::base64_std(b""), "");
+        assert_eq!(super::base64_std(b"f"), "Zg==");
+        assert_eq!(super::base64_std(b"fo"), "Zm8=");
+        assert_eq!(super::base64_std(b"foo"), "Zm9v");
+        assert_eq!(super::base64_std(&[0xff, 0xfe, 0x00, 0x01]), "//4AAQ==");
+    }
+
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -19,6 +20,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
+	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 	"github.com/kubeswift-io/kubeswift/internal/scheme"
 )
 
@@ -247,5 +250,217 @@ func TestSuspend_CleanupJob(t *testing.T) {
 	reqs := exportObjectToSandbox(context.Background(), job)
 	if len(reqs) != 1 || reqs[0].Namespace != "ns1" || reqs[0].Name != "sb" {
 		t.Errorf("job maps to %v", reqs)
+	}
+}
+
+// suspendedFixture: a Suspended sandbox (spec as given) whose state was taken
+// an hour ago on node n1, which exists unless nodeGone.
+func suspendedFixture(t *testing.T, mode sandboxv1alpha1.SandboxOperatingMode, nodeGone bool) (*SwiftSandboxReconciler, client.Client) {
+	t.Helper()
+	started := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	taken := metav1.NewTime(time.Now().Add(-time.Hour))
+	sb := &sandboxv1alpha1.SwiftSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "default", UID: "u-1234", Generation: 3,
+			Finalizers: []string{sandboxSuspendFinalizer}},
+		Spec: sandboxv1alpha1.SwiftSandboxSpec{Image: "registry.example/busybox:1.37", OperatingMode: mode},
+		Status: sandboxv1alpha1.SwiftSandboxStatus{
+			Phase: sandboxv1alpha1.SwiftSandboxSuspended, StartedAt: &started,
+			Rootfs: &sandboxv1alpha1.SandboxRootfsStatus{Digest: "sha256:" + strings.Repeat("a", 64)},
+			SuspendedState: &sandboxv1alpha1.SandboxSuspendedState{
+				NodeName: "n1", Path: SuspendRoot + "/u-1234", LauncherImage: "swiftletd:old", TakenAt: &taken,
+			},
+		},
+	}
+	objs := []client.Object{sb}
+	if !nodeGone {
+		objs = append(objs, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n1"}})
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(objs...).
+		WithStatusSubresource(&sandboxv1alpha1.SwiftSandbox{}).Build()
+	return &SwiftSandboxReconciler{Client: c, APIReader: c, Scheme: scheme.Scheme, Recorder: record.NewFakeRecorder(20)}, c
+}
+
+// Set back to Running: Resuming, and spec.timeout's clock skips the hour
+// the sandbox was suspended.
+func TestResume_Starts(t *testing.T) {
+	r, c := suspendedFixture(t, sandboxv1alpha1.SandboxOperatingRunning, false)
+	before := getSandbox(t, c, "sb").Status.StartedAt.Time
+	runOperatingMode(t, r, c)
+	sb := getSandbox(t, c, "sb")
+	if sb.Status.Phase != sandboxv1alpha1.SwiftSandboxResuming || !resuming(sb) {
+		t.Fatalf("phase %s", sb.Status.Phase)
+	}
+	if moved := sb.Status.StartedAt.Sub(before); moved < 59*time.Minute || moved > 61*time.Minute {
+		t.Errorf("StartedAt moved %s, want about 1h", moved)
+	}
+	if cond := suspendedCond(sb); cond == nil || cond.Reason != reasonResuming {
+		t.Errorf("condition %+v", cond)
+	}
+	// Resuming is the launch path's: not handled here.
+	if runOperatingMode(t, r, c) {
+		t.Error("Resuming handled by reconcileOperatingMode")
+	}
+}
+
+// The node holding the state is gone: SnapshotLost, Failed; the finalizer
+// stays for the cleanup.
+func TestResume_NodeGone(t *testing.T) {
+	r, c := suspendedFixture(t, sandboxv1alpha1.SandboxOperatingRunning, true)
+	runOperatingMode(t, r, c)
+	sb := getSandbox(t, c, "sb")
+	if sb.Status.Phase != sandboxv1alpha1.SwiftSandboxFailed {
+		t.Fatalf("phase %s", sb.Status.Phase)
+	}
+	if cond := suspendedCond(sb); cond == nil || cond.Reason != reasonSnapshotLost {
+		t.Errorf("condition %+v", cond)
+	}
+	if !controllerutil.ContainsFinalizer(sb, sandboxSuspendFinalizer) {
+		t.Error("cleanup finalizer dropped")
+	}
+}
+
+// The launcher that resumes: pinned to the node, by the recorded launcher
+// image, restoring the recorded path, with the image by digest.
+func TestResume_Launch(t *testing.T) {
+	_, c := suspendedFixture(t, sandboxv1alpha1.SandboxOperatingRunning, false)
+	sb := getSandbox(t, c, "sb")
+	sb.Status.Phase = sandboxv1alpha1.SwiftSandboxResuming
+	pinned, err := pinnedImage(sb)
+	if err != nil || pinned != "registry.example/busybox@sha256:"+strings.Repeat("a", 64) {
+		t.Fatalf("pinned %q %v", pinned, err)
+	}
+	if got := podNodeSelector(sb)[corev1.LabelHostname]; got != "n1" {
+		t.Errorf("node selector hostname %q", got)
+	}
+	intent := &runtimeintent.RuntimeIntent{}
+	resumeLaunch(sb, intent)
+	if intent.Restore == nil || intent.Restore.SnapshotPath != SuspendRoot+"/u-1234" || !intent.Restore.AutoResume || intent.Restore.MemoryRestoreMode != "copy" {
+		t.Errorf("restore %+v", intent.Restore)
+	}
+	cur := swiftguest.LauncherImage()
+	pod := &corev1.Pod{Spec: corev1.PodSpec{
+		InitContainers: []corev1.Container{{Name: "network-init", Image: cur}, {Name: "materialize", Image: "m"}},
+		Containers:     []corev1.Container{{Name: launcherName, Image: cur}, {Name: "console", Image: "m"}},
+	}}
+	resumeLauncherImage(sb, pod)
+	if pod.Spec.InitContainers[0].Image != "swiftletd:old" || pod.Spec.Containers[0].Image != "swiftletd:old" ||
+		pod.Spec.InitContainers[1].Image != "m" || pod.Spec.Containers[1].Image != "m" {
+		t.Errorf("images %+v %+v", pod.Spec.InitContainers, pod.Spec.Containers)
+	}
+}
+
+func TestResume_Drift(t *testing.T) {
+	sb := &sandboxv1alpha1.SwiftSandbox{
+		Spec: sandboxv1alpha1.SwiftSandboxSpec{Model: &sandboxv1alpha1.SandboxModel{ImageRef: "m:1"}},
+		Status: sandboxv1alpha1.SwiftSandboxStatus{
+			Model:     &sandboxv1alpha1.SandboxModelStatus{Digest: "sha256:m1"},
+			Artifacts: []sandboxv1alpha1.SandboxArtifactStatus{{Name: "a", Digest: "sha256:a1"}},
+		},
+	}
+	if d := resumeDrift(sb, "sha256:m1", []sandboxv1alpha1.SandboxArtifactStatus{{Name: "a", Digest: "sha256:a1"}}); d != "" {
+		t.Errorf("unchanged content reported: %s", d)
+	}
+	if d := resumeDrift(sb, "sha256:m2", nil); !strings.Contains(d, "model") {
+		t.Errorf("model drift: %q", d)
+	}
+	if d := resumeDrift(sb, "sha256:m1", []sandboxv1alpha1.SandboxArtifactStatus{{Name: "a", Digest: "sha256:a2"}}); !strings.Contains(d, "artifact a") {
+		t.Errorf("artifact drift: %q", d)
+	}
+}
+
+// A restored launcher's resume-sync report decides when the resume is done.
+func TestResume_Settled(t *testing.T) {
+	r := &SwiftSandboxReconciler{Recorder: record.NewFakeRecorder(10)}
+	mk := func(ann string, condAge time.Duration) (*sandboxv1alpha1.SwiftSandbox, *corev1.Pod) {
+		sb := &sandboxv1alpha1.SwiftSandbox{Status: sandboxv1alpha1.SwiftSandboxStatus{Conditions: []metav1.Condition{{
+			Type: sandboxv1alpha1.SwiftSandboxConditionSuspended, Status: metav1.ConditionFalse, Reason: reasonResuming,
+			LastTransitionTime: metav1.NewTime(time.Now().Add(-condAge)),
+		}}}}
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}}, Spec: corev1.PodSpec{NodeName: "n1"}}
+		if ann != "" {
+			pod.Annotations[annResumed] = ann
+		}
+		return sb, pod
+	}
+	sb, pod := mk("", time.Second)
+	if r.resumeSettled(sb, pod) {
+		t.Error("settled with no report yet")
+	}
+	sb, pod = mk(`{"ok":true,"synced":["clock","entropy"],"clockOffsetMs":-74392}`, time.Second)
+	if !r.resumeSettled(sb, pod) {
+		t.Fatal("not settled on an ok report")
+	}
+	if c := suspendedCond(sb); c.Reason != reasonResumed || !strings.Contains(c.Message, "-74392 ms") {
+		t.Errorf("condition %+v", c)
+	}
+	sb, pod = mk(`{"ok":false,"error":"the guest agent did not answer"}`, time.Second)
+	if !r.resumeSettled(sb, pod) || suspendedCond(sb).Reason != reasonResumeSyncFailed {
+		t.Errorf("failed report: %+v", suspendedCond(sb))
+	}
+	sb, pod = mk("", resumeSyncWait+time.Second)
+	if !r.resumeSettled(sb, pod) || suspendedCond(sb).Reason != reasonResumeSyncFailed {
+		t.Errorf("no report in time: %+v", suspendedCond(sb))
+	}
+}
+
+// Waiting for something (the old launcher to stop, the registry) during a
+// resume keeps it Resuming: Pending dropped the resume and the next pass
+// booted the sandbox cold (found on a dev cluster).
+func TestResume_WaitKeepsResuming(t *testing.T) {
+	r, c := suspendedFixture(t, sandboxv1alpha1.SandboxOperatingRunning, false)
+	sb := getSandbox(t, c, "sb")
+	sb.Status.Phase = sandboxv1alpha1.SwiftSandboxResuming
+	if _, err := r.waitForReference(context.Background(), sb, "PreviousLauncherStopping", "waiting"); err != nil {
+		t.Fatal(err)
+	}
+	if got := getSandbox(t, c, "sb"); got.Status.Phase != sandboxv1alpha1.SwiftSandboxResuming || !resuming(got) {
+		t.Fatalf("phase %s after a wait", got.Status.Phase)
+	}
+	// A cold start still waits as Pending.
+	cold := getSandbox(t, c, "sb")
+	cold.Status.Phase = sandboxv1alpha1.SwiftSandboxMaterializing
+	cold.Status.SuspendedState = nil
+	if _, err := r.waitForReference(context.Background(), cold, "KernelNotReady", "waiting"); err != nil {
+		t.Fatal(err)
+	}
+	if got := getSandbox(t, c, "sb"); got.Status.Phase != sandboxv1alpha1.SwiftSandboxPending {
+		t.Fatalf("cold wait phase %s", got.Status.Phase)
+	}
+}
+
+// finishResume keeps the status set in the same pass (the finalizer patch
+// refreshes the object from the server).
+func TestResume_FinishKeepsStatus(t *testing.T) {
+	r, c := suspendedFixture(t, sandboxv1alpha1.SandboxOperatingRunning, false)
+	sb := getSandbox(t, c, "sb")
+	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
+		Type: sandboxv1alpha1.SwiftSandboxConditionSuspended, Status: metav1.ConditionFalse, Reason: reasonResumed, Message: "m",
+	})
+	if err := r.finishResume(context.Background(), sb); err != nil {
+		t.Fatal(err)
+	}
+	if cond := suspendedCond(sb); cond == nil || cond.Reason != reasonResumed {
+		t.Errorf("condition after finishResume %+v", cond)
+	}
+	if sb.Status.SuspendedState != nil || controllerutil.ContainsFinalizer(sb, sandboxSuspendFinalizer) {
+		t.Errorf("state %+v finalizers %v", sb.Status.SuspendedState, sb.Finalizers)
+	}
+}
+
+func TestResume_RestoreErrorIsReported(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+		annResumed: `{"ok":false,"error":"restore: rootfs /x is not the file the guest was suspended with (rebuilt or replaced)"}`,
+	}}}
+	if got := restoreError(pod); !strings.Contains(got, "not the file") {
+		t.Errorf("restoreError %q", got)
+	}
+	pod.Annotations[annResumed] = `{"ok":true}`
+	if got := restoreError(pod); got != "" {
+		t.Errorf("ok report gave %q", got)
+	}
+	// A guest that runs but was not synced is not a failed restore.
+	pod.Annotations[annResumed] = `{"ok":false,"error":"the guest agent did not answer"}`
+	if got := restoreError(pod); got != "" {
+		t.Errorf("sync failure read as a restore failure: %q", got)
 	}
 }

@@ -68,6 +68,47 @@ pub struct SuspendState {
     pub taken_at_unix: i64,
     /// Bytes on disk of the whole directory (memory-ranges is sparse).
     pub size_bytes: u64,
+    /// The read-only rootfs image the guest has open: a restore refuses a
+    /// file that is not this one (the node cache rebuilt or replaced it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rootfs: Option<FileId>,
+}
+
+/// Identity of a file on the node.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileId {
+    pub path: String,
+    pub size: u64,
+    pub mtime_ns: i64,
+    pub inode: u64,
+}
+
+impl FileId {
+    fn of(path: &str) -> std::io::Result<Self> {
+        let m = std::fs::metadata(path)?;
+        Ok(FileId {
+            path: path.to_string(),
+            size: m.len(),
+            mtime_ns: m.mtime() * 1_000_000_000 + m.mtime_nsec(),
+            inode: m.ino(),
+        })
+    }
+}
+
+/// The node's rootfs image cache (sandbox-materialize --cache-dir).
+const ROOTFS_CACHE: &str = "/var/lib/kubeswift/sandbox-rootfs/";
+
+/// The block rootfs in a sandbox's Cloud Hypervisor config: the disk from
+/// the node's rootfs cache. None for a virtio-fs rootfs, whose only disk is
+/// the config disk.
+fn rootfs_path(info: &serde_json::Value) -> Option<String> {
+    info.pointer("/config/disks")?
+        .as_array()?
+        .iter()
+        .filter_map(|d| d.get("path").and_then(|v| v.as_str()))
+        .find(|p| p.starts_with(ROOTFS_CACHE))
+        .map(str::to_string)
 }
 
 /// Handle the `suspend` verb.
@@ -137,6 +178,7 @@ pub fn dispatch(action: &PendingAction, api_socket: &Path) -> Result<ActionOutco
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0),
         size_bytes: 0,
+        rootfs: rootfs_path(&info).and_then(|p| FileId::of(&p).ok()),
     };
     if let Err(e) = write_state(Path::new(&dir), &mut state) {
         return fail(format!("record state: {}", e));
@@ -158,6 +200,172 @@ pub fn dispatch(action: &PendingAction, api_socket: &Path) -> Result<ActionOutco
         success_status: None,
         suppress_status: false,
     })
+}
+
+// ─── Resume ──────────────────────────────────────────────────────────────────
+
+/// Reads the state a suspend recorded and checks the node still has what the
+/// guest expects: the same rootfs file, and the guest's gateway MAC on br0
+/// (set when it differs). The error names what is wrong; the restore must
+/// not go on.
+pub fn prepare_restore(snapshot_dir: &str, runtime_dir: &Path) -> Result<SuspendState, String> {
+    let path = Path::new(snapshot_dir).join(STATE_FILE);
+    let raw = std::fs::read(&path).map_err(|e| format!("read {}: {}", path.display(), e))?;
+    let state: SuspendState =
+        serde_json::from_slice(&raw).map_err(|e| format!("parse {}: {}", path.display(), e))?;
+    if let Some(want) = &state.rootfs {
+        let have =
+            FileId::of(&want.path).map_err(|e| format!("rootfs {} is gone: {}", want.path, e))?;
+        if &have != want {
+            return Err(format!(
+                "rootfs {} is not the file the guest was suspended with (rebuilt or replaced)",
+                want.path
+            ));
+        }
+    }
+    if !state.bridge_mac.is_empty() {
+        let now = read_trimmed("/sys/class/net/br0/address");
+        if !now.is_empty() && now != state.bridge_mac {
+            log::info!(
+                "restore: br0 {} -> {} (the guest's gateway MAC)",
+                now,
+                state.bridge_mac
+            );
+            let out = std::process::Command::new("ip")
+                .args(["link", "set", "br0", "address", &state.bridge_mac])
+                .output()
+                .map_err(|e| format!("ip link set br0: {}", e))?;
+            if !out.status.success() {
+                return Err(format!(
+                    "set br0 address {}: {}",
+                    state.bridge_mac,
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+        }
+    }
+    if !state.guest_ip.is_empty() {
+        seed_lease(
+            snapshot_dir,
+            &runtime_dir.join("dnsmasq.leases"),
+            &state.guest_ip,
+        )?;
+    }
+    Ok(state)
+}
+
+/// Gives the launcher's lease file the restored guest's address. The guest
+/// keeps the address it had (the kernel's DHCP client never renews), so no
+/// lease would ever appear, and the lease poller, the probes and
+/// status.network all read the guest's address from this file. dnsmasq only
+/// rewrites it on DHCP traffic, which a restored guest does not send.
+fn seed_lease(snapshot_dir: &str, leases: &Path, ip: &str) -> Result<(), String> {
+    let cfg = Path::new(snapshot_dir).join("config.json");
+    let mac = std::fs::read(&cfg)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| {
+            v.pointer("/net/0/mac")
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    if mac.is_empty() {
+        return Ok(()); // no NIC
+    }
+    let expiry = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() + 3600)
+        .unwrap_or(0);
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(leases)
+        .map_err(|e| format!("open {}: {}", leases.display(), e))?;
+    writeln!(f, "{} {} {} * *", expiry, mac, ip)
+        .map_err(|e| format!("write {}: {}", leases.display(), e))
+}
+
+/// A placeholder for the config disk the guest read at boot: zeros of the
+/// recorded size. The guest does not read it again, so no Secret is read on
+/// resume.
+pub fn write_placeholder_config(path: &Path, size: u64) -> std::io::Result<()> {
+    let f = std::fs::File::create(path)?;
+    f.set_len(size)
+}
+
+/// How long the restored guest's agent has to answer resume-sync.
+const RESUME_SYNC_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// After a restore: sets the guest's clock and adds host entropy through its
+/// agent (resume-sync), reports the result on the pod, and removes the
+/// snapshot, so it is restored only once.
+pub fn spawn_resume_sync(vsock: std::path::PathBuf, snapshot_dir: String) {
+    let spawned = std::thread::Builder::new()
+        .name("resume-sync".into())
+        .spawn(move || {
+            let until = std::time::Instant::now() + RESUME_SYNC_WINDOW;
+            let mut last_err = String::new();
+            let result = loop {
+                let mut entropy = [0u8; 64];
+                if let Err(e) = getrandom(&mut entropy) {
+                    log::warn!("resume_sync: no host entropy: {}", e);
+                }
+                let now_ns = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as i64)
+                    .unwrap_or(0);
+                match swift_vsock_client::resume_sync(
+                    &vsock,
+                    now_ns,
+                    &entropy,
+                    std::time::Duration::from_secs(5),
+                ) {
+                    Ok(r) => break r,
+                    Err(e) => last_err = e.to_string(),
+                }
+                if std::time::Instant::now() >= until {
+                    break swift_vsock_client::ResumeSyncResponse {
+                        ok: false,
+                        error: Some(format!("the guest agent did not answer: {}", last_err)),
+                        ..Default::default()
+                    };
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            };
+            log::info!(
+                "resume_sync ok={} synced={:?} clock_offset_ms={:?} error={:?}",
+                result.ok,
+                result.synced,
+                result.clock_offset_ms,
+                result.error
+            );
+            // Cloud Hypervisor restored the guest in copy mode: its memory is
+            // in the hypervisor now, so the saved state is done with, synced
+            // or not (the controller drops its cleanup finalizer either way).
+            if let Err(e) = std::fs::remove_dir_all(&snapshot_dir) {
+                log::warn!("resume_sync: remove {}: {}", snapshot_dir, e);
+            }
+            let json = serde_json::to_string(&result).unwrap_or_default();
+            if let (Ok(ns), Ok(n)) = (std::env::var("POD_NAMESPACE"), std::env::var("POD_NAME")) {
+                if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    if let Err(e) = rt.block_on(crate::report::report_resume_sync(&ns, &n, &json)) {
+                        log::error!("report_resume_sync_failed: {}", e);
+                    }
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        log::error!("resume_sync: thread spawn failed: {}", e);
+    }
+}
+
+fn getrandom(buf: &mut [u8]) -> std::io::Result<()> {
+    use std::io::Read;
+    std::fs::File::open("/dev/urandom")?.read_exact(buf)
 }
 
 /// Writes [`STATE_FILE`] with the directory's size, then flushes every file
@@ -275,6 +483,7 @@ mod tests {
             hypervisor_version: "v54.0".into(),
             taken_at_unix: 1,
             size_bytes: 0,
+            rootfs: None,
         };
         write_state(d.path(), &mut st).unwrap();
         assert!(st.size_bytes >= 8192, "size {}", st.size_bytes);
@@ -286,5 +495,107 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn finds_the_block_rootfs_in_the_vm_config() {
+        let block = serde_json::json!({"config": {"disks": [
+            {"path": "/var/lib/kubeswift/sandbox-rootfs/sha256-ab.ext4", "readonly": true},
+            {"path": "/run/exec.config", "readonly": true}]}});
+        assert_eq!(
+            rootfs_path(&block).as_deref(),
+            Some("/var/lib/kubeswift/sandbox-rootfs/sha256-ab.ext4")
+        );
+        // A virtio-fs rootfs: the config disk comes first and is read-only too.
+        let virtiofs = serde_json::json!({"config": {"disks": [{"path": "/run/exec.config", "readonly": true}]}});
+        assert_eq!(rootfs_path(&virtiofs), None);
+        assert_eq!(rootfs_path(&serde_json::json!({})), None);
+    }
+
+    fn state_with(rootfs: Option<FileId>) -> SuspendState {
+        SuspendState {
+            version: 1,
+            bridge_mac: String::new(),
+            guest_ip: String::new(),
+            intent_sha256: String::new(),
+            config_disk_bytes: 4096,
+            hypervisor_version: String::new(),
+            taken_at_unix: 0,
+            size_bytes: 0,
+            rootfs,
+        }
+    }
+
+    #[test]
+    fn restore_refuses_a_replaced_rootfs() {
+        let d = tempfile::tempdir().unwrap();
+        let img = d.path().join("root.ext4");
+        std::fs::write(&img, b"one").unwrap();
+        let id = FileId::of(img.to_str().unwrap()).unwrap();
+        let snap = d.path().join("snap");
+        std::fs::create_dir(&snap).unwrap();
+        std::fs::write(
+            snap.join(STATE_FILE),
+            serde_json::to_vec(&state_with(Some(id))).unwrap(),
+        )
+        .unwrap();
+        assert!(prepare_restore(snap.to_str().unwrap(), d.path()).is_ok());
+        // Rebuilt: a new file at the same path.
+        std::fs::remove_file(&img).unwrap();
+        std::fs::write(&img, b"rebuilt").unwrap();
+        let err = prepare_restore(snap.to_str().unwrap(), d.path()).unwrap_err();
+        assert!(err.contains("not the file"), "{err}");
+        std::fs::remove_file(&img).unwrap();
+        let err = prepare_restore(snap.to_str().unwrap(), d.path()).unwrap_err();
+        assert!(err.contains("is gone"), "{err}");
+    }
+
+    #[test]
+    fn restore_needs_the_state_file() {
+        let d = tempfile::tempdir().unwrap();
+        let err = prepare_restore(d.path().to_str().unwrap(), d.path()).unwrap_err();
+        assert!(err.contains(STATE_FILE), "{err}");
+    }
+
+    #[test]
+    fn placeholder_config_has_the_recorded_size() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("exec.config");
+        std::fs::write(&p, b"secret=value").unwrap();
+        write_placeholder_config(&p, 1048576).unwrap();
+        let data = std::fs::read(&p).unwrap();
+        assert_eq!(data.len(), 1048576);
+        assert!(
+            data.iter().all(|b| *b == 0),
+            "old content left in the placeholder"
+        );
+    }
+
+    #[test]
+    fn seeds_the_lease_of_the_restored_guest() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join("config.json"),
+            r#"{"net":[{"mac":"2e:fe:48:8b:2f:cf"}]}"#,
+        )
+        .unwrap();
+        let leases = d.path().join("dnsmasq.leases");
+        seed_lease(d.path().to_str().unwrap(), &leases, "192.168.99.12").unwrap();
+        let text = std::fs::read_to_string(&leases).unwrap();
+        assert_eq!(
+            crate::lease::parse_first_lease(&text).as_deref(),
+            Some("192.168.99.12")
+        );
+        assert!(text.contains(" 2e:fe:48:8b:2f:cf 192.168.99.12 "), "{text}");
+        // No NIC in the config: nothing written.
+        let e = tempfile::tempdir().unwrap();
+        std::fs::write(e.path().join("config.json"), r#"{"net":null}"#).unwrap();
+        seed_lease(
+            e.path().to_str().unwrap(),
+            &e.path().join("l"),
+            "192.168.99.12",
+        )
+        .unwrap();
+        assert!(!e.path().join("l").exists());
     }
 }

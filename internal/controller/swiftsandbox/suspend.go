@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/name"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -18,7 +19,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/names"
+	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 	sandboxwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsandbox"
 )
 
@@ -51,6 +54,10 @@ const (
 	reasonSuspending         = "Suspending"
 	reasonSuspended          = "Suspended"
 	reasonNotStarted         = "NotStarted"
+	reasonResuming           = "Resuming"
+	reasonResumed            = "Resumed"
+	reasonResumeSyncFailed   = "ResumeSyncFailed"
+	reasonSnapshotLost       = "SnapshotLost"
 
 	// suspendActionTimeout bounds the launcher's pause and snapshot.
 	suspendActionTimeout = 5 * time.Minute
@@ -293,14 +300,202 @@ func (r *SwiftSandboxReconciler) reconcileSuspended(ctx context.Context, sb *san
 		return ctrl.Result{RequeueAfter: pollInterval}, nil
 	}
 	if !sb.Spec.Suspended() {
-		// Resume is added by the next change; until then a suspended sandbox
-		// stays suspended and says so.
-		const msg = "resume is not available yet: the sandbox stays suspended"
-		if sb.Status.Message != msg {
-			return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxSuspended, msg)
-		}
+		return r.startResume(ctx, sb)
 	}
 	return ctrl.Result{}, nil
+}
+
+// startResume moves a suspended sandbox to Resuming; the launch path then
+// builds a launcher that restores it (resumeLaunch). spec.timeout counts
+// running time only, so StartedAt moves forward by the suspended interval.
+func (r *SwiftSandboxReconciler) startResume(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox) (ctrl.Result, error) {
+	ss := sb.Status.SuspendedState
+	if ss == nil || ss.NodeName == "" {
+		return r.snapshotLost(ctx, sb, "no saved state is recorded")
+	}
+	gone, err := r.nodeGone(ctx, ss.NodeName)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if gone {
+		return r.snapshotLost(ctx, sb, "node "+ss.NodeName+" that holds the saved state is gone")
+	}
+	if sb.Status.StartedAt != nil && ss.TakenAt != nil {
+		if away := time.Since(ss.TakenAt.Time); away > 0 {
+			moved := metav1.NewTime(sb.Status.StartedAt.Add(away))
+			sb.Status.StartedAt = &moved
+		}
+	}
+	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
+		Type: sandboxv1alpha1.SwiftSandboxConditionSuspended, Status: metav1.ConditionFalse,
+		Reason: reasonResuming, Message: "restoring the microVM on node " + ss.NodeName,
+		ObservedGeneration: sb.Generation,
+	})
+	if _, err := r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxResuming, "resuming on node "+ss.NodeName); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{Requeue: true}, nil
+}
+
+// snapshotLost fails a sandbox whose saved state cannot be restored. The
+// finalizer stays: deleting the sandbox still removes what is on the node.
+func (r *SwiftSandboxReconciler) snapshotLost(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, msg string) (ctrl.Result, error) {
+	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
+		Type: sandboxv1alpha1.SwiftSandboxConditionSuspended, Status: metav1.ConditionFalse,
+		Reason: reasonSnapshotLost, Message: msg, ObservedGeneration: sb.Generation,
+	})
+	if r.Recorder != nil {
+		r.Recorder.Event(sb, corev1.EventTypeWarning, reasonSnapshotLost, msg)
+	}
+	return r.fail(ctx, sb, reasonSnapshotLost, msg)
+}
+
+// resuming: the launch path is building, or watching, a launcher that
+// restores the sandbox.
+func resuming(sb *sandboxv1alpha1.SwiftSandbox) bool {
+	return sb.Status.Phase == sandboxv1alpha1.SwiftSandboxResuming && sb.Status.SuspendedState != nil
+}
+
+// pinnedImage is spec.image by the digest the sandbox was suspended with: a
+// tag that moved since must not change the disk under the restored guest.
+func pinnedImage(sb *sandboxv1alpha1.SwiftSandbox) (string, error) {
+	if sb.Status.Rootfs == nil || sb.Status.Rootfs.Digest == "" {
+		return "", fmt.Errorf("no rootfs digest is recorded")
+	}
+	ref, err := name.ParseReference(sb.Spec.Image)
+	if err != nil {
+		return "", err
+	}
+	return ref.Context().Digest(sb.Status.Rootfs.Digest).String(), nil
+}
+
+// resumeDrift names content the restored guest would find changed: a model
+// or artifact that now resolves to another digest than it had.
+func resumeDrift(sb *sandboxv1alpha1.SwiftSandbox, modelDigest string, arts []sandboxv1alpha1.SandboxArtifactStatus) string {
+	if sb.Status.Model != nil && modelDigest != "" && sb.Status.Model.Digest != modelDigest {
+		return fmt.Sprintf("model %s resolves to %s now, not %s", sb.Spec.Model.ImageRef, modelDigest, sb.Status.Model.Digest)
+	}
+	had := map[string]string{}
+	for _, a := range sb.Status.Artifacts {
+		had[a.Name] = a.Digest
+	}
+	for _, a := range arts {
+		if d, ok := had[a.Name]; ok && d != a.Digest {
+			return fmt.Sprintf("artifact %s resolves to %q now, not %q", a.Name, a.Digest, d)
+		}
+	}
+	return ""
+}
+
+// resumeLaunch turns a launcher built for a cold start into one that
+// restores the suspended state: the restore in its intent, and the launcher
+// image that wrote the state.
+func resumeLaunch(sb *sandboxv1alpha1.SwiftSandbox, intent *runtimeintent.RuntimeIntent) {
+	intent.Restore = &runtimeintent.RestoreIntent{
+		SnapshotPath:      sb.Status.SuspendedState.Path,
+		AutoResume:        true,
+		MemoryRestoreMode: "copy",
+	}
+}
+
+// resumeLauncherImage puts the recorded launcher image on every container
+// that runs the current one (launcher, network-init).
+func resumeLauncherImage(sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) {
+	want := sb.Status.SuspendedState.LauncherImage
+	if want == "" {
+		return
+	}
+	cur := swiftguest.LauncherImage()
+	for i := range pod.Spec.InitContainers {
+		if pod.Spec.InitContainers[i].Image == cur {
+			pod.Spec.InitContainers[i].Image = want
+		}
+	}
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Image == cur {
+			pod.Spec.Containers[i].Image = want
+		}
+	}
+}
+
+// annResumed is swiftletd's report of the restored guest's resume-sync
+// (suspend.rs): {"ok":..., "synced":[...], "clockOffsetMs":..., "error":...}.
+const annResumed = "kubeswift.io/sandbox-resumed"
+
+// resumeSyncWait bounds how long a restored, running launcher may take to
+// report resume-sync before the sandbox goes on without it.
+const resumeSyncWait = 2 * time.Minute
+
+type resumeResult struct {
+	OK            bool     `json:"ok"`
+	Error         string   `json:"error"`
+	Synced        []string `json:"synced"`
+	ClockOffsetMs *int64   `json:"clockOffsetMs"`
+}
+
+// resumeSettled decides, for a restored launcher that is running, whether
+// the resume is done; it then records it and returns true.
+func (r *SwiftSandboxReconciler) resumeSettled(sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) bool {
+	raw, ok := pod.Annotations[annResumed]
+	c := apimeta.FindStatusCondition(sb.Status.Conditions, sandboxv1alpha1.SwiftSandboxConditionSuspended)
+	if !ok && (c == nil || time.Since(c.LastTransitionTime.Time) < resumeSyncWait) {
+		return false
+	}
+	var res resumeResult
+	if ok {
+		_ = json.Unmarshal([]byte(raw), &res)
+	} else {
+		res.Error = "the launcher did not report the guest's clock sync"
+	}
+	reason, msg := reasonResumed, "resumed on node "+pod.Spec.NodeName
+	if res.ClockOffsetMs != nil {
+		msg += fmt.Sprintf("; guest clock was %d ms off", *res.ClockOffsetMs)
+	}
+	if !res.OK {
+		reason, msg = reasonResumeSyncFailed, "resumed, but the guest's clock and entropy were not reset: "+firstNonEmpty(res.Error, "no detail")
+		if r.Recorder != nil {
+			r.Recorder.Event(sb, corev1.EventTypeWarning, reason, msg)
+		}
+	} else if r.Recorder != nil {
+		r.Recorder.Event(sb, corev1.EventTypeNormal, reasonResumed, msg)
+	}
+	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
+		Type: sandboxv1alpha1.SwiftSandboxConditionSuspended, Status: metav1.ConditionFalse,
+		Reason: reason, Message: msg, ObservedGeneration: sb.Generation,
+	})
+	return true
+}
+
+// restoreError is why a restoring launcher could not start the guest, as
+// swiftletd reported it ("" when it did not).
+func restoreError(pod *corev1.Pod) string {
+	var res resumeResult
+	if raw, ok := pod.Annotations[annResumed]; !ok || json.Unmarshal([]byte(raw), &res) != nil || res.OK {
+		return ""
+	}
+	// swiftletd prefixes a restore that never started the guest; anything
+	// else is a guest that runs but was not synced.
+	msg, ok := strings.CutPrefix(res.Error, restoreErrorPrefix)
+	if !ok {
+		return ""
+	}
+	return msg
+}
+
+const restoreErrorPrefix = "restore: "
+
+// finishResume: the restored sandbox runs; the saved state is gone (swiftletd
+// removes it once the guest is synced), so nothing on the node is left to clean.
+func (r *SwiftSandboxReconciler) finishResume(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox) error {
+	// The patch refreshes sb from the server, status included: keep the
+	// status this pass has set (the Resumed condition) for the write after.
+	status := sb.Status.DeepCopy()
+	if err := patchFinalizers(ctx, r.Client, sb, func() { controllerutil.RemoveFinalizer(sb, sandboxSuspendFinalizer) }); err != nil {
+		return err
+	}
+	sb.Status = *status
+	sb.Status.SuspendedState = nil
+	return nil
 }
 
 // suspendNotDone records why spec.operatingMode Suspended did not take
