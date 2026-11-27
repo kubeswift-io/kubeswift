@@ -743,7 +743,7 @@ func (r *SwiftSandboxReconciler) finishTerminal(ctx context.Context, sb *sandbox
 	// could not be restored (swiftletd logged why: rootfs replaced, state
 	// file unreadable, Cloud Hypervisor refused it).
 	if resuming(sb) {
-		return r.snapshotLost(ctx, sb, "the restore failed: "+podFailureMessage(pod))
+		return r.snapshotLost(ctx, sb, "the restore failed: "+firstNonEmpty(restoreError(pod), podFailureMessage(pod)))
 	}
 	// swiftletd refused an intent that is not the one its pod was built for.
 	if msg, failed := intentError(pod); failed {

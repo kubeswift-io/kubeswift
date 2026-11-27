@@ -446,3 +446,16 @@ func TestResume_FinishKeepsStatus(t *testing.T) {
 		t.Errorf("state %+v finalizers %v", sb.Status.SuspendedState, sb.Finalizers)
 	}
 }
+
+func TestResume_RestoreErrorIsReported(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+		annResumed: `{"ok":false,"error":"restore: rootfs /x is not the file the guest was suspended with (rebuilt or replaced)"}`,
+	}}}
+	if got := restoreError(pod); !strings.Contains(got, "not the file") {
+		t.Errorf("restoreError %q", got)
+	}
+	pod.Annotations[annResumed] = `{"ok":true}`
+	if got := restoreError(pod); got != "" {
+		t.Errorf("ok report gave %q", got)
+	}
+}

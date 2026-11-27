@@ -466,6 +466,16 @@ func (r *SwiftSandboxReconciler) resumeSettled(sb *sandboxv1alpha1.SwiftSandbox,
 	return true
 }
 
+// restoreError is why a restoring launcher could not start the guest, as
+// swiftletd reported it ("" when it did not).
+func restoreError(pod *corev1.Pod) string {
+	var res resumeResult
+	if raw, ok := pod.Annotations[annResumed]; !ok || json.Unmarshal([]byte(raw), &res) != nil || res.OK {
+		return ""
+	}
+	return res.Error
+}
+
 // finishResume: the restored sandbox runs; the saved state is gone (swiftletd
 // removes it once the guest is synced), so nothing on the node is left to clean.
 func (r *SwiftSandboxReconciler) finishResume(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox) error {

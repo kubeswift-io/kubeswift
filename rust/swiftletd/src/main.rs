@@ -1014,6 +1014,18 @@ fn main() {
                 }
                 Err(e) => {
                     log::error!("launch_error: {}", e);
+                    // A sandbox resume that could not start: the controller
+                    // reports why (SnapshotLost) instead of a bare exit code.
+                    if intent.is_sandbox() && intent.is_restore() {
+                        if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
+                            let json = serde_json::json!({"ok": false, "error": format!("restore: {}", e)})
+                                .to_string();
+                            if let Err(err) = rt.block_on(report::report_resume_sync(ns, n, &json))
+                            {
+                                log::error!("report_resume_sync_failed: {}", err);
+                            }
+                        }
+                    }
                     report_running(false, Some("VmFailed"));
                     std::process::exit(1);
                 }
