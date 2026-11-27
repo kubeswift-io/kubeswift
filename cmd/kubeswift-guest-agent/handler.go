@@ -19,8 +19,9 @@
 // Installing/starting it on the clone is impossible (nothing new starts on a
 // resume).
 //
-// SECURITY: for identity guests the command surface is exactly three ops (ping,
-// regenerate-identity, and the read-only block-in-use) with a fixed schema — inputs (MAC, hostname) are validated
+// SECURITY: for identity guests the command surface is exactly four ops (ping,
+// regenerate-identity, the read-only block-in-use, and resume-sync, which sets
+// the clock and adds entropy from the host) with a fixed schema — inputs (MAC, hostname) are validated
 // then passed as argv (never shell-interpolated). The `exec` op (run an arbitrary
 // command in the guest) is ENABLED ONLY when the agent is started with --exec-root —
 // i.e. SwiftSandbox, which runs untrusted code the host already fully controls;
@@ -103,6 +104,10 @@ type Request struct {
 	// Workload marks a checkout's workload: its identity becomes the one
 	// later execs default to.
 	Workload bool `json:"workload,omitempty"`
+	// resume-sync op (resume.go): the host's time in unix ns when it built
+	// the request, and random bytes to mix into the guest's pool.
+	Now     int64  `json:"now,omitempty"`
+	Entropy []byte `json:"entropy,omitempty"`
 }
 
 // identity is who the request asks to run as; zero means the default.
@@ -138,6 +143,8 @@ type Response struct {
 	ExitCode *int   `json:"exitCode,omitempty"`
 	// block-in-use op (blockinuse.go):
 	*BlockUse
+	// resume-sync op (resume.go):
+	*SyncResult
 }
 
 var (
@@ -155,6 +162,8 @@ type system interface {
 	remove(path string) error
 	glob(pattern string) ([]string, error)
 	hostname() (string, error)
+	setClock(t time.Time) error
+	addEntropy(data []byte) error
 }
 
 type handler struct {
@@ -198,6 +207,8 @@ func (h *handler) handle(raw []byte) []byte {
 		resp = h.regenerate(req)
 	case "exec":
 		resp = h.exec(req)
+	case "resume-sync":
+		resp = h.resumeSync(req)
 	case "block-in-use":
 		if use, err := blockInUse("", req.Serial); err != nil {
 			resp = Response{OK: false, Error: err.Error()}

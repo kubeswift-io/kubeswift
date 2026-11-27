@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kubeswift-io/kubeswift/internal/guestagent"
 )
@@ -25,6 +26,9 @@ type fakeSys struct {
 	removed  []string
 	hostSet  string // captured from `hostname <x>` / writeFile
 	writeErr error
+	clock    time.Time // set by setClock
+	entropy  []byte    // added by addEntropy
+	clockErr error
 }
 
 func newFakeSys() *fakeSys {
@@ -62,6 +66,14 @@ func (f *fakeSys) glob(p string) ([]string, error) {
 	return f.globs[p], nil
 }
 func (f *fakeSys) hostname() (string, error) { return f.host, nil }
+func (f *fakeSys) setClock(t time.Time) error {
+	if f.clockErr != nil {
+		return f.clockErr
+	}
+	f.clock = t
+	return nil
+}
+func (f *fakeSys) addEntropy(d []byte) error { f.entropy = append([]byte(nil), d...); return nil }
 
 func (f *fakeSys) called(sub string) bool {
 	for _, c := range f.calls {

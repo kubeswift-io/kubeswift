@@ -28,10 +28,10 @@ as-is:
 | Artifact | Linux | Use |
 |---|---|---|
 | `ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.4` | 6.6.158 | kernel-boot guests (the `faas-minimal` profile) |
-| `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.24` | 6.6.158 | SwiftSandbox |
-| `ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.14` | 6.6.158 | SwiftSandbox with a GPU (adds `CONFIG_MODULES=y` and the module ABI guard; `uname -r` is `6.6.158-ksabi1`) |
+| `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.25` | 6.6.158 | SwiftSandbox |
+| `ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.15` | 6.6.158 | SwiftSandbox with a GPU (adds `CONFIG_MODULES=y` and the module ABI guard; `uname -r` is `6.6.158-ksabi1`) |
 
-The tag is the version of the KubeSwift artifact, not of Linux: `kernels/sandbox:6.6.24`
+The tag is the version of the KubeSwift artifact, not of Linux: `kernels/sandbox:6.6.25`
 carries Linux 6.6.158, which is what `uname -r` reports in the guest. Do not use
 `sandbox:6.6.23` or `gpu-sandbox:6.6.13`: their bridge panics at boot for any
 sandbox not in network mode `brokered`. Earlier artifacts (`faas` up to 6.6.3, `sandbox` up to

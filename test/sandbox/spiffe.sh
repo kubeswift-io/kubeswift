@@ -48,7 +48,7 @@ set -euo pipefail
 NS="${NS:-sandbox-spiffe}"
 TRUST_DOMAIN="${TRUST_DOMAIN:?set TRUST_DOMAIN to the SPIRE trust domain}"
 CLASS_NAME="${CLASS_NAME:-spire-server-spire}"
-KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.24}"
+KERNEL_IMAGE="${KERNEL_IMAGE:-ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.25}"
 IMAGE="${IMAGE:-docker.io/curlimages/curl:8.11.1}"
 PROXY_IMAGE="${PROXY_IMAGE:-docker.io/envoyproxy/envoy:v1.36.2}"
 PRESET="${PRESET:-}"
