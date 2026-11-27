@@ -1,0 +1,120 @@
+{{- if .Values.sandboxPolicy.enabled }}
+{{- if not (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy") }}
+{{- fail "sandboxPolicy.enabled needs ValidatingAdmissionPolicy (admissionregistration.k8s.io/v1, Kubernetes 1.30+)" }}
+{{- end }}
+{{- $p := .Values.sandboxPolicy }}
+{{- $modes := list }}{{ range $p.allowedNetworkModes }}{{ $modes = append $modes (printf "'%s'" .) }}{{ end }}
+{{- $images := list }}{{ range $p.allowedProxyImages }}{{ $images = append $images (printf "'%s'" .) }}{{ end }}
+# Sandbox policy pack (docs/sandbox/policy.md). Platform rules for agent
+# sandboxes, enforced by the API server for SwiftSandboxes and
+# SwiftSandboxPools in namespaces labelled kubeswift.io/sandbox-policy=enforced:
+#   - the network mode is one of sandboxPolicy.allowedNetworkModes;
+#   - no Secret reaches the guest (env valueFrom.secretKeyRef, secretFiles):
+#     credentials go through spec.network.egress.credentials, which the guest
+#     never sees;
+#   - nested virtualization stays Disabled;
+#   - an egress proxy is a chart preset, or an image in
+#     sandboxPolicy.allowedProxyImages.
+# A ValidatingAdmissionPolicy runs in the API server, so there is no webhook to
+# be down. Labelling a namespace is the opt-in; a tenant who can edit their own
+# namespace's labels can opt out, so grant namespace label edits accordingly.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kubeswift-sandbox-policy
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: sandbox-policy
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["sandbox.kubeswift.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["swiftsandboxes", "swiftsandboxpools"]
+  # Only what a user writes: a create, or a change of spec. A metadata update
+  # (the controller's finalizers, labels) of an object admitted before its
+  # namespace was labelled must never be refused, or it could not be deleted.
+  matchConditions:
+    - name: spec-written
+      expression: "request.operation == 'CREATE' || oldObject.spec != object.spec"
+  variables:
+    - name: mode
+      expression: "has(object.spec.network) && has(object.spec.network.mode) ? object.spec.network.mode : 'restricted'"
+    - name: proxyImage
+      expression: >-
+        has(object.spec.network) && has(object.spec.network.egress) && has(object.spec.network.egress.proxy)
+        && has(object.spec.network.egress.proxy.image) ? object.spec.network.egress.proxy.image : ''
+  validations:
+    - expression: "variables.mode in [{{ join ", " $modes }}]"
+      messageExpression: "'network mode ' + variables.mode + ' is not allowed in this namespace (kubeswift.io/sandbox-policy=enforced); use one of {{ join ", " $p.allowedNetworkModes }}'"
+      reason: Forbidden
+    {{- if $p.requireNestedDisabled }}
+    - expression: "!has(object.spec.nestedVirtualization) || object.spec.nestedVirtualization != 'Enabled'"
+      message: "nestedVirtualization: Enabled is not allowed in this namespace (kubeswift.io/sandbox-policy=enforced)"
+      reason: Forbidden
+    {{- end }}
+    - expression: "variables.proxyImage == '' || variables.proxyImage in [{{ join ", " $images }}]"
+      messageExpression: "'egress proxy image ' + variables.proxyImage + ' is not allowed in this namespace (kubeswift.io/sandbox-policy=enforced); use a preset{{ if $p.allowedProxyImages }} or one of {{ join ", " $p.allowedProxyImages }}{{ end }}'"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kubeswift-sandbox-policy
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: sandbox-policy
+spec:
+  policyName: kubeswift-sandbox-policy
+  validationActions: {{ $p.validationActions | toJson }}
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubeswift.io/sandbox-policy: enforced
+{{- if $p.forbidGuestSecrets }}
+---
+# No Secret reaches the guest. SwiftSandboxes only: a pool carries no Secrets
+# (a checkout brings its own env and files).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kubeswift-sandbox-policy-secrets
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: sandbox-policy
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["sandbox.kubeswift.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["swiftsandboxes"]
+  matchConditions:
+    - name: spec-written
+      expression: "request.operation == 'CREATE' || oldObject.spec != object.spec"
+  validations:
+    - expression: >-
+        (!has(object.spec.env) || object.spec.env.all(e, !has(e.valueFrom) || !has(e.valueFrom.secretKeyRef)))
+        && (!has(object.spec.secretFiles) || size(object.spec.secretFiles) == 0)
+      message: "Secrets may not reach the guest in this namespace (kubeswift.io/sandbox-policy=enforced): no env valueFrom.secretKeyRef and no secretFiles; give credentials to the egress proxy with spec.network.egress.credentials"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kubeswift-sandbox-policy-secrets
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: sandbox-policy
+spec:
+  policyName: kubeswift-sandbox-policy-secrets
+  validationActions: {{ $p.validationActions | toJson }}
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubeswift.io/sandbox-policy: enforced
+{{- end }}
+{{- end }}

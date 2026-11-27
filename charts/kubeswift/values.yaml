@@ -552,6 +552,26 @@ launcherSAGate:
   guestServiceAccountName: kubeswift-launcher
   sandboxServiceAccountName: kubeswift-sandbox-launcher
 
+# Sandbox policy pack: platform rules for agent sandboxes, enforced by a
+# ValidatingAdmissionPolicy (Kubernetes 1.30+) on SwiftSandboxes and
+# SwiftSandboxPools in namespaces labelled kubeswift.io/sandbox-policy=enforced.
+# Off by default; unlabelled namespaces are never affected. See
+# docs/sandbox/policy.md.
+sandboxPolicy:
+  enabled: false
+  # Network modes allowed: restricted, open, none, proxied, brokered.
+  allowedNetworkModes: [brokered, proxied]
+  # Refuse Secrets in the guest (env valueFrom.secretKeyRef, secretFiles);
+  # credentials go to the egress proxy (spec.network.egress.credentials).
+  forbidGuestSecrets: true
+  # Refuse nestedVirtualization: Enabled.
+  requireNestedDisabled: true
+  # Egress proxy images allowed besides the chart presets
+  # (sandboxMaterialize.egressProxyPresets). Empty: presets only.
+  allowedProxyImages: []
+  # [Deny], or [Warn, Audit] to try the rules without refusing anything.
+  validationActions: [Deny]
+
 # Observability (optional). Requires the Prometheus Operator CRDs
 # (monitoring.coreos.com — e.g. kube-prometheus-stack) when enabled; the
 # dashboards additionally need a Grafana with the dashboard sidecar (the
