@@ -119,6 +119,9 @@ func (r *SwiftImageReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			if img.Spec.Source.PVCClone != nil {
 				SetSourceReadyCondition(status, true, ReasonSourceReady, "importing from the source PVC")
 			}
+			if result.Source != nil {
+				status.Source = result.Source
+			}
 			SetPhase(status, result.Phase)
 		}
 

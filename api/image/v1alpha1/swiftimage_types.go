@@ -3,6 +3,8 @@ package v1alpha1
 import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	storagev1alpha1 "github.com/kubeswift-io/kubeswift/api/storage/v1alpha1"
 )
 
 // SwiftImagePhase is the phase of a SwiftImage.
@@ -102,6 +104,7 @@ type SecretObjectReference struct {
 // writes it. The import reassembles it into the import PVC and runs the shared
 // resize + sgdisk + GRUB/serial patch tail — identical to the http path minus
 // the download step.
+// +kubebuilder:validation:XValidation:rule="!has(self.locationRef) || ((!has(self.insecure) || !self.insecure) && !has(self.caBundle) && !has(self.credentialsSecretRef) && !has(self.verifyKeySecretRef))",message="locationRef takes the connection settings from a storage location; it cannot be combined with insecure, caBundle, credentialsSecretRef or verifyKeySecretRef"
 type OCIImageSource struct {
 	// Repository is the OCI repository WITHOUT a tag
 	// (e.g. ghcr.io/org/golden-ubuntu-noble).
@@ -117,6 +120,10 @@ type OCIImageSource struct {
 	// registry only.
 	// +optional
 	Insecure bool `json:"insecure,omitempty"`
+	// CABundle is PEM-encoded CA certificates to trust for this registry, in
+	// addition to the system roots, for a registry behind a private CA.
+	// +optional
+	CABundle string `json:"caBundle,omitempty"`
 	// CredentialsSecretRef references a kubernetes.io/dockerconfigjson Secret
 	// (same namespace) for registry auth. Empty = anonymous.
 	// +optional
@@ -131,7 +138,50 @@ type OCIImageSource struct {
 	// admission.
 	// +optional
 	VerifyKeySecretRef *SecretObjectReference `json:"verifyKeySecretRef,omitempty"`
+	// LocationRef names the storage location whose connection settings
+	// (credentials Secret name, insecure, CA bundle, verify key) the pull
+	// uses. It applies only when none of insecure, caBundle,
+	// credentialsSecretRef and verifyKeySecretRef is set, and only if the
+	// location's registry host is the repository's. Without it, the
+	// namespace's default SwiftStorageLocation, else the cluster's default
+	// SwiftClusterStorageLocation, applies the same way. status.source records
+	// what was used.
+	// +optional
+	LocationRef *storagev1alpha1.StorageLocationRef `json:"locationRef,omitempty"`
 }
+
+// ImageSourceStatus records how an image's oci source was pulled: the
+// connection settings resolved once, before the import started.
+type ImageSourceStatus struct {
+	// Location is where the connection settings came from: Explicit (the
+	// source sets them), <Kind>/<name> of a storage location, or None
+	// (anonymous, system roots).
+	Location string `json:"location"`
+	// Insecure is the plaintext-registry setting used.
+	// +optional
+	Insecure bool `json:"insecure,omitempty"`
+	// CABundle is the CA bundle used, if any.
+	// +optional
+	CABundle string `json:"caBundle,omitempty"`
+	// CredentialsSecretName is the dockerconfigjson Secret used, if any.
+	// +optional
+	CredentialsSecretName string `json:"credentialsSecretName,omitempty"`
+	// VerifyKeySecretName is the Secret holding the cosign public key the
+	// artifact was verified with (explicit verifyKeySecretRef).
+	// +optional
+	VerifyKeySecretName string `json:"verifyKeySecretName,omitempty"`
+	// VerifyKey is the cosign public key (PEM) the artifact was verified
+	// with, taken from a storage location.
+	// +optional
+	VerifyKey string `json:"verifyKey,omitempty"`
+}
+
+// Image source locations recorded in status.source.location besides a
+// location's <Kind>/<name>.
+const (
+	ImageSourceLocationExplicit = "Explicit"
+	ImageSourceLocationNone     = "None"
+)
 
 // ImageSource defines the source of an image.
 type ImageSource struct {
@@ -251,6 +301,9 @@ type SwiftImageStatus struct {
 	CloneSeed *CloneSeed `json:"cloneSeed,omitempty"`
 	// SizeHint is an internal field used to pass measured size between Validating and Preparing phases.
 	SizeHint int64 `json:"sizeHint,omitempty"`
+	// Source records the connection settings an oci source was pulled with.
+	// +optional
+	Source *ImageSourceStatus `json:"source,omitempty"`
 }
 
 // SwiftImage is the Schema for the swiftimages API.

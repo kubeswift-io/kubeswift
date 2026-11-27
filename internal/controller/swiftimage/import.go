@@ -18,6 +18,7 @@ import (
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
+	"github.com/kubeswift-io/kubeswift/internal/storagelocation"
 )
 
 const (
@@ -165,6 +166,9 @@ type ImportResult struct {
 	// source that is missing or in use). The image stays Pending, retried.
 	WaitReason  string
 	WaitMessage string
+	// Source is the oci connection settings resolved for this import, to
+	// record in status.source (nil when already recorded, or not oci).
+	Source *imagev1alpha1.ImageSourceStatus
 }
 
 // StartImport begins import for the given SwiftImage. Returns the next phase and any PVC reference.
@@ -307,6 +311,22 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 	if r.SnapshotORASImage == "" {
 		return &ImportResult{Phase: imagev1alpha1.SwiftImagePhaseFailed, Error: "snapshot-oras image not configured for oci source"}, nil
 	}
+	// Connection settings: resolved once and recorded in status.source,
+	// then read only from there.
+	src := img.Status.Source
+	var recorded *imagev1alpha1.ImageSourceStatus
+	if src == nil {
+		var wait *storagelocation.Wait
+		var err error
+		if src, wait, err = r.resolveImageSource(ctx, img); err != nil {
+			return nil, err
+		}
+		if wait != nil {
+			return &ImportResult{WaitReason: wait.Reason, WaitMessage: wait.Message}, nil
+		}
+		recorded = src
+	}
+
 	pvcName := importPVCNamePrefix + img.Name
 	jobName := names.JobName(importJobNamePrefix+img.Name, "")
 	if err := r.ensureImportPVC(ctx, img, pvcName, nil); err != nil {
@@ -325,7 +345,7 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 	} else {
 		pullArgs = append(pullArgs, "--tag="+oci.Tag)
 	}
-	if oci.Insecure {
+	if src.Insecure {
 		pullArgs = append(pullArgs, "--insecure")
 	}
 
@@ -337,15 +357,15 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 		},
 	}}
 	pullMounts := []corev1.VolumeMount{dataMount}
-	var pullEnv []corev1.EnvVar
-	if oci.CredentialsSecretRef != nil && oci.CredentialsSecretRef.Name != "" {
+	pullEnv := clonecommon.RegistryCAEnvVars(src.CABundle)
+	if src.CredentialsSecretName != "" {
 		pullEnv = append(pullEnv, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: "/oras-auth"})
 		pullMounts = append(pullMounts, corev1.VolumeMount{Name: "oras-auth", MountPath: "/oras-auth", ReadOnly: true})
 		volumes = append(volumes, corev1.Volume{
 			Name: "oras-auth",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: oci.CredentialsSecretRef.Name,
+					SecretName: src.CredentialsSecretName,
 					// A kubernetes.io/dockerconfigjson Secret stores the auth under
 					// .dockerconfigjson; oras-go expects a Docker config.json.
 					Items: []corev1.KeyToPath{{Key: ".dockerconfigjson", Path: "config.json"}},
@@ -353,7 +373,18 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 			},
 		})
 	}
-	if oci.VerifyKeySecretRef != nil && oci.VerifyKeySecretRef.Name != "" {
+	if src.VerifyKey != "" {
+		// A location's inline cosign public key: snapshot-oras writes it to a
+		// file itself (KUBESWIFT_VERIFY_KEY), in the writable cosign home.
+		pullEnv = append(pullEnv,
+			corev1.EnvVar{Name: clonecommon.VerifyKeyEnvName, Value: src.VerifyKey},
+			corev1.EnvVar{Name: "HOME", Value: "/cosign-home"},
+			corev1.EnvVar{Name: "TMPDIR", Value: "/cosign-home"},
+		)
+		pullMounts = append(pullMounts, corev1.VolumeMount{Name: "cosign-home", MountPath: "/cosign-home"})
+		volumes = append(volumes, corev1.Volume{Name: "cosign-home", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
+	}
+	if src.VerifyKeySecretName != "" {
 		// cosign-verify the artifact before pulling. The public key is mounted
 		// read-only at /verify-key/cosign.pub; cosign needs a writable HOME/TMPDIR
 		// (the puller runs with a read-only rootfs), served by an emptyDir.
@@ -371,7 +402,7 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 				Name: "verify-key",
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName: oci.VerifyKeySecretRef.Name,
+						SecretName: src.VerifyKeySecretName,
 						Items:      []corev1.KeyToPath{{Key: "cosign.pub", Path: "cosign.pub"}},
 					},
 				},
@@ -437,6 +468,7 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 	return &ImportResult{
 		Phase:  imagev1alpha1.SwiftImagePhaseImporting,
 		PVCRef: &imagev1alpha1.PVCObjectReference{Name: pvcName, Namespace: img.Namespace},
+		Source: recorded,
 	}, nil
 }
 

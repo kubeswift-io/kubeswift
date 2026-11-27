@@ -174,7 +174,7 @@ Represents a VM disk image. The controller imports, converts, and patches the im
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `source.http.url` | string | No* | HTTP(S) URL to download the image from. |
-| `source.oci` | OCIImageSource | No* | Golden image in an OCI registry: `repository` plus `tag` or `digest`. See [golden images](registry/golden-images.md). |
+| `source.oci` | OCIImageSource | No* | Golden image in an OCI registry: `repository` plus `tag` or `digest`. Connection settings (`insecure`, `caBundle`, `credentialsSecretRef`, `verifyKeySecretRef`) as written, or, when none is set, from a storage location on the same registry host (`locationRef`, else the defaults); `status.source` records which. See [golden images](registry/golden-images.md#connection-settings-from-a-storage-location). |
 | `source.pvcClone` | PVCCloneSource | No* | Copy a disk from a PVC in the image's namespace (`name`; `namespace` empty or the image's own). Block PVC = the disk; Filesystem PVC = `image.raw` at its root. Waits while a pod uses the PVC. See [SwiftImage](api/swiftimage.md#source-pvc-clone). |
 | `format` | enum | Yes | Source format: `raw` or `qcow2`. Ubuntu cloud images are `qcow2`. |
 | `rootDisk.size` | Quantity | No | PVC size for the imported image (defaults to 10Gi). Should match SwiftGuestClass `rootDisk.size`. |
@@ -487,6 +487,7 @@ Captures a VM snapshot: disk-only (CSI VolumeSnapshot) or memory+disk (local hos
 |-----------|------|-------------|
 | `guestRef` | SwiftSnapshotGuestRef | The SwiftGuest to snapshot. |
 | `backend` | SwiftSnapshotBackend | `csi-volume-snapshot`, `local`, `s3` or `oci` (with backend-specific sub-config). An `oci` snapshot may omit `backend.oci`: a storage location supplies the registry. |
+| `backend.oci.caBundle` | string | PEM CA certificates to trust for an explicit registry, in addition to the system roots. Recorded in `status.location`, so restores and clones trust it too. |
 | `backend.locationRef` | StorageLocationRef | The storage location (`kind`, `name`) an `oci` snapshot is pushed to, or a `csi-volume-snapshot` snapshot takes its VolumeSnapshotClass from, instead of the defaults. Not valid with `backend.oci` or an explicit class. |
 | `includeMemory` | bool | Capture guest RAM (local/S3 backends only; rejected for VFIO guests — CH cannot restore VFIO state). |
 | `deletionPolicy` | enum | `Delete` (default) or `Retain` — whether to purge artifacts on deletion. |

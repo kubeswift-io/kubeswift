@@ -147,6 +147,11 @@ type OCIBackend struct {
 	// registries (ghcr.io, TLS-fronted Harbor / Zot) must leave this false.
 	// +optional
 	Insecure bool `json:"insecure,omitempty"`
+	// CABundle is PEM-encoded CA certificates to trust for this registry, in
+	// addition to the system roots, for a registry behind a private CA.
+	// Recorded in status.location, so restores and clones use it too.
+	// +optional
+	CABundle string `json:"caBundle,omitempty"`
 	// CredentialsSecretRef references a Secret (same namespace) holding registry
 	// credentials — a kubernetes.io/dockerconfigjson Secret (key
 	// .dockerconfigjson), the same pull-secret shape SwiftKernel uses. Empty

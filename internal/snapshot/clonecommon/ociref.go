@@ -77,7 +77,7 @@ func SnapshotOCI(snap *snapshotv1alpha1.SwiftSnapshot) (OCIConnection, bool) {
 	if o == nil || o.Repository == "" {
 		return OCIConnection{}, false
 	}
-	c := OCIConnection{Repository: o.Repository, Tag: ExplicitOCITag(snap), Insecure: o.Insecure}
+	c := OCIConnection{Repository: o.Repository, Tag: ExplicitOCITag(snap), Insecure: o.Insecure, CABundle: o.CABundle}
 	if o.CredentialsSecretRef != nil {
 		c.CredentialsSecretName = o.CredentialsSecretRef.Name
 	}
