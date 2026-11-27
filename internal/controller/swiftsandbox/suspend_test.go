@@ -427,3 +427,22 @@ func TestResume_WaitKeepsResuming(t *testing.T) {
 		t.Fatalf("cold wait phase %s", got.Status.Phase)
 	}
 }
+
+// finishResume keeps the status set in the same pass (the finalizer patch
+// refreshes the object from the server).
+func TestResume_FinishKeepsStatus(t *testing.T) {
+	r, c := suspendedFixture(t, sandboxv1alpha1.SandboxOperatingRunning, false)
+	sb := getSandbox(t, c, "sb")
+	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
+		Type: sandboxv1alpha1.SwiftSandboxConditionSuspended, Status: metav1.ConditionFalse, Reason: reasonResumed, Message: "m",
+	})
+	if err := r.finishResume(context.Background(), sb); err != nil {
+		t.Fatal(err)
+	}
+	if cond := suspendedCond(sb); cond == nil || cond.Reason != reasonResumed {
+		t.Errorf("condition after finishResume %+v", cond)
+	}
+	if sb.Status.SuspendedState != nil || controllerutil.ContainsFinalizer(sb, sandboxSuspendFinalizer) {
+		t.Errorf("state %+v finalizers %v", sb.Status.SuspendedState, sb.Finalizers)
+	}
+}

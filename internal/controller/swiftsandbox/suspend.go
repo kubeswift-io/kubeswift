@@ -469,9 +469,13 @@ func (r *SwiftSandboxReconciler) resumeSettled(sb *sandboxv1alpha1.SwiftSandbox,
 // finishResume: the restored sandbox runs; the saved state is gone (swiftletd
 // removes it once the guest is synced), so nothing on the node is left to clean.
 func (r *SwiftSandboxReconciler) finishResume(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox) error {
+	// The patch refreshes sb from the server, status included: keep the
+	// status this pass has set (the Resumed condition) for the write after.
+	status := sb.Status.DeepCopy()
 	if err := patchFinalizers(ctx, r.Client, sb, func() { controllerutil.RemoveFinalizer(sb, sandboxSuspendFinalizer) }); err != nil {
 		return err
 	}
+	sb.Status = *status
 	sb.Status.SuspendedState = nil
 	return nil
 }
