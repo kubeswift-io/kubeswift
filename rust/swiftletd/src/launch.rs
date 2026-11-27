@@ -114,7 +114,9 @@ where
     if intent.is_migration_receiver() {
         return run_ch_receive(intent, runtime_dir, on_socket_ready);
     }
-    if intent.is_restore() {
+    // A sandbox restore (resume after suspend) goes through run_ch: it needs
+    // the same virtiofsd, console FIFO and config disk as a boot.
+    if intent.is_restore() && !intent.is_sandbox() {
         return run_ch_restore(intent, runtime_dir, on_socket_ready);
     }
     match intent.hypervisor() {
@@ -301,6 +303,16 @@ fn run_ch<F>(
 where
     F: FnOnce(u32, String, String),
 {
+    // Resume of a suspended sandbox (suspend.rs): checked before anything is
+    // started, so a node that no longer has what the guest expects fails here.
+    let restore_state = if intent.is_sandbox() && intent.is_restore() {
+        Some(crate::suspend::prepare_restore(
+            intent.restore_snapshot_path(),
+            runtime_dir.root(),
+        )?)
+    } else {
+        None
+    };
     let seed_path = if intent.has_seed() {
         runtime_dir
             .root()
@@ -465,7 +477,11 @@ where
             _ => runtime_dir.root().to_path_buf(),
         };
         let path = dir.join("exec.config");
-        match std::fs::write(&path, e.to_config_blob()) {
+        let written = match &restore_state {
+            Some(st) => crate::suspend::write_placeholder_config(&path, st.config_disk_bytes),
+            None => std::fs::write(&path, e.to_config_blob()),
+        };
+        match written {
             Ok(()) => Some(path.to_string_lossy().to_string()),
             Err(err) => {
                 log::error!("sandbox exec config write failed: {}", err);
@@ -591,6 +607,43 @@ where
             seccomp: seccomp.clone(),
         }
     };
+
+    if restore_state.is_some() {
+        let source_url = intent.restore_source_url();
+        log::info!(
+            "spawning cloud-hypervisor (sandbox resume) source_url={}",
+            source_url
+        );
+        let events = crate::migevents::pipe_for_spawn(runtime_dir.root());
+        let mut child = spawn_ch_restore(
+            &runtime_dir.api_socket(),
+            &source_url,
+            true,
+            Some("copy"),
+            events.as_ref().map(|w| w.as_raw_fd()),
+        )
+        .map_err(|e| format!("failed to spawn cloud-hypervisor (resume): {}", e))?;
+        drop(events);
+        let pid = child.id();
+        crate::shutdown::set_vmm_pid(pid);
+        wait_for_socket(&runtime_dir.api_socket(), Duration::from_secs(30))?;
+        if let Some(cb) = on_socket_ready {
+            cb(
+                pid,
+                serial_socket_path.clone(),
+                "cloud-hypervisor".to_string(),
+            );
+        }
+        crate::suspend::spawn_resume_sync(
+            runtime_dir.root().join("vsock.sock"),
+            intent.restore_snapshot_path().to_string(),
+        );
+        let status = child.wait().map_err(|e| format!("wait failed: {}", e))?;
+        if let Some(p) = serial_pump {
+            p.finish();
+        }
+        return Ok((status, pid, serial_socket_path));
+    }
 
     let args = config.to_args();
     log::info!("spawning cloud-hypervisor args={:?}", args);

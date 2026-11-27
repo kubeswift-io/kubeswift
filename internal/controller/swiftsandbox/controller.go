@@ -296,10 +296,21 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	if err != nil {
 		return r.fail(ctx, sb, "ImagePullSecretInvalid", err.Error())
 	}
+	// A resume resolves the image by the digest it was suspended with
+	// (suspend.go): its rootfs must be the one the restored guest has open.
+	imgSB := sb
+	if resuming(sb) {
+		pinned, err := pinnedImage(sb)
+		if err != nil {
+			return r.snapshotLost(ctx, sb, "cannot pin the image the sandbox was suspended with: "+err.Error())
+		}
+		imgSB = sb.DeepCopy()
+		imgSB.Spec.Image = pinned
+	}
 	// Every registry request starts at once, off this worker (resolver.go),
 	// and the pass waits for them together.
 	lookup := r.lookup(sb)
-	prime(lookup, imageRequest(sb, auth))
+	prime(lookup, imageRequest(imgSB, auth))
 	// The image that reads the egress-intent file must say it reads v1.
 	irReq, irImage, irWanted := intentReaderRequest(sb)
 	if irWanted {
@@ -343,7 +354,7 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 			}
 		}
 	}
-	ri, imageReady, imageErr := resolveImage(sb, auth, lookup)
+	ri, imageReady, imageErr := resolveImage(imgSB, auth, lookup)
 	var irLabels map[string]string
 	irReady := true
 	var irErr error
@@ -443,6 +454,13 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		})
 		return r.fail(ctx, sb, reasonRunAsNonRootViolation, msg)
 	}
+	// The restored guest has its model and artifacts open over virtio-fs:
+	// content that changed since the suspend would not be what it sees.
+	if resuming(sb) {
+		if drift := resumeDrift(sb, rm.Digest, arts.statuses); drift != "" {
+			return r.snapshotLost(ctx, sb, drift+" since the sandbox was suspended")
+		}
+	}
 	sb.Status.User = userString(ri.Exec.User)
 	var modelPath string
 	if sb.Spec.Model != nil {
@@ -468,7 +486,14 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		}
 		launch = withOutputLimits(sb, dests)
 	}
+	if resuming(sb) {
+		launch = sb.DeepCopy()
+		launch.Spec.Image = imgSB.Spec.Image
+	}
 	intent := buildIntent(launch, kernelName, ri.RootfsPath, modelPath, ri.Exec, false)
+	if resuming(sb) {
+		resumeLaunch(sb, intent)
+	}
 	intentJSON, err := runtimeintent.Serialize(intent)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -488,6 +513,9 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		return ctrl.Result{}, err
 	}
 	pod := buildPod(launch, kernelName)
+	if resuming(sb) {
+		resumeLauncherImage(sb, pod)
+	}
 	swiftguest.SetIntentDigest(pod, intentJSON)
 	if err := addArtifactRequirements(pod, decisionsByName(sb, decisions)); err != nil {
 		return ctrl.Result{}, err
@@ -531,7 +559,11 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		Type: sandboxv1alpha1.SwiftSandboxConditionResolved, Status: metav1.ConditionTrue,
 		Reason: "Resolved", Message: "image digest " + ri.Digest, ObservedGeneration: sb.Generation,
 	})
-	if _, err := r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxMaterializing, "materializing rootfs"); err != nil {
+	phase, phaseMsg := sandboxv1alpha1.SwiftSandboxMaterializing, "materializing rootfs"
+	if resuming(sb) {
+		phase, phaseMsg = sandboxv1alpha1.SwiftSandboxResuming, "restoring on node "+sb.Status.SuspendedState.NodeName
+	}
+	if _, err := r.setPhase(ctx, sb, phase, phaseMsg); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.Create(ctx, pod); apierrors.IsAlreadyExists(err) {
@@ -627,6 +659,16 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 				r.Recorder.Event(sb, corev1.EventTypeWarning, reasonImageUserIgnored, msg)
 			}
 		}
+		// A restored guest runs once its clock and entropy are reset (or the
+		// launcher says it could not, or never says).
+		if resuming(sb) {
+			if !r.resumeSettled(sb, pod) {
+				return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxResuming, "waiting for the restored guest's clock sync")
+			}
+			if err := r.finishResume(ctx, sb); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "guest running")
 	}
 
@@ -651,6 +693,10 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 	// or matches its selector: say so instead of Materializing.
 	if msg, ok := unschedulable(pod); ok {
 		msg = "waiting for a node: " + msg
+		if resuming(sb) {
+			// It can only run on the node that holds its state.
+			return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxResuming, msg)
+		}
 		if sb.Status.Phase != sandboxv1alpha1.SwiftSandboxPending && r.Recorder != nil {
 			r.Recorder.Event(sb, corev1.EventTypeWarning, reasonUnschedulable, msg)
 		}
@@ -661,6 +707,9 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 	}
 
 	// Still coming up (materializing / launcher not ready).
+	if resuming(sb) {
+		return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxResuming, "restoring on node "+sb.Status.SuspendedState.NodeName)
+	}
 	return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxMaterializing, "materializing rootfs")
 }
 
@@ -690,6 +739,12 @@ func unschedulable(pod *corev1.Pod) (string, bool) {
 // the launcher container's exit code.
 func (r *SwiftSandboxReconciler) finishTerminal(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) (ctrl.Result, error) {
 	applyMaterializeResult(sb, pod)
+	// The restoring launcher ended before the guest ran: the saved state
+	// could not be restored (swiftletd logged why: rootfs replaced, state
+	// file unreadable, Cloud Hypervisor refused it).
+	if resuming(sb) {
+		return r.snapshotLost(ctx, sb, "the restore failed: "+podFailureMessage(pod))
+	}
 	// swiftletd refused an intent that is not the one its pod was built for.
 	if msg, failed := intentError(pod); failed {
 		return r.fail(ctx, sb, reasonIntentMismatch, msg)

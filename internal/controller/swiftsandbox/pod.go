@@ -346,6 +346,10 @@ func podNodeSelector(sb *sandboxv1alpha1.SwiftSandbox) map[string]string {
 	if sb.Spec.GPUProfileRef != nil && sb.Status.GPU != nil && sb.Status.GPU.NodeName != "" {
 		nodeSelector[corev1.LabelHostname] = sb.Status.GPU.NodeName
 	}
+	// A resume runs on the node that holds the suspended state.
+	if sb.Status.Phase == sandboxv1alpha1.SwiftSandboxResuming && sb.Status.SuspendedState != nil && sb.Status.SuspendedState.NodeName != "" {
+		nodeSelector[corev1.LabelHostname] = sb.Status.SuspendedState.NodeName
+	}
 	return nodeSelector
 }
 
