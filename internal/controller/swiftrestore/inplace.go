@@ -194,8 +194,8 @@ func (r *SwiftRestoreReconciler) handleRestoringCSIInPlace(
 			return false, 0, "", err
 		}
 		if pvc.Status.Phase != corev1.ClaimBound {
-			setReadyCondition(status, metav1.ConditionFalse, ReasonRestoring,
-				"restored root disk "+rd.ClaimName+" not yet Bound (phase="+string(pvc.Status.Phase)+")")
+			reason, msg := r.notBoundCondition(ctx, &pvc, "restored root disk")
+			setReadyCondition(status, metav1.ConditionFalse, reason, msg)
 			return false, 5 * time.Second, "", nil
 		}
 

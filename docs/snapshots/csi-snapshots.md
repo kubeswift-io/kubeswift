@@ -153,6 +153,7 @@ The controller deletes the underlying VolumeSnapshot via owner reference. The CS
 | Restore `Phase=Failed reason=InPlaceUnsupported` | In-place restore of a kernel-boot or shared-base guest, or with `resumeAfterRestore: false` | See [Roll a guest back in place](#roll-a-guest-back-in-place) |
 | Restore `Phase=Pending reason=GuestBusy` | A SwiftMigration or another restore holds the guest | Wait; it continues when that finishes |
 | Restore `Phase=Pending reason=SnapshotNotReady` | Source SwiftSnapshot not yet `Ready` | Wait for the snapshot to complete first |
+| Restore `Phase=Restoring reason=PVCProvisioningFailed` | The PVC seeded from the VolumeSnapshot cannot be provisioned; the message quotes the provisioner | Fix the cause it names. On Longhorn, a snapshot lives inside its source volume: if that PVC was deleted, the VolumeSnapshot still says `readyToUse` but cannot be restored |
 | Restore stuck in `Restoring` for 30–90 s | Per-guest PVC clone from snapshot still binding (Longhorn full-copy) | Wait — this is normal on full-copy CSI drivers. `kubectl describe pvc swiftguest-root-<target>` shows the bind progress. |
 | Restore `Ready` but restored guest looks like a fresh boot | Per-guest PVC has no `dataSource` and no `swift.kubeswift.io/restore-seeded` label | The SwiftGuest controller fell back to the SwiftImage Copy Job. `kubectl get pvc swiftguest-root-<target> -o yaml` will show the missing fields; this should not happen on KubeSwift versions that include PR #21. |
 
