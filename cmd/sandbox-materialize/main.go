@@ -44,7 +44,9 @@ func main() {
 		switch os.Args[1] {
 		case "export-output":
 			os.Exit(exportOutput(os.Args[2:]))
-		case "clean-outputs":
+		case "clean-outputs", "clean-suspend":
+			// Both remove <root>/<sandbox uid>: an output spool, or a
+			// suspended sandbox's state.
 			os.Exit(cleanOutputs(os.Args[2:]))
 		case "follow-console":
 			os.Exit(followConsole(os.Args[2:]))

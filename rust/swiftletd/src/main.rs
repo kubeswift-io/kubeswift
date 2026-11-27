@@ -25,6 +25,7 @@ mod rootfs_read;
 mod secrets;
 mod shutdown;
 mod spiffe;
+mod suspend;
 mod use_locks;
 mod vfio_guard;
 mod warm_artifacts;
@@ -996,9 +997,15 @@ fn main() {
                     } else if shutdown::vm_stopped_by_termination() {
                         // The sandbox was deleted and its drain is over: a
                         // stop, not a failure, so the launcher pod ends
-                        // Succeeded.
-                        log::info!("vm_stopped_by_termination");
-                        report_running(false, Some("VmStopped"));
+                        // Succeeded. A suspended microVM is stopped the same
+                        // way once its state is on the node.
+                        if shutdown::suspended() {
+                            log::info!("vm_stopped_after_suspend");
+                            report_running(false, Some("Suspended"));
+                        } else {
+                            log::info!("vm_stopped_by_termination");
+                            report_running(false, Some("VmStopped"));
+                        }
                     } else {
                         log::warn!("vm_exited_nonzero code={:?}", exit_status.code());
                         report_running(false, Some("VmFailed"));

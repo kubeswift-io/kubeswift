@@ -8,6 +8,7 @@ All notable changes to KubeSwift are documented here.
 
 ### Added
 
+- SwiftSandbox `spec.operatingMode: Running|Suspended` (suspend half). Suspended on a running sandbox pauses its microVM, writes its memory and device state to `/var/lib/kubeswift/sandbox-suspend/<sandbox uid>/` on its node (swiftletd action `suspend`), and stops the launcher pod; the sandbox keeps its NetworkPolicy, ServiceAccount and Role. New phases `Suspending`, `Suspended`, `Resuming`, condition `Suspended`, `status.suspendedState`. Refused at admission (and by the controller when webhooks are off) for a sandbox with a GPU, `spec.outputs`, `spec.poolRef` or `network.egress.credentials`; refused on a kernel without bridge feature `resume-sync`. Deleting a suspended sandbox removes its state through a Job on that node. Every sandbox launcher mounts `/var/lib/kubeswift/sandbox-suspend`. Resume follows.
 - Guest agent op `resume-sync`: steps the guest's wall clock to the host's time and mixes host entropy into the guest's pool, for a sandbox restored from a snapshot (it resumes with the clock of the moment it was paused). Kernels `sandbox:6.6.25` / `gpu-sandbox:6.6.15` carry it (bridge feature `resume-sync`; same Linux 6.6.158, initramfs only). Groundwork for sandbox suspend and resume; nothing calls it yet.
 
 ### Changed

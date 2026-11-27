@@ -268,6 +268,37 @@ type SwiftSandboxSpec struct {
 	// NetworkPolicy stays in place until the launcher pod is gone.
 	// +optional
 	Termination *SandboxTermination `json:"termination,omitempty"`
+
+	// OperatingMode is Running (the default) or Suspended. Suspended on a
+	// running sandbox pauses its microVM, writes its memory and device state
+	// to the node, and stops the launcher pod; the sandbox keeps its
+	// identity, NetworkPolicy and ServiceAccount. Running again restores it
+	// on the same node from where it stopped. A sandbox created Suspended is
+	// not started until it is set to Running. Not supported for a sandbox
+	// with a GPU, spec.outputs, spec.poolRef or network.egress.credentials
+	// (condition Suspended=False, reason SuspendUnsupported), nor on a kernel
+	// whose bridge lacks resume-sync (kernels/sandbox 6.6.25,
+	// gpu-sandbox 6.6.15 or later).
+	// +kubebuilder:default=Running
+	// +optional
+	OperatingMode SandboxOperatingMode `json:"operatingMode,omitempty"`
+}
+
+// SandboxOperatingMode is what the sandbox should be doing: running, or
+// suspended to the node.
+// +kubebuilder:validation:Enum=Running;Suspended
+type SandboxOperatingMode string
+
+const (
+	// SandboxOperatingRunning runs the sandbox (the default).
+	SandboxOperatingRunning SandboxOperatingMode = "Running"
+	// SandboxOperatingSuspended suspends it to its node.
+	SandboxOperatingSuspended SandboxOperatingMode = "Suspended"
+)
+
+// Suspended reports whether spec.operatingMode Suspended took effect.
+func (s *SwiftSandboxSpec) Suspended() bool {
+	return s.OperatingMode == SandboxOperatingSuspended
 }
 
 // SandboxScratchDisk describes the sandbox's secondary block disk. Exactly one
@@ -1038,7 +1069,7 @@ type SandboxEgressAllowed struct {
 }
 
 // SwiftSandboxPhase is the lifecycle phase.
-// +kubebuilder:validation:Enum=Pending;Materializing;Running;Exporting;Completed;Failed
+// +kubebuilder:validation:Enum=Pending;Materializing;Running;Exporting;Completed;Failed;Suspending;Suspended;Resuming
 type SwiftSandboxPhase string
 
 const (
@@ -1056,6 +1087,14 @@ const (
 	// SwiftSandboxFailed — boot/materialize failure, non-zero exit, or timeout
 	// (terminal).
 	SwiftSandboxFailed SwiftSandboxPhase = "Failed"
+	// SwiftSandboxSuspending — the microVM is being paused and written to
+	// its node (spec.operatingMode Suspended).
+	SwiftSandboxSuspending SwiftSandboxPhase = "Suspending"
+	// SwiftSandboxSuspended — the microVM's state is on its node and no
+	// launcher runs. status.suspendedState says where.
+	SwiftSandboxSuspended SwiftSandboxPhase = "Suspended"
+	// SwiftSandboxResuming — a launcher is restoring the microVM.
+	SwiftSandboxResuming SwiftSandboxPhase = "Resuming"
 )
 
 // Condition types.
@@ -1087,6 +1126,14 @@ const (
 	// container is not running (crashed, restarting), EgressProxyNotReady or
 	// EgressBrokerFailed when it never came up. Absent in other modes.
 	SwiftSandboxConditionEgressProxyReady = "EgressProxyReady"
+	// SwiftSandboxConditionSuspended reports spec.operatingMode Suspended:
+	// True (reason Suspended) once the state is on the node and the launcher
+	// is gone; False with reason Suspending or Resuming in between,
+	// SuspendUnsupported when this sandbox cannot be suspended,
+	// SuspendFailed when the snapshot failed (the sandbox keeps running), or
+	// SnapshotLost when the saved state can no longer be restored. Absent
+	// for a sandbox that was never suspended.
+	SwiftSandboxConditionSuspended = "Suspended"
 )
 
 // Resolved=False reasons, on a SwiftSandbox or a SwiftSandboxPool, while the
@@ -1247,8 +1294,37 @@ type SwiftSandboxStatus struct {
 	// ExitCode is the workload/guest exit code when known.
 	// +optional
 	ExitCode *int32 `json:"exitCode,omitempty"`
+	// SuspendedState is where the suspended microVM's state is kept. Set
+	// when a suspend starts (before anything is written to the node) and
+	// cleared once a resume has restored it.
+	// +optional
+	SuspendedState *SandboxSuspendedState `json:"suspendedState,omitempty"`
 	// +optional
 	Message string `json:"message,omitempty"`
+}
+
+// SandboxSuspendedState locates a suspended sandbox's saved state.
+type SandboxSuspendedState struct {
+	// NodeName is the node holding the state; the sandbox resumes there.
+	NodeName string `json:"nodeName"`
+	// Path is the directory on that node.
+	Path string `json:"path"`
+	// LauncherImage is the launcher image that wrote the state; the sandbox
+	// resumes with the same one, so Cloud Hypervisor reads its own format.
+	// +optional
+	LauncherImage string `json:"launcherImage,omitempty"`
+	// HypervisorVersion is the Cloud Hypervisor version that wrote it.
+	// +optional
+	HypervisorVersion string `json:"hypervisorVersion,omitempty"`
+	// GuestIP is the guest's address when it was suspended; it keeps it.
+	// +optional
+	GuestIP string `json:"guestIP,omitempty"`
+	// TakenAt is when the state was written.
+	// +optional
+	TakenAt *metav1.Time `json:"takenAt,omitempty"`
+	// SizeBytes is the state's size on disk.
+	// +optional
+	SizeBytes int64 `json:"sizeBytes,omitempty"`
 }
 
 // SwiftSandbox is an ephemeral OCI-rootfs microVM.
@@ -1259,6 +1335,7 @@ type SwiftSandboxStatus struct {
 // +kubebuilder:printcolumn:name="Image",type=string,JSONPath=`.spec.image`
 // +kubebuilder:printcolumn:name="Node",type=string,JSONPath=`.status.nodeName`
 // +kubebuilder:printcolumn:name="Guest IP",type=string,JSONPath=`.status.network.primaryIP`
+// +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.spec.operatingMode`,priority=1
 // +kubebuilder:printcolumn:name="Pod IP",type=string,JSONPath=`.status.network.podIP`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type SwiftSandbox struct {

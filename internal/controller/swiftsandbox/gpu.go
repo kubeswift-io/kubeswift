@@ -205,6 +205,13 @@ func (r *SwiftSandboxReconciler) handleDeletion(ctx context.Context, sb *sandbox
 			return res, err
 		}
 	}
+	// The launcher is stopped: a suspended microVM's state on its node goes.
+	if controllerutil.ContainsFinalizer(sb, sandboxSuspendFinalizer) {
+		done, err := r.deleteSuspendState(ctx, sb)
+		if err != nil || !done {
+			return ctrl.Result{RequeueAfter: exportPollInterval}, err
+		}
+	}
 	// The launcher is stopped: its spool directory and any export Job go.
 	if controllerutil.ContainsFinalizer(sb, sandboxOutputsFinalizer) {
 		done, err := r.deleteOutputs(ctx, sb)

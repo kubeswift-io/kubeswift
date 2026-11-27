@@ -483,6 +483,7 @@ fn parse_snapshot_verb(verb: &str) -> ActionKind {
     match verb {
         "capture" => ActionKind::SnapshotCapture,
         "resume" => ActionKind::SnapshotResume,
+        "suspend" => ActionKind::SandboxSuspend,
         "prepare" => ActionKind::RestorePrepare,
         other => ActionKind::Unknown(other.to_string()),
     }
@@ -534,6 +535,9 @@ pub enum ActionKind {
     SnapshotResume,
     /// Bring up a fresh CH process via spawn_ch_restore. Ships in commit 7.
     RestorePrepare,
+    /// Sandbox suspend: pause, snapshot to the node's suspend directory, and
+    /// leave the microVM paused for the launcher to stop (suspend.rs).
+    SandboxSuspend,
 
     // Migration namespace — `kubeswift.io/migration-action` verbs.
     // Ships in PR-B / PR-C of live-migration Phase 2.
@@ -825,6 +829,7 @@ pub async fn dispatch(action: &PendingAction, api_socket: &Path) -> Result<Actio
     match &action.kind {
         ActionKind::SnapshotCapture => dispatch_capture(action, api_socket).await,
         ActionKind::SnapshotResume => dispatch_resume(action, api_socket).await,
+        ActionKind::SandboxSuspend => crate::suspend::dispatch(action, api_socket),
         ActionKind::RestorePrepare => {
             // Phase 2 commit 7 wires this in.
             log::info!(
@@ -2296,7 +2301,13 @@ fn snapshot_root() -> String {
 /// `<namespace>-<name>` of a snapshot an earlier version captured). Anything
 /// else -- the root itself, a nested path, `..`, another scheme -- is refused.
 fn capture_dest_dir(url: &str) -> Result<&str, String> {
-    let root = snapshot_root();
+    dest_dir_under(&snapshot_root(), url)
+}
+
+/// The directory a capture or suspend may wipe and write: `file://` + `root`
+/// + one segment of `[A-Za-z0-9._-]` starting alphanumeric (see
+/// [`capture_dest_dir`]).
+pub(crate) fn dest_dir_under<'a>(root: &str, url: &'a str) -> Result<&'a str, String> {
     let refuse = || {
         format!(
             "destination_url must be file://{}<name>/ with <name> a single [A-Za-z0-9._-] segment starting alphanumeric (got {:?})",
@@ -2305,7 +2316,7 @@ fn capture_dest_dir(url: &str) -> Result<&str, String> {
     };
     let path = url.strip_prefix("file://").ok_or_else(refuse)?;
     let seg = path
-        .strip_prefix(root.as_str())
+        .strip_prefix(root)
         .ok_or_else(refuse)?
         .trim_end_matches('/');
     let first_alnum = seg
