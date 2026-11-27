@@ -63,6 +63,13 @@ func privileged() *corev1.SecurityContext {
 }
 
 // networked reports whether the sandbox gets a network (every mode except "none").
+// bridgeMAC is the MAC of the launcher's guest-facing bridge (br0), derived
+// from the sandbox (or warm slot) namespace and name so every launcher of the
+// same sandbox presents the same gateway MAC to the guest.
+func bridgeMAC(sb *sandboxv1alpha1.SwiftSandbox) string {
+	return runtimeintent.GenerateMAC(runtimeintent.InterfaceMACSeed(sb.Namespace, sb.Name, "br0"))
+}
+
 func networked(sb *sandboxv1alpha1.SwiftSandbox) bool {
 	return sb.Spec.Network.Mode != sandboxv1alpha1.SandboxNetworkNone
 }
@@ -472,6 +479,11 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		// The FORWARD chain matches the VM's pre-NAT source (bridge subnet) only.
 		ni := swiftguest.NetworkInitContainer()
 		ni.Env = append(ni.Env, corev1.EnvVar{Name: "KUBESWIFT_SANDBOX_EGRESS", Value: string(egressMode(sb))})
+		// br0 gets a MAC derived from the sandbox, not the first port's random
+		// one. The guest caches its gateway's MAC, so a launcher that restores
+		// the VM from a snapshot must present the same br0 MAC; with a random
+		// one the guest stalls about 5 s until its ARP entry is re-resolved.
+		ni.Env = append(ni.Env, corev1.EnvVar{Name: "KUBESWIFT_BRIDGE_MAC", Value: bridgeMAC(sb)})
 		// spec.network.egress.allow, resolved by the caller (resolveEgress) into
 		// status. network-init renders these after the metadata DROP and before
 		// the cluster-range DROPs, so nothing here can open 169.254/16.
