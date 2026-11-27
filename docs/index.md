@@ -48,6 +48,7 @@ KubeSwift runs Linux and Windows VMs on Kubernetes. [Cloud Hypervisor](https://w
 - [GPU sandboxes](sandbox/gpu-sandboxes.md) — pass a GPU into a sandbox via the native SwiftGPU or DRA backend, warm GPU pools, model preload
 - [Warm pools](sandbox/warm-pool.md) — pre-booted SwiftSandbox slots for sub-second checkout
 - [Pod mode](sandbox/pod-mode.md) — ordinary Pods in microVMs (`runtimeClassName: kubeswift-microvm`)
+- [Policy pack](sandbox/policy.md) — platform rules for agent sandboxes per namespace (network mode, no guest Secrets, no nested virtualization, proxy presets)
 - [Scratch / persistent disks](sandbox/scratch-disks.md) — attach a secondary block disk for build caches or datasets
 - [Build your own](sandbox/build-your-own.md) — custom sandbox kernels + base images (BYO / in-house library)
 

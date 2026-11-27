@@ -219,6 +219,12 @@ point `ui.gateway.url` at an externally reachable gateway).
 | `launcherSAGate.enabled` | Refuse any Pod, legacy token Secret or TokenRequest for a launcher ServiceAccount unless the KubeSwift controller (or, for a TokenRequest, the kubelet) makes it. **Closes a privilege escalation — see below before disabling** | `true` |
 | `launcherSAGate.guestServiceAccountName` | Guest launcher SA the gate protects. Must match what the controller stamps | `kubeswift-launcher` |
 | `launcherSAGate.sandboxServiceAccountName` | Sandbox launcher SA the gate protects, and the prefix of every sandbox launcher pod's own SA (`<name>-<pod>`), which the gate protects too | `kubeswift-sandbox-launcher` |
+| `sandboxPolicy.enabled` | Sandbox policy pack: ValidatingAdmissionPolicies for SwiftSandboxes and SwiftSandboxPools in namespaces labelled `kubeswift.io/sandbox-policy=enforced` ([docs](../../docs/sandbox/policy.md)). Kubernetes 1.30+ | `false` |
+| `sandboxPolicy.allowedNetworkModes` | Network modes allowed there | `[brokered, proxied]` |
+| `sandboxPolicy.forbidGuestSecrets` | Refuse `env[].valueFrom.secretKeyRef` and `secretFiles` | `true` |
+| `sandboxPolicy.requireNestedDisabled` | Refuse `nestedVirtualization: Enabled` | `true` |
+| `sandboxPolicy.allowedProxyImages` | Egress proxy images allowed besides the presets | `[]` |
+| `sandboxPolicy.validationActions` | `[Deny]`, or `[Warn, Audit]` to try the rules | `[Deny]` |
 
 **Why `launcherSAGate` is on by default.** Launcher pods run privileged and are a
 node-level trust boundary. swiftletd needs `pods: patch` to report status, so the

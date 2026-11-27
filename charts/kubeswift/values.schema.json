@@ -289,6 +289,26 @@
         "sandboxServiceAccountName": {}
       }
     },
+    "sandboxPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "allowedNetworkModes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["restricted", "open", "none", "proxied", "brokered"] }
+        },
+        "forbidGuestSecrets": { "type": "boolean" },
+        "requireNestedDisabled": { "type": "boolean" },
+        "allowedProxyImages": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "validationActions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["Deny", "Warn", "Audit"] }
+        }
+      }
+    },
     "monitoring": {
       "additionalProperties": false,
       "properties": {
