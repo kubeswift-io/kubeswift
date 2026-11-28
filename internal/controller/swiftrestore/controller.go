@@ -370,8 +370,8 @@ func (r *SwiftRestoreReconciler) handleRestoring(
 		return false, 0, "", err
 	}
 	if pvc.Status.Phase != corev1.ClaimBound {
-		setReadyCondition(status, metav1.ConditionFalse, ReasonRestoring,
-			"restore PVC "+pvcName+" not yet Bound (phase="+string(pvc.Status.Phase)+")")
+		reason, msg := r.notBoundCondition(ctx, &pvc, "restore PVC")
+		setReadyCondition(status, metav1.ConditionFalse, reason, msg)
 		return false, 5 * time.Second, "", nil
 	}
 
