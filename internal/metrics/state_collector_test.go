@@ -241,3 +241,37 @@ func TestVolumeObservedMarks(t *testing.T) {
 		t.Error("detach mark not once")
 	}
 }
+
+// A copyonwrite clone's launcher report is exported per guest; launchers
+// without the copy-on-write mark or a report are not.
+func TestStateCollector_GuestMemory(t *testing.T) {
+	pod := func(name string, cow bool, report string) *corev1.Pod {
+		p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "team-a",
+			Labels:      map[string]string{launcherRoleLabel: launcherRoleRestore, launcherGuestLabel: name},
+			Annotations: map[string]string{},
+		}}
+		if cow {
+			p.Annotations[memoryCopyOnWriteAnno] = "true"
+		}
+		if report != "" {
+			p.Annotations[guestMemoryReportAnno] = report
+		}
+		return p
+	}
+	c := NewStateCollector(newStateReader(t,
+		pod("clone-1", true, `{"rssBytes":400,"pssFileBytes":300,"pssAnonBytes":50,"pssShmemBytes":0}`),
+		pod("clone-2", false, `{"rssBytes":1,"pssFileBytes":1,"pssAnonBytes":1,"pssShmemBytes":1}`),
+		pod("clone-3", true, ""),
+	))
+	expected := `
+# HELP kubeswift_guest_memory_bytes Memory of a clone restored copyonwrite, from its launcher's report: kind file is its share (PSS) of the snapshot memory file pages it shares with other clones, anon the pages it wrote
+# TYPE kubeswift_guest_memory_bytes gauge
+kubeswift_guest_memory_bytes{guest="clone-1",kind="anon",namespace="team-a"} 50
+kubeswift_guest_memory_bytes{guest="clone-1",kind="file",namespace="team-a"} 300
+kubeswift_guest_memory_bytes{guest="clone-1",kind="shmem",namespace="team-a"} 0
+`
+	if err := testutil.CollectAndCompare(c, strings.NewReader(expected), "kubeswift_guest_memory_bytes"); err != nil {
+		t.Error(err)
+	}
+}

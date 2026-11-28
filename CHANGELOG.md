@@ -6,6 +6,10 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Shared memory between clones (#869): `cloneFromSnapshot.memoryRestoreMode: copyonwrite` (default `ondemand`) maps the snapshot's memory file read-only and copy-on-write (Cloud Hypervisor `memory_restore_mode=copyonwrite`), so clones of one snapshot on a node share every page none of them has written. The clone's restore launcher turns `memory.shared`/`reserve` off and links the memory file instead of staging a copy; the source and every normal boot keep `shared=on,reserve=on`. Local snapshots only, not with a hugepage class (refused before the first launcher); a live migration of such a clone is refused (`EligibilityMismatch`) until its launcher restarts. Memory requests are unchanged. New metric `kubeswift_guest_memory_bytes{namespace,guest,kind}` from the launcher's `kubeswift.io/guest-memory` report. Guide: [docs/snapshots/clone-from-snapshot.md](docs/snapshots/clone-from-snapshot.md#shared-memory-between-clones-memoryrestoremode-copyonwrite).
+
 ## [v0.28.0] — 2026-11-28
 
 SwiftSandbox suspend and resume (`spec.operatingMode: Suspended`): a sandbox's microVM is paused, saved on its node and stopped, then restored on the same node with its memory, files and processes. In pod mode, an agent-sandbox Sandbox set to `operatingMode: Suspended` keeps its microVM the same way. Also: in-place disk rollback from a CSI snapshot (#711), a sandbox policy pack (ValidatingAdmissionPolicies, off by default), storage-location connection settings and `caBundle` for golden images and OCI snapshots (#703 phase 2), and `swiftctl volume` commands with metrics for volume hotplug.

@@ -618,3 +618,25 @@ func TestPatch_AllCloneOptionsTogether(t *testing.T) {
 		t.Errorf("serial.socket = %v", got)
 	}
 }
+
+func TestPatch_PrivateMemory(t *testing.T) {
+	flat := map[string]any{"memory": map[string]any{"size": float64(1), "shared": true, "reserve": true, "hugepages": false}}
+	changes, err := Patch(flat, PatchOptions{PrivateMemory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mem := flat["memory"].(map[string]any)
+	if mem["shared"] != false || mem["reserve"] != false || len(changes) != 2 {
+		t.Errorf("flat: memory=%v changes=%v", mem, changes)
+	}
+	wrapped := map[string]any{"config": map[string]any{"memory": map[string]any{"shared": false}}}
+	if _, err := Patch(wrapped, PatchOptions{PrivateMemory: true}); err != nil {
+		t.Fatal(err)
+	}
+	if m := wrapped["config"].(map[string]any)["memory"].(map[string]any); m["shared"] != false || m["reserve"] != false {
+		t.Errorf("wrapped: memory=%v", m)
+	}
+	if _, err := Patch(map[string]any{}, PatchOptions{PrivateMemory: true}); err == nil {
+		t.Error("a config without memory was accepted")
+	}
+}

@@ -95,6 +95,39 @@ spec:
 > shared snapshot-keyed node cache. (The earlier "keep `replicas` ≤ nodes"
 > guidance is lifted.) Replicas are still round-robined across nodes for spread.
 
+## Shared memory between clones (`memoryRestoreMode: copyonwrite`)
+
+By default each clone pages in its own copy of the snapshot's memory
+(`ondemand`). With `copyonwrite`, a clone maps the snapshot's memory file
+read-only and copy-on-write: clones of one snapshot on a node share every page
+none of them has written, and each clone holds only the pages it wrote.
+
+```yaml
+      cloneFromSnapshot:
+        snapshotRef: {name: my-snapshot}
+        memoryRestoreMode: copyonwrite
+```
+
+In a lab run, four clones of a 2 GiB snapshot that all kept reading the same
+1.2 GiB used about 1.65 GiB together instead of about 8.2 GiB.
+
+- **Local snapshots only** (Tier B): a local snapshot's memory file is written
+  once and never changed, which a mapped file must be. s3 and oci snapshots are
+  refused for now.
+- **Not with a hugepage class:** hugepage-backed RAM cannot be a private
+  mapping of a file.
+- **No live migration** of such a clone: it is refused with a reason. Use
+  `mode: offline`, or restart the guest first; its next launcher boots from its
+  disk as any guest. Memory snapshots of the clone work.
+- **Memory requests stay at full guest RAM**, so a node fits no more clones
+  than before; what you gain is free memory and less memory pressure.
+  `kubeswift_guest_memory_bytes{kind="file"|"anon"}` shows each clone's share
+  of the shared pages and the pages it wrote (from its launcher, every minute).
+- **Security:** pages are shared only between clones of the same snapshot,
+  which are in one namespace and start with the same memory anyway. A clone
+  could still time another clone's accesses to shared pages, so do not use it
+  to isolate mutually untrusted workloads.
+
 ## Identity (the resume-vs-boot rule)
 
 CH `--restore` resumes byte-for-byte — **cloud-init does not re-run** — so without
@@ -193,6 +226,8 @@ kubectl get swiftguest -l swift.kubeswift.io/pool-name=clone-pool -o wide -w
 | Guest stuck `Pending`, *"waiting for SwiftSnapshot … to be Ready"* | The snapshot is still Capturing/Uploading. |
 | Guest stuck `Pending`, download Job present | The Tier C download is in progress (or `ImagePullBackOff` / `snapshot-s3 image not configured`). |
 | All clones share hostname/machine-id | The source isn't agent-enabled. Set `spec.guestAgent.enabled: true` on the source + install the agent (see the in-guest agent section above); the controller then regenerates identity in place. Check the clone's `CloneIdentityRegenerated` condition — `False/GuestAgentUnreachable` means the agent isn't running in the snapshot. |
+| Guest `Failed`, *"memoryRestoreMode copyonwrite needs a local snapshot"* or *"… cannot back guest RAM with hugepages"* | `copyonwrite` works with a local snapshot and a class without hugepages; use the default `ondemand` otherwise. |
+| SwiftMigration `Failed`, *"restored with … copyonwrite and cannot be live-migrated"* | Use `mode: offline`, or restart the guest so it runs from its disk. |
 | Clone is `Running` but `status.network.primaryIP` is empty | With the agent, the clone re-DHCPs and the IP appears automatically. If empty, the agent is absent (`CloneIdentityRegenerated=False/GuestAgentUnreachable`) — the guest kept the source's cached lease and never re-ran DHCP. Install the agent. (The lease poller stays alive for restore guests, v0.4.3+, so the IP lands as soon as the agent's `dhclient` runs.) |
 
 ## Cluster walkthrough
