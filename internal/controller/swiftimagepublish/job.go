@@ -32,6 +32,9 @@ const (
 	jobBackoff     = int32(2)
 	jobDeadlineSec = int64(6 * 60 * 60)
 	jobTTLSec      = int32(24 * 60 * 60)
+	// exitTagInUse is snapshot-oras's exit code when --immutable-tag refuses
+	// to move the tag; the Job fails on it without retrying.
+	exitTagInUse = int32(3)
 )
 
 // Provenance annotations, on the manifest and (when signed) signed into the
@@ -207,7 +210,15 @@ func buildJob(pub *imagev1alpha1.SwiftImagePublish, image string) *batchv1.Job {
 			Labels:    labels(pub),
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit:            ptr.To(jobBackoff),
+			BackoffLimit: ptr.To(jobBackoff),
+			PodFailurePolicy: &batchv1.PodFailurePolicy{Rules: []batchv1.PodFailurePolicyRule{{
+				Action: batchv1.PodFailurePolicyActionFailJob,
+				OnExitCodes: &batchv1.PodFailurePolicyOnExitCodesRequirement{
+					ContainerName: ptr.To("publish"),
+					Operator:      batchv1.PodFailurePolicyOnExitCodesOpIn,
+					Values:        []int32{exitTagInUse},
+				},
+			}}},
 			ActiveDeadlineSeconds:   ptr.To(jobDeadlineSec),
 			TTLSecondsAfterFinished: ptr.To(jobTTLSec),
 			Template: corev1.PodTemplateSpec{

@@ -26,6 +26,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -98,9 +99,16 @@ func main() {
 		annotations: annotations.m, immutableTag: *immutableTag,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "snapshot-oras:", err)
+		if errors.Is(err, oci.ErrTagInUse) {
+			// Retrying cannot help: a Job fails at once on this code.
+			os.Exit(exitTagInUse)
+		}
 		os.Exit(1)
 	}
 }
+
+// exitTagInUse is the exit code for --immutable-tag refusing to move a tag.
+const exitTagInUse = 3
 
 type runArgs struct {
 	mode, dir, repository, tag, digest, snapName, signKey string

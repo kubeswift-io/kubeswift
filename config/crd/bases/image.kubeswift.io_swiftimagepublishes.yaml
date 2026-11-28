@@ -185,8 +185,8 @@ spec:
                 - message: insecure, caBundle, credentialsSecretRef, signingKeySecretRef
                     and verifyKeySecretRef go with an explicit repository; a storage
                     location carries its own
-                  rule: has(self.repository) || !(has(self.insecure) || has(self.caBundle)
-                    || has(self.credentialsSecretRef) || has(self.signingKeySecretRef)
+                  rule: has(self.repository) || !((has(self.insecure) && self.insecure)
+                    || has(self.caBundle) || has(self.credentialsSecretRef) || has(self.signingKeySecretRef)
                     || has(self.verifyKeySecretRef))
               osType:
                 allOf:

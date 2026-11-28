@@ -235,6 +235,9 @@ func TestPublish_CSISnapshotToClusterLocation(t *testing.T) {
 			t.Errorf("args missing %q: %s", want, args)
 		}
 	}
+	if fp := job.Spec.PodFailurePolicy; fp == nil || fp.Rules[0].OnExitCodes.Values[0] != 3 {
+		t.Errorf("no FailJob rule for TagInUse: %+v", fp)
+	}
 	ps := job.Spec.Template.Spec
 	sc := ps.Containers[0].SecurityContext
 	if !*sc.RunAsNonRoot || *sc.RunAsUser == 0 || !*sc.ReadOnlyRootFilesystem || *sc.AllowPrivilegeEscalation ||
