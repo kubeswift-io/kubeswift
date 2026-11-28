@@ -180,9 +180,12 @@ func (r *Reconciler) reconcile(ctx context.Context, pub *imagev1alpha1.SwiftImag
 
 	// Source: looked at on every pass until the Job starts.
 	var src sourceResult
-	if pub.Spec.Source.GuestRef != nil {
+	switch {
+	case pub.Spec.Source.GuestRef != nil:
 		src, err = r.resolveGuestSource(ctx, pub)
-	} else {
+	case pub.Spec.Source.ImageRef != nil:
+		src, err = resolveImageSource(ctx, r.Client, pub)
+	default:
 		src, err = resolveSnapshotSource(ctx, r.Client, pub)
 	}
 	if err != nil {

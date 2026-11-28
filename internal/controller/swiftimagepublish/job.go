@@ -26,6 +26,7 @@ const (
 	diskDevice     = "/dev/kubeswift-disk"
 	authMount      = "/oras-auth"
 	srcAuthMount   = "/oras-auth-source"
+	srcVerifyMount = "/verify-key-source"
 	signKeyMount   = "/oras-signing-key"
 	cosignHome     = "/tmp"
 	publishUID     = int64(65532)
@@ -203,7 +204,15 @@ func buildJob(pub *imagev1alpha1.SwiftImagePublish, image string) *batchv1.Job {
 				Items:      []corev1.KeyToPath{{Key: corev1.DockerConfigJsonKey, Path: "config.json"}},
 			}}})
 		}
-		if src.CopyFrom.VerifyKey != "" {
+		switch {
+		case src.CopyFrom.VerifyKeySecretName != "":
+			c.Args = append(c.Args, "--verify-key="+srcVerifyMount+"/cosign.pub")
+			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "source-verify-key", MountPath: srcVerifyMount, ReadOnly: true})
+			vols = append(vols, corev1.Volume{Name: "source-verify-key", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName: src.CopyFrom.VerifyKeySecretName,
+				Items:      []corev1.KeyToPath{{Key: "cosign.pub", Path: "cosign.pub"}},
+			}}})
+		case src.CopyFrom.VerifyKey != "":
 			c.Env = append(c.Env, corev1.EnvVar{Name: clonecommon.VerifyKeyEnvName, Value: src.CopyFrom.VerifyKey})
 		}
 	case src.Block:

@@ -115,6 +115,12 @@ same format `swiftctl image publish` writes. The source is one of:
   `LauncherHeldByImagePublish` events meanwhile. Nothing stops the guest for
   you and no snapshot is taken. Kernel-boot and shared-base guests are
   refused. A second request for the same guest waits (`GuestHeld`).
+- **`imageRef`**: a Ready SwiftImage. One pulled from a registry by digest
+  (`source.oci.digest`) is copied registry to registry from that digest, with
+  the connection settings it was pulled with (`status.source`, verified first
+  when it has a verify key). Any other image (HTTP, PVC clone, or OCI by tag)
+  is read from its prepared PVC, which carries the import's console patch; a
+  later import applies it again harmlessly.
 
 ```yaml
 apiVersion: image.kubeswift.io/v1alpha1
