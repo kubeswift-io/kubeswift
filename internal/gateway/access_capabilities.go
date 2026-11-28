@@ -83,7 +83,7 @@ var capabilities = []capability{
 			rule([]string{"storage.k8s.io"}, []string{"storageclasses"}, []string{"get", "list"}),
 			rule([]string{"networking.k8s.io"}, []string{"networkpolicies"}, []string{"get", "list"}),
 			rule([]string{"k8s.cni.cncf.io"}, []string{"network-attachment-definitions"}, []string{"get", "list"}),
-			rule([]string{"image.kubeswift.io"}, []string{"swiftimages"}, []string{"get", "list"}),
+			rule([]string{"image.kubeswift.io"}, []string{"swiftimages", "swiftimagepublishes"}, []string{"get", "list"}),
 			rule([]string{"kernel.kubeswift.io"}, []string{"swiftkernels"}, []string{"get", "list"}),
 			rule([]string{"seed.kubeswift.io"}, []string{"swiftseedprofiles"}, []string{"get", "list"}),
 			rule([]string{"snapshot.kubeswift.io"}, []string{"swiftsnapshots", "swiftsnapshotschedules", "swiftrestores"}, []string{"get", "list"}),

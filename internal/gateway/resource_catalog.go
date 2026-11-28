@@ -77,6 +77,8 @@ var resourceCatalog = []resourceKind{
 
 	// KubeSwift CRDs without a dedicated view.
 	{key: "swiftimages", displayName: "Images", gvr: gvr("image.kubeswift.io", "v1alpha1", "swiftimages"), namespaced: true, category: "KubeSwift", columns: []string{"phase"}, project: phaseStatusProject},
+	// Golden images published from the cluster (#703 phase 3).
+	{key: "swiftimagepublishes", displayName: "Image Publishes", gvr: gvr("image.kubeswift.io", "v1alpha1", "swiftimagepublishes"), namespaced: true, category: "KubeSwift", columns: []string{"phase", "source", "reference", "signed"}, project: imagePublishProject},
 	{key: "swiftkernels", displayName: "Kernels", gvr: gvr("kernel.kubeswift.io", "v1alpha1", "swiftkernels"), namespaced: true, category: "KubeSwift", columns: []string{"phase"}, project: phaseStatusProject},
 	{key: "swiftguestclasses", displayName: "Guest Classes", gvr: gvr("swift.kubeswift.io", "v1alpha1", "swiftguestclasses"), namespaced: false, category: "KubeSwift", columns: nil, project: nilProject},
 	{key: "swiftguestpools", displayName: "Guest Pools", gvr: gvr("swift.kubeswift.io", "v1alpha1", "swiftguestpools"), namespaced: true, category: "KubeSwift", columns: []string{"phase", "replicas"}, project: poolProject},
@@ -112,6 +114,26 @@ func nilProject(*unstructured.Unstructured) map[string]string { return map[strin
 func phaseStatusProject(u *unstructured.Unstructured) map[string]string {
 	p := nestedStr(u, "status", "phase")
 	return map[string]string{"phase": p, "status": p}
+}
+
+// imagePublishProject reports a SwiftImagePublish's phase, source, the
+// reference it pushes to, and whether the image was signed.
+func imagePublishProject(u *unstructured.Unstructured) map[string]string {
+	source := ""
+	for _, k := range []string{"snapshotRef", "guestRef", "imageRef"} {
+		if n := nestedStr(u, "spec", "source", k, "name"); n != "" {
+			source = strings.TrimSuffix(k, "Ref") + "/" + n
+		}
+	}
+	signed, _, _ := unstructured.NestedBool(u.Object, "status", "signed")
+	p := nestedStr(u, "status", "phase")
+	return map[string]string{
+		"phase":     p,
+		"status":    p,
+		"source":    source,
+		"reference": nestedStr(u, "status", "reference"),
+		"signed":    strconv.FormatBool(signed),
+	}
 }
 
 // snapshotProject reports a SwiftSnapshot's source guest, backend type, and phase.
