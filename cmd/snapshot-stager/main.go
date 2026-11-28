@@ -62,6 +62,8 @@ func main() {
 		"target runtime_dir prefix (must end in '/'); empty disables prefix rewrite")
 	nullifyHostMAC := flag.Bool("nullify-host-mac", false,
 		"set net[].host_mac to null so CH auto-discovers the clone tap's host MAC instead of forcing the source value")
+	memoryFromSource := flag.Bool("memory-from-source", false,
+		"copyonwrite clone: link memory-ranges to the read-only source instead of copying it, and turn memory.shared/reserve off")
 	flag.Parse()
 
 	if *src == "" || *dst == "" {
@@ -75,6 +77,7 @@ func main() {
 		RewriteRuntimeDirFrom: *rewriteRuntimeDirFrom,
 		RewriteRuntimeDirTo:   *rewriteRuntimeDirTo,
 		NullifyHostMAC:        *nullifyHostMAC,
+		PrivateMemory:         *memoryFromSource,
 	}
 	if err := run(*src, *dst, opts); err != nil {
 		fmt.Fprintln(os.Stderr, "snapshot-stager:", err)
@@ -105,8 +108,25 @@ func run(src, dst string, opts configjson.PatchOptions) error {
 	}
 
 	fmt.Printf("snapshot-stager: copying %s -> %s\n", src, dst)
-	if err := copyTree(src, dst); err != nil {
+	var skip map[string]bool
+	if opts.PrivateMemory {
+		// copyonwrite: the clone maps the source's memory file itself (read-
+		// only, copy-on-write), so it is linked, never copied. Clones of one
+		// snapshot on a node then share its unwritten pages.
+		skip = map[string]bool{memoryRangesFile: true}
+	}
+	if err := copyTree(src, dst, skip); err != nil {
 		return fmt.Errorf("copy: %w", err)
+	}
+	if opts.PrivateMemory {
+		srcMem := filepath.Join(src, memoryRangesFile)
+		if _, err := os.Stat(srcMem); err != nil {
+			return fmt.Errorf("copyonwrite needs %s in the snapshot: %w", memoryRangesFile, err)
+		}
+		if err := os.Symlink(srcMem, filepath.Join(dst, memoryRangesFile)); err != nil {
+			return fmt.Errorf("link %s: %w", memoryRangesFile, err)
+		}
+		fmt.Printf("snapshot-stager: %s -> %s (copyonwrite)\n", memoryRangesFile, srcMem)
 	}
 
 	if patchRequested(opts) {
@@ -144,7 +164,8 @@ func patchRequested(opts configjson.PatchOptions) bool {
 		len(opts.RewriteMACs) > 0 ||
 		opts.RewriteRuntimeDirFrom != "" ||
 		opts.RewriteRuntimeDirTo != "" ||
-		opts.NullifyHostMAC
+		opts.NullifyHostMAC ||
+		opts.PrivateMemory
 }
 
 // parseMACsCSV splits a comma-separated MAC list. Empty input produces
@@ -186,7 +207,12 @@ func wipeContents(dir string) error {
 // possibly subdirectories CH may add in future versions, so the
 // implementation is deliberately minimal — no device files, no
 // hardlink dedup, no xattrs.
-func copyTree(src, dst string) error {
+// memoryRangesFile is the guest memory file Cloud Hypervisor writes in a
+// snapshot directory.
+const memoryRangesFile = "memory-ranges"
+
+// copyTree copies src into dst, leaving out the top-level entries in skip.
+func copyTree(src, dst string, skip map[string]bool) error {
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -194,6 +220,9 @@ func copyTree(src, dst string) error {
 		rel, err := filepath.Rel(src, path)
 		if err != nil {
 			return err
+		}
+		if skip[rel] {
+			return nil
 		}
 		target := filepath.Join(dst, rel)
 		switch {

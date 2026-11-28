@@ -332,3 +332,58 @@ func TestSentinelWrittenLast(t *testing.T) {
 			sentInfo.ModTime(), cfgInfo.ModTime())
 	}
 }
+
+// copyonwrite: memory-ranges is linked to the read-only source, never copied,
+// and memory.shared/reserve are turned off so Cloud Hypervisor maps it
+// privately (#869).
+func TestRun_MemoryFromSourceLinksAndPrivatizes(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+	writeMockSnapshot(t, src, "console=ttyS0", "52:54:00:01:01:01")
+	cfg, err := configjson.Read(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg["config"].(map[string]any)["memory"] = map[string]any{"size": float64(2 << 30), "shared": true, "reserve": true}
+	if err := configjson.Write(src, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run(src, dst, configjson.PatchOptions{PrivateMemory: true}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	link, err := os.Readlink(filepath.Join(dst, "memory-ranges"))
+	if err != nil {
+		t.Fatalf("memory-ranges is not a link: %v", err)
+	}
+	if link != filepath.Join(src, "memory-ranges") {
+		t.Errorf("memory-ranges -> %s, want the source file", link)
+	}
+	got, err := configjson.Read(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mem := got["config"].(map[string]any)["memory"].(map[string]any)
+	if mem["shared"] != false || mem["reserve"] != false || mem["size"] != float64(2<<30) {
+		t.Errorf("memory = %v, want shared/reserve false, size kept", mem)
+	}
+	srcCfg, _ := configjson.Read(src)
+	if srcCfg["config"].(map[string]any)["memory"].(map[string]any)["shared"] != true {
+		t.Error("the source config was changed")
+	}
+	if _, err := os.Stat(filepath.Join(dst, "state.json")); err != nil {
+		t.Errorf("state.json not copied: %v", err)
+	}
+}
+
+// A snapshot without a memory file cannot be restored copyonwrite.
+func TestRun_MemoryFromSourceNeedsTheMemoryFile(t *testing.T) {
+	src := t.TempDir()
+	writeMockSnapshot(t, src, "console=ttyS0", "52:54:00:01:01:01")
+	if err := os.Remove(filepath.Join(src, "memory-ranges")); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(src, t.TempDir(), configjson.PatchOptions{PrivateMemory: true}); err == nil {
+		t.Fatal("ran without a memory file")
+	}
+}

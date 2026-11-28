@@ -70,6 +70,12 @@ func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 		}
 	}
 
+	if src.MemoryRestoreMode == swiftv1alpha1.CloneMemoryCopyOnWrite && guest.Status.PodRef == nil {
+		if msg := copyOnWriteBackendRefusal(&snap); msg != "" {
+			return nil, nil, msg, false, nil
+		}
+	}
+
 	// Resolve the on-node snapshot directory + the node the clone runs on.
 	// Tier B (local): the snapshot already lives on its capture node. Tier C
 	// (s3): a download Job — shared per (node, snapshot) across all clones that
@@ -140,6 +146,16 @@ func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 		}
 		return nil, nil, "", false, err
 	}
+	// copyonwrite cannot back guest RAM with hugepages. Checked before the
+	// first launcher only: a clone already running keeps running.
+	if src.MemoryRestoreMode == swiftv1alpha1.CloneMemoryCopyOnWrite && guest.Status.PodRef == nil {
+		if msg, err := r.copyOnWriteRefusal(ctx, &source); err != nil {
+			return nil, nil, "", false, err
+		} else if msg != "" {
+			return nil, nil, msg, false, nil
+		}
+	}
+
 	// The restore launcher serves disk-boot guests only: it needs a root disk
 	// and does not mount a kernel artifact, so a clone of a kernel-boot source
 	// sat Pending forever on a root PVC that is never created (#818).
@@ -324,7 +340,7 @@ func cloneRestoreAnnotations(
 		// to ondemand — fast pool scale-up is the goal and the latency win is
 		// the point; the snapshot file is local + mounted read-only for the
 		// pod's lifetime, so lazy paging is safe (snapshot-ch-v52-efficiency.md).
-		AnnotationRestoreMemoryMode: "ondemand",
+		AnnotationRestoreMemoryMode: cloneMemoryMode(guest.Spec.CloneFromSnapshot),
 	}
 	// In-guest identity agent: if the SOURCE opted in (and the device is in the
 	// snapshot), the agent regenerates identity in place over vsock once the
@@ -340,6 +356,45 @@ func cloneRestoreAnnotations(
 		annos[AnnotationRestoreAppendCmdlineMarker] = "true"
 	}
 	return annos
+}
+
+// cloneMemoryMode is the Cloud Hypervisor memory_restore_mode for a clone:
+// ondemand unless the clone asks for copyonwrite.
+func cloneMemoryMode(src *swiftv1alpha1.CloneFromSnapshotSource) string {
+	if src != nil && src.MemoryRestoreMode == swiftv1alpha1.CloneMemoryCopyOnWrite {
+		return string(swiftv1alpha1.CloneMemoryCopyOnWrite)
+	}
+	return string(swiftv1alpha1.CloneMemoryOnDemand)
+}
+
+// copyOnWriteBackendRefusal says why a snapshot cannot back a copyonwrite
+// clone, or "": only a local snapshot's memory file is written once and never
+// rewritten in place; a downloaded (s3/oci) snapshot's node cache can be, and
+// a mapped file must never change.
+func copyOnWriteBackendRefusal(snap *snapshotv1alpha1.SwiftSnapshot) string {
+	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal {
+		return ""
+	}
+	return "cloneFromSnapshot.memoryRestoreMode copyonwrite needs a local snapshot; SwiftSnapshot " + snap.Name +
+		" is " + string(snap.Spec.Backend.Type)
+}
+
+// copyOnWriteRefusal says why the source's class cannot back a copyonwrite
+// clone, or "": hugepage-backed guest RAM cannot be a private mapping of a
+// file on an ordinary filesystem.
+func (r *SwiftGuestReconciler) copyOnWriteRefusal(ctx context.Context, source *swiftv1alpha1.SwiftGuest) (string, error) {
+	var class swiftv1alpha1.SwiftGuestClass
+	if err := r.Get(ctx, client.ObjectKey{Name: source.Spec.GuestClassRef.Name}, &class); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil // resolution reports the missing class
+		}
+		return "", err
+	}
+	if class.Spec.Hugepages != swiftv1alpha1.HugepagesNone {
+		return "cloneFromSnapshot.memoryRestoreMode copyonwrite cannot back guest RAM with hugepages; SwiftGuestClass " +
+			class.Name + " sets hugepages " + string(class.Spec.Hugepages), nil
+	}
+	return "", nil
 }
 
 // cloneRegenIncludesNonMAC reports whether the clone requests regeneration of a

@@ -2,9 +2,11 @@ package metrics
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
@@ -123,6 +125,11 @@ var (
 		"kubeswift_sandbox_pool_warm_replicas",
 		"Ready, unclaimed warm slots per SwiftSandboxPool",
 		[]string{"namespace", "pool"}, nil)
+	guestMemoryDesc = prometheus.NewDesc(
+		"kubeswift_guest_memory_bytes",
+		"Memory of a clone restored copyonwrite, from its launcher's report: kind file is its share (PSS) of the snapshot memory file pages it shares with other clones, anon the pages it wrote",
+		[]string{"namespace", "guest", "kind"}, nil,
+	)
 	volumeAttachmentsDesc = prometheus.NewDesc(
 		"kubeswift_volume_attachments",
 		"SwiftVolumeAttachments by namespace and phase",
@@ -200,6 +207,7 @@ func (c *StateCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- sandboxPoolWarmDesc
 	ch <- sandboxPoolClaimedDesc
 	ch <- volumeAttachmentsDesc
+	ch <- guestMemoryDesc
 }
 
 // Collect implements prometheus.Collector. Each type is collected
@@ -219,6 +227,47 @@ func (c *StateCollector) Collect(ch chan<- prometheus.Metric) {
 	c.collectSchedules(ctx, ch)
 	c.collectSandboxes(ctx, ch)
 	c.collectVolumeAttachments(ctx, ch)
+	c.collectGuestMemory(ctx, ch)
+}
+
+// Labels and annotations of a copyonwrite clone's launcher (kept as literals:
+// the controller package imports this one).
+const (
+	launcherRoleLabel     = "swift.kubeswift.io/role"
+	launcherRoleRestore   = "restore-receive"
+	launcherGuestLabel    = "swift.kubeswift.io/guest"
+	memoryCopyOnWriteAnno = "kubeswift.io/memory-copy-on-write"
+	guestMemoryReportAnno = "kubeswift.io/guest-memory"
+)
+
+// guestMemoryReport is swiftletd's kubeswift.io/guest-memory value.
+type guestMemoryReport struct {
+	RSSBytes      uint64 `json:"rssBytes"`
+	PSSFileBytes  uint64 `json:"pssFileBytes"`
+	PSSAnonBytes  uint64 `json:"pssAnonBytes"`
+	PSSShmemBytes uint64 `json:"pssShmemBytes"`
+}
+
+func (c *StateCollector) collectGuestMemory(ctx context.Context, ch chan<- prometheus.Metric) {
+	var pods corev1.PodList
+	if err := c.reader.List(ctx, &pods, client.MatchingLabels{launcherRoleLabel: launcherRoleRestore}); err != nil {
+		return
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		raw := p.Annotations[guestMemoryReportAnno]
+		if p.Annotations[memoryCopyOnWriteAnno] != "true" || raw == "" || p.DeletionTimestamp != nil {
+			continue
+		}
+		var r guestMemoryReport
+		if json.Unmarshal([]byte(raw), &r) != nil {
+			continue
+		}
+		guest := p.Labels[launcherGuestLabel]
+		gauge(ch, guestMemoryDesc, float64(r.PSSFileBytes), p.Namespace, guest, "file")
+		gauge(ch, guestMemoryDesc, float64(r.PSSAnonBytes), p.Namespace, guest, "anon")
+		gauge(ch, guestMemoryDesc, float64(r.PSSShmemBytes), p.Namespace, guest, "shmem")
+	}
 }
 
 // volumeAttachmentPhases are zero-filled per namespace that has an attachment.

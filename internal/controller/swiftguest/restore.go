@@ -203,6 +203,18 @@ type RestoreParams struct {
 	NullifyHostMAC bool
 }
 
+// AnnotationMemoryCopyOnWrite marks a launcher pod whose guest was restored
+// copyonwrite: its RAM is a private mapping of the snapshot's memory file. A
+// live migration refuses such a source (not verified with Cloud Hypervisor);
+// the guest's next launcher boots from its disk as any guest.
+const AnnotationMemoryCopyOnWrite = "kubeswift.io/memory-copy-on-write"
+
+// CopyOnWrite reports whether a clone restore maps the snapshot's memory file
+// copy-on-write instead of paging its own copy in.
+func (p RestoreParams) CopyOnWrite() bool {
+	return p.IsClone() && p.MemoryRestoreMode == "copyonwrite"
+}
+
 // IsClone reports whether the restore must stage and patch the
 // snapshot. Anything other than the explicit in-place mode is
 // treated as a clone (defensive — an unknown future value is the
@@ -354,6 +366,15 @@ func BuildRestorePod(
 		mounts = append(mounts, corev1.VolumeMount{
 			Name: snapshotStagingVolume, MountPath: RestoreStagingPath,
 		})
+		// copyonwrite: the staged memory-ranges is a link to the source's
+		// file, which Cloud Hypervisor maps read-only and copy-on-write, so
+		// the launcher needs the source mounted (read-only) at the same path
+		// the stager saw.
+		if params.CopyOnWrite() {
+			mounts = append(mounts, corev1.VolumeMount{
+				Name: snapshotSourceVolume, MountPath: RestoreSourcePath, ReadOnly: true,
+			})
+		}
 	} else {
 		// In-place: launcher reads the read-only source directly.
 		mounts = append(mounts, corev1.VolumeMount{
@@ -389,11 +410,18 @@ func BuildRestorePod(
 		},
 	}
 
+	annotations := podAnnotations(guest)
+	if params.CopyOnWrite() {
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		annotations[AnnotationMemoryCopyOnWrite] = "true"
+	}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        guest.Name,
 			Namespace:   guest.Namespace,
-			Annotations: podAnnotations(guest),
+			Annotations: annotations,
 			Labels: map[string]string{
 				"swift.kubeswift.io/guest": guest.Name,
 				PodRoleLabel:               PodRoleRestoreReceive,
@@ -462,6 +490,9 @@ func snapshotStagerInitContainer(params RestoreParams) corev1.Container {
 	}
 	if params.NullifyHostMAC {
 		args = append(args, "--nullify-host-mac=true")
+	}
+	if params.CopyOnWrite() {
+		args = append(args, "--memory-from-source=true")
 	}
 	return corev1.Container{
 		Name:            SnapshotStagerInitContainerName,

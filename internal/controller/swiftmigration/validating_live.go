@@ -13,6 +13,7 @@ import (
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/migrationcert"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/migrationsidecar"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 )
@@ -169,6 +170,15 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 	// would run a patched image privileged on the destination node.
 	if res := sourcePodCopyable(&srcPod, &guest); res != nil {
 		return res
+	}
+
+	// A clone restored copyonwrite runs from a private mapping of its
+	// snapshot's memory file, which a live migration is not verified to carry
+	// (#869). Its next launcher boots from its disk as any guest.
+	if srcPod.Annotations[swiftguest.AnnotationMemoryCopyOnWrite] == "true" {
+		return phaseFailure(fmt.Sprintf("SwiftGuest %q was restored with cloneFromSnapshot.memoryRestoreMode copyonwrite "+
+			"and cannot be live-migrated from launcher %s; use mode: offline, or restart the guest first "+
+			"(it then runs from its disk)", guest.Name, srcPod.Name), migrationv1alpha1.FailureReasonEligibilityMismatch)
 	}
 
 	// IPWillChange surfacing (same logic as offline path; live mode

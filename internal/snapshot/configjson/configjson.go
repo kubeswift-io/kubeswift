@@ -77,6 +77,11 @@ type PatchOptions struct {
 	RewriteRuntimeDirFrom string
 	RewriteRuntimeDirTo   string
 	NullifyHostMAC        bool
+	// PrivateMemory turns memory.shared and memory.reserve off, for a clone
+	// restored copyonwrite: Cloud Hypervisor maps the snapshot's memory file
+	// privately only when guest RAM is neither shared nor reserved, and falls
+	// back to an eager copy otherwise (#869).
+	PrivateMemory bool
 }
 
 // Read returns the parsed config.json from the given snapshot
@@ -146,6 +151,34 @@ func Patch(cfg map[string]any, opts PatchOptions) ([]string, error) {
 			return nil, err
 		}
 		changes = append(changes, cs...)
+	}
+	if opts.PrivateMemory {
+		cs, err := privateMemory(cfg)
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, cs...)
+	}
+	return changes, nil
+}
+
+// privateMemory sets memory.shared and memory.reserve to false.
+func privateMemory(cfg map[string]any) ([]string, error) {
+	configMap := unwrapConfig(cfg)
+	memRaw, ok := configMap["memory"]
+	if !ok || memRaw == nil {
+		return nil, fmt.Errorf("config.json: no memory section")
+	}
+	mem, ok := memRaw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("config.json: memory is %T, want object", memRaw)
+	}
+	var changes []string
+	for _, k := range []string{"shared", "reserve"} {
+		if v, _ := mem[k].(bool); v {
+			changes = append(changes, "memory."+k+" true -> false")
+		}
+		mem[k] = false
 	}
 	return changes, nil
 }

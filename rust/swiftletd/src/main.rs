@@ -14,6 +14,7 @@ mod intent;
 mod kube_client;
 mod launch;
 mod lease;
+mod memreport;
 mod migconn;
 mod migevents;
 mod optional_shares;
@@ -658,6 +659,9 @@ fn main() {
                     let name = name.clone().unwrap();
                     let guest = guest_name.clone().unwrap_or_else(|| name.clone());
                     let rt_clone = Arc::clone(&rt);
+                    // A clone restored copyonwrite reports how much of its RAM
+                    // is shared with other clones of its snapshot (#869).
+                    let report_memory = intent.restore_memory_mode() == Some("copyonwrite");
                     // What a checkout may ask of this sandbox's bridge (empty for
                     // a guest, which has none).
                     let has_stage = intent
@@ -733,6 +737,9 @@ fn main() {
                                 log::info!("guest_runtime_reported");
                             }
                         });
+                        if report_memory && hypervisor == "cloud-hypervisor" {
+                            memreport::spawn(Arc::clone(&rt_clone), ns.clone(), name.clone(), pid);
+                        }
                     }
                 })
             };

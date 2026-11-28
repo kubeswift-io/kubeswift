@@ -497,7 +497,30 @@ type CloneFromSnapshotSource struct {
 	// reboot via the seed bootcmd). Empty defaults to all four.
 	// +optional
 	Regenerate []CloneIdentityItem `json:"regenerate,omitempty"`
+	// MemoryRestoreMode selects how the clone's memory is restored:
+	//   ondemand    (default) the clone pages its own copy of the snapshot's
+	//               memory in lazily (userfaultfd).
+	//   copyonwrite the clone maps the snapshot's memory file read-only and
+	//               copy-on-write: clones of one snapshot on a node share every
+	//               page none of them has written (Cloud Hypervisor
+	//               memory_restore_mode=copyonwrite). Local snapshots only, not
+	//               with a hugepage class; the clone cannot be live-migrated
+	//               until its launcher restarts (then it runs from its disk as
+	//               any guest). Clones share pages only with clones of the same
+	//               snapshot, so this is not isolation between untrusted
+	//               workloads (cross-clone cache timing).
+	// +kubebuilder:validation:Enum=ondemand;copyonwrite
+	// +optional
+	MemoryRestoreMode CloneMemoryRestoreMode `json:"memoryRestoreMode,omitempty"`
 }
+
+// CloneMemoryRestoreMode is how a cloneFromSnapshot clone restores memory.
+type CloneMemoryRestoreMode string
+
+const (
+	CloneMemoryOnDemand    CloneMemoryRestoreMode = "ondemand"
+	CloneMemoryCopyOnWrite CloneMemoryRestoreMode = "copyonwrite"
+)
 
 // DataDiskRef is one secondary data disk: image-backed, an attached PVC,
 // or a blank (image-less, sized) disk. Exactly one of imageRef/pvcRef/blank.
