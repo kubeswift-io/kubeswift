@@ -10,7 +10,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
@@ -83,19 +82,6 @@ func TestCloneMemoryMode(t *testing.T) {
 }
 
 func TestCopyOnWriteRefusals(t *testing.T) {
-	snap := func(b snapshotv1alpha1.SnapshotBackendType) *snapshotv1alpha1.SwiftSnapshot {
-		return &snapshotv1alpha1.SwiftSnapshot{ObjectMeta: metav1.ObjectMeta{Name: "s"},
-			Spec: snapshotv1alpha1.SwiftSnapshotSpec{Backend: snapshotv1alpha1.SwiftSnapshotBackend{Type: b}}}
-	}
-	if msg := copyOnWriteBackendRefusal(snap(snapshotv1alpha1.SnapshotBackendLocal)); msg != "" {
-		t.Errorf("local refused: %s", msg)
-	}
-	for _, b := range []snapshotv1alpha1.SnapshotBackendType{snapshotv1alpha1.SnapshotBackendS3, snapshotv1alpha1.SnapshotBackendOCI} {
-		if msg := copyOnWriteBackendRefusal(snap(b)); !strings.Contains(msg, "needs a local snapshot") {
-			t.Errorf("%s: %q", b, msg)
-		}
-	}
-
 	scheme := rootdiskScheme(t)
 	gv := schema.GroupVersion{Group: "swift.kubeswift.io", Version: "v1alpha1"}
 	scheme.AddKnownTypes(gv, &swiftv1alpha1.SwiftGuestClass{}, &swiftv1alpha1.SwiftGuestClassList{})
@@ -111,5 +97,9 @@ func TestCopyOnWriteRefusals(t *testing.T) {
 	}
 	if msg, _ := r.copyOnWriteRefusal(context.Background(), src("huge")); !strings.Contains(msg, "hugepages") {
 		t.Errorf("hugepage class: %q", msg)
+	}
+	// A source-independent clone checks its own class the same way.
+	if msg := copyOnWriteClassRefusal(huge); !strings.Contains(msg, "SwiftGuestClass huge") {
+		t.Errorf("clone class: %q", msg)
 	}
 }

@@ -183,3 +183,60 @@ func TestDeleteArtifact_ByDigestSparesAMovedTag(t *testing.T) {
 		t.Errorf("second delete of the same digest: %v", err)
 	}
 }
+
+// TestPull_ReplacesNeverRewrites: pulling over an existing directory replaces
+// each file with a new inode. A process holding the old memory file open (a
+// clone restored copyonwrite maps it) keeps the old bytes; no part directory
+// is left.
+func TestPull_ReplacesNeverRewrites(t *testing.T) {
+	ctx := context.Background()
+	src := t.TempDir()
+	writeFile(t, src, "config.json", []byte(`{"cpus":2}`))
+	mem := make([]byte, 256<<10)
+	for i := range mem {
+		mem[i] = byte(i * 3)
+	}
+	writeFile(t, src, "memory-ranges", mem)
+	store := memory.New()
+	if _, _, err := packAndPush(ctx, src, store, "v1", "ns/snap", true); err != nil {
+		t.Fatalf("packAndPush: %v", err)
+	}
+
+	dst := t.TempDir()
+	stale := make([]byte, len(mem)) // zeros: what a mapping must keep seeing
+	writeFile(t, dst, "memory-ranges", stale)
+	held, err := os.Open(filepath.Join(dst, "memory-ranges"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+
+	if _, err := pullAndMaterialize(ctx, store, "v1", dst); err != nil {
+		t.Fatalf("pullAndMaterialize: %v", err)
+	}
+	got, err := io.ReadAll(held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sha256.Sum256(got) != sha256.Sum256(stale) {
+		t.Fatal("the open file changed: the pull rewrote it in place")
+	}
+	if sha256File(t, filepath.Join(dst, "memory-ranges")) != sha256File(t, filepath.Join(src, "memory-ranges")) {
+		t.Fatal("memory-ranges does not hold the pulled content")
+	}
+	entries, _ := os.ReadDir(dst)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".kubeswift-part-") {
+			t.Fatalf("part entry left behind: %s", e.Name())
+		}
+	}
+	// And a part file in a capture directory is never packed.
+	writeFile(t, src, ".kubeswift-part-memory-ranges-1", []byte("partial"))
+	names, err := regularFiles(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 2 {
+		t.Fatalf("regularFiles = %v, want config.json and memory-ranges", names)
+	}
+}

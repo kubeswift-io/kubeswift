@@ -111,9 +111,14 @@ none of them has written, and each clone holds only the pages it wrote.
 In a lab run, four clones of a 2 GiB snapshot that all kept reading the same
 1.2 GiB used about 1.65 GiB together instead of about 8.2 GiB.
 
-- **Local snapshots only** (Tier B): a local snapshot's memory file is written
-  once and never changed, which a mapped file must be. s3 and oci snapshots are
-  refused for now.
+- **Every backend:** a local snapshot is mapped where it was captured. An s3
+  or oci snapshot is downloaded once per node (the shared download every clone
+  on that node uses) and mapped from there. A mapped file must never change,
+  so downloads write each file beside its final name and rename it into
+  place: a download that runs again (a SwiftRestore on the same node, or a
+  later clone after the first one's download Job was removed) replaces the
+  file, and running clones keep the copy they mapped. Deleting the snapshot
+  removes the node copy; running clones keep their pages until they stop.
 - **Not with a hugepage class:** hugepage-backed RAM cannot be a private
   mapping of a file.
 - **No live migration** of such a clone: it is refused with a reason. Use
@@ -226,7 +231,7 @@ kubectl get swiftguest -l swift.kubeswift.io/pool-name=clone-pool -o wide -w
 | Guest stuck `Pending`, *"waiting for SwiftSnapshot … to be Ready"* | The snapshot is still Capturing/Uploading. |
 | Guest stuck `Pending`, download Job present | The Tier C download is in progress (or `ImagePullBackOff` / `snapshot-s3 image not configured`). |
 | All clones share hostname/machine-id | The source isn't agent-enabled. Set `spec.guestAgent.enabled: true` on the source + install the agent (see the in-guest agent section above); the controller then regenerates identity in place. Check the clone's `CloneIdentityRegenerated` condition — `False/GuestAgentUnreachable` means the agent isn't running in the snapshot. |
-| Guest `Failed`, *"memoryRestoreMode copyonwrite needs a local snapshot"* or *"… cannot back guest RAM with hugepages"* | `copyonwrite` works with a local snapshot and a class without hugepages; use the default `ondemand` otherwise. |
+| Guest `Failed`, *"memoryRestoreMode copyonwrite … cannot back guest RAM with hugepages"* | `copyonwrite` needs a class without hugepages; use the default `ondemand` otherwise. |
 | SwiftMigration `Failed`, *"restored with … copyonwrite and cannot be live-migrated"* | Use `mode: offline`, or restart the guest so it runs from its disk. |
 | Clone is `Running` but `status.network.primaryIP` is empty | With the agent, the clone re-DHCPs and the IP appears automatically. If empty, the agent is absent (`CloneIdentityRegenerated=False/GuestAgentUnreachable`) — the guest kept the source's cached lease and never re-ran DHCP. Install the agent. (The lease poller stays alive for restore guests, v0.4.3+, so the IP lands as soon as the agent's `dhclient` runs.) |
 
