@@ -226,6 +226,7 @@ Publishes a disk in the cluster as a golden image in an OCI registry, signed whe
 | Field | Description |
 |-------|-------------|
 | `source.snapshotRef` | A Ready SwiftSnapshot: a `csi-volume-snapshot` one's root disk is published through a temporary PVC; a full-state `oci` one's disk artifact is copied registry to registry. |
+| `source.imageRef` | A Ready SwiftImage: copied from its digest when it was pulled by digest, else read from its prepared PVC. |
 | `source.guestRef` | A stopped SwiftGuest; its root disk is read in place while the request holds the guest against restarts. |
 | `destination` | `image` + `tag` under a storage location (`locationRef`, else the defaults), or an explicit `repository` + `tag` with `insecure`, `caBundle`, `credentialsSecretRef`, `signingKeySecretRef`, `verifyKeySecretRef`. `overwriteTag` allows moving a tag that names another image. |
 | `osType`, `storageClassName` | Override what is taken from the source guest. |

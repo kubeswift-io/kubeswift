@@ -673,3 +673,55 @@ func TestPublish_MemoryOnlyOCISnapshotRefused(t *testing.T) {
 		t.Fatalf("phase %s reason %s", p.Status.Phase, reason(p))
 	}
 }
+
+func TestPublish_ImageSources(t *testing.T) {
+	pvcImage := &imagev1alpha1.SwiftImage{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "noble", UID: "noble-uid"},
+		Spec:       imagev1alpha1.SwiftImageSpec{OSType: imagev1alpha1.OSTypeLinux, Source: imagev1alpha1.ImageSource{HTTP: &imagev1alpha1.HTTPSource{URL: "https://x/noble.img"}}},
+		Status: imagev1alpha1.SwiftImageStatus{
+			Phase:            imagev1alpha1.SwiftImagePhaseReady,
+			PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{PVCRef: &imagev1alpha1.PVCObjectReference{Name: "swiftimage-import-noble"}, Size: resource.NewQuantity(10<<30, resource.BinarySI)},
+		},
+	}
+	importPVC := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "swiftimage-import-noble"},
+		Spec: corev1.PersistentVolumeClaimSpec{VolumeMode: ptr.To(corev1.PersistentVolumeFilesystem)}}
+	ociImage := &imagev1alpha1.SwiftImage{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "golden", UID: "golden-uid"},
+		Spec: imagev1alpha1.SwiftImageSpec{OSType: imagev1alpha1.OSTypeWindows, Source: imagev1alpha1.ImageSource{OCI: &imagev1alpha1.OCIImageSource{
+			Repository: "other.example.com/golden/win", Digest: "sha256:win"}}},
+		Status: imagev1alpha1.SwiftImageStatus{
+			Phase:  imagev1alpha1.SwiftImagePhaseReady,
+			Source: &imagev1alpha1.ImageSourceStatus{Location: "Explicit", Insecure: true, VerifyKeySecretName: "win-pub"},
+		},
+	}
+	pub := func(img string) *imagev1alpha1.SwiftImagePublish {
+		return newPublish(func(p *imagev1alpha1.SwiftImagePublish) {
+			p.Spec.Source = imagev1alpha1.ImagePublishSource{ImageRef: &corev1.LocalObjectReference{Name: img}}
+		})
+	}
+
+	r, c := setup(t, append(secrets(), clusterLocation(), pvcImage, importPVC, pub("noble"))...)
+	p := reconcileOnce(t, r, "web-2026")
+	if p.Status.Phase != imagev1alpha1.SwiftImagePublishPublishing || p.Status.Source.PVCName != "swiftimage-import-noble" || p.Status.Source.CopyFrom != nil {
+		t.Fatalf("pvc image: %s %s %+v", p.Status.Phase, reason(p), p.Status.Source)
+	}
+	var job batchv1.Job
+	_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: jobName(p)}, &job)
+	if args := strings.Join(job.Spec.Template.Spec.Containers[0].Args, " "); !strings.Contains(args, "--file="+diskMount+"/image.raw") {
+		t.Fatalf("pvc image args: %s", args)
+	}
+
+	r, c = setup(t, append(secrets(), clusterLocation(), ociImage, pub("golden"))...)
+	p = reconcileOnce(t, r, "web-2026")
+	cp := p.Status.Source.CopyFrom
+	if p.Status.Phase != imagev1alpha1.SwiftImagePublishPublishing || cp == nil || cp.Digest != "sha256:win" || !cp.Insecure || p.Status.Source.OSType != imagev1alpha1.OSTypeWindows {
+		t.Fatalf("oci image: %s %s %+v", p.Status.Phase, reason(p), p.Status.Source)
+	}
+	_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: jobName(p)}, &job)
+	args := strings.Join(job.Spec.Template.Spec.Containers[0].Args, " ")
+	for _, want := range []string{"--mode=copy-image", "--from-digest=sha256:win", "--from-insecure", "--verify-key=" + srcVerifyMount + "/cosign.pub"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("oci image args missing %q: %s", want, args)
+		}
+	}
+}

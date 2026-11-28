@@ -223,6 +223,26 @@ spec:
                         type: string
                     type: object
                     x-kubernetes-map-type: atomic
+                  imageRef:
+                    description: |-
+                      ImageRef names a Ready SwiftImage in this namespace. An image pulled
+                      from a registry by digest (source.oci.digest) is copied registry to
+                      registry from that digest, with the connection settings it was pulled
+                      with. Any other image is read from its prepared PVC (image.raw), which
+                      carries the import's console patch; a later import applies it again
+                      harmlessly.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
                   snapshotRef:
                     description: |-
                       SnapshotRef names a Ready SwiftSnapshot in this namespace with a root
@@ -259,8 +279,8 @@ spec:
             - source
             type: object
             x-kubernetes-validations:
-            - message: source must set exactly one of snapshotRef and guestRef
-              rule: '[has(self.source.snapshotRef), has(self.source.guestRef)].filter(x,
+            - message: source must set exactly one of snapshotRef, guestRef and imageRef
+              rule: '[has(self.source.snapshotRef), has(self.source.guestRef), has(self.source.imageRef)].filter(x,
                 x).size() == 1'
           status:
             description: SwiftImagePublishStatus reports the publish.
@@ -400,6 +420,11 @@ spec:
                       verifyKey:
                         description: VerifyKey, when set, must verify the source before
                           it is copied.
+                        type: string
+                      verifyKeySecretName:
+                        description: |-
+                          VerifyKeySecretName names a Secret in the request's namespace whose
+                          cosign.pub must verify the source before it is copied.
                         type: string
                     required:
                     - digest

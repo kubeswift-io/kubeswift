@@ -48,6 +48,15 @@ type ImagePublishSource struct {
 	// shared-base guests.
 	// +optional
 	GuestRef *corev1.LocalObjectReference `json:"guestRef,omitempty"`
+
+	// ImageRef names a Ready SwiftImage in this namespace. An image pulled
+	// from a registry by digest (source.oci.digest) is copied registry to
+	// registry from that digest, with the connection settings it was pulled
+	// with. Any other image is read from its prepared PVC (image.raw), which
+	// carries the import's console patch; a later import applies it again
+	// harmlessly.
+	// +optional
+	ImageRef *corev1.LocalObjectReference `json:"imageRef,omitempty"`
 }
 
 // AnnotationPublishHold is set on a SwiftGuest by a SwiftImagePublish that
@@ -137,7 +146,7 @@ type ImagePublishCreateImage struct {
 
 // SwiftImagePublishSpec is a one-shot request: it cannot change once
 // created. Deleting it never deletes the published image.
-// +kubebuilder:validation:XValidation:rule="[has(self.source.snapshotRef), has(self.source.guestRef)].filter(x, x).size() == 1",message="source must set exactly one of snapshotRef and guestRef"
+// +kubebuilder:validation:XValidation:rule="[has(self.source.snapshotRef), has(self.source.guestRef), has(self.source.imageRef)].filter(x, x).size() == 1",message="source must set exactly one of snapshotRef, guestRef and imageRef"
 type SwiftImagePublishSpec struct {
 	// Source is the disk to publish.
 	Source ImagePublishSource `json:"source"`
@@ -225,6 +234,10 @@ type ImagePublishCopySource struct {
 	// VerifyKey, when set, must verify the source before it is copied.
 	// +optional
 	VerifyKey string `json:"verifyKey,omitempty"`
+	// VerifyKeySecretName names a Secret in the request's namespace whose
+	// cosign.pub must verify the source before it is copied.
+	// +optional
+	VerifyKeySecretName string `json:"verifyKeySecretName,omitempty"`
 }
 
 // SwiftImagePublishStatus reports the publish.
