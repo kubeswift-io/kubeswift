@@ -225,10 +225,16 @@ spec:
                     x-kubernetes-map-type: atomic
                   snapshotRef:
                     description: |-
-                      SnapshotRef names a Ready SwiftSnapshot in this namespace whose backend
-                      is csi-volume-snapshot. The root disk's VolumeSnapshot is restored into
-                      a temporary PVC, published, and the PVC deleted. The source guest may be
-                      running or gone; the disk is crash-consistent.
+                      SnapshotRef names a Ready SwiftSnapshot in this namespace with a root
+                      disk:
+                        - csi-volume-snapshot: the root disk's VolumeSnapshot is restored into
+                          a temporary PVC, published, and the PVC deleted. The disk is
+                          crash-consistent.
+                        - oci with includeDisk (a full-state snapshot): its disk artifact,
+                          already in the golden-image format, is copied registry to registry
+                          under the destination, with new annotations; nothing is read from a
+                          volume. A memory-only snapshot is refused.
+                      The source guest may be running or gone.
                     properties:
                       name:
                         default: ""
@@ -377,6 +383,28 @@ spec:
                   block:
                     description: Block is true when that volume is a raw block device.
                     type: boolean
+                  copyFrom:
+                    description: CopyFrom is the golden image copied instead of reading
+                      a volume.
+                    properties:
+                      caBundle:
+                        type: string
+                      credentialsSecretName:
+                        type: string
+                      digest:
+                        type: string
+                      insecure:
+                        type: boolean
+                      repository:
+                        type: string
+                      verifyKey:
+                        description: VerifyKey, when set, must verify the source before
+                          it is copied.
+                        type: string
+                    required:
+                    - digest
+                    - repository
+                    type: object
                   kind:
                     description: Kind and Name of the source object; UID ties the
                       provenance to it.

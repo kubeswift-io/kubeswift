@@ -23,6 +23,14 @@ import (
 // switches to plaintext HTTP for an in-cluster / test registry — UNSAFE, and
 // cosign VERIFY is unsupported over plaintext (see Sign / the design note).
 func NewRepository(repoRef string, insecure bool) (*remote.Repository, error) {
+	return NewRepositoryWithConfig(repoRef, insecure, "")
+}
+
+// NewRepositoryWithConfig is NewRepository with credentials from the Docker
+// config file at configPath instead of DOCKER_CONFIG, when configPath is not
+// empty. A copy between two registries (or two paths on one registry with
+// different credentials) reads the source with its own file.
+func NewRepositoryWithConfig(repoRef string, insecure bool, configPath string) (*remote.Repository, error) {
 	repo, err := remote.NewRepository(repoRef)
 	if err != nil {
 		return nil, fmt.Errorf("repository %q: %w", repoRef, err)
@@ -33,7 +41,13 @@ func NewRepository(repoRef string, insecure bool) (*remote.Repository, error) {
 		// A private CA (SetRegistryCA): the system roots plus the bundle.
 		httpClient = &http.Client{Transport: retry.NewTransport(tr)}
 	}
-	if credStore, err := credentials.NewStoreFromDocker(credentials.StoreOptions{}); err == nil {
+	var credStore credentials.Store
+	if configPath != "" {
+		credStore, err = credentials.NewStore(configPath, credentials.StoreOptions{})
+	} else {
+		credStore, err = credentials.NewStoreFromDocker(credentials.StoreOptions{})
+	}
+	if err == nil {
 		repo.Client = &auth.Client{
 			Client:     httpClient,
 			Cache:      auth.NewCache(),

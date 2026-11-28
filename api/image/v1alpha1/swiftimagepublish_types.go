@@ -27,10 +27,16 @@ const (
 // ImagePublishSource is the disk a SwiftImagePublish publishes. Exactly one
 // field is set.
 type ImagePublishSource struct {
-	// SnapshotRef names a Ready SwiftSnapshot in this namespace whose backend
-	// is csi-volume-snapshot. The root disk's VolumeSnapshot is restored into
-	// a temporary PVC, published, and the PVC deleted. The source guest may be
-	// running or gone; the disk is crash-consistent.
+	// SnapshotRef names a Ready SwiftSnapshot in this namespace with a root
+	// disk:
+	//   - csi-volume-snapshot: the root disk's VolumeSnapshot is restored into
+	//     a temporary PVC, published, and the PVC deleted. The disk is
+	//     crash-consistent.
+	//   - oci with includeDisk (a full-state snapshot): its disk artifact,
+	//     already in the golden-image format, is copied registry to registry
+	//     under the destination, with new annotations; nothing is read from a
+	//     volume. A memory-only snapshot is refused.
+	// The source guest may be running or gone.
 	// +optional
 	SnapshotRef *corev1.LocalObjectReference `json:"snapshotRef,omitempty"`
 
@@ -200,6 +206,25 @@ type ImagePublishSourceStatus struct {
 	// OSType recorded in the image's config.
 	// +optional
 	OSType OSType `json:"osType,omitempty"`
+	// CopyFrom is the golden image copied instead of reading a volume.
+	// +optional
+	CopyFrom *ImagePublishCopySource `json:"copyFrom,omitempty"`
+}
+
+// ImagePublishCopySource is a golden image in a registry that a publish
+// copies, and how to reach it.
+type ImagePublishCopySource struct {
+	Repository string `json:"repository"`
+	Digest     string `json:"digest"`
+	// +optional
+	Insecure bool `json:"insecure,omitempty"`
+	// +optional
+	CABundle string `json:"caBundle,omitempty"`
+	// +optional
+	CredentialsSecretName string `json:"credentialsSecretName,omitempty"`
+	// VerifyKey, when set, must verify the source before it is copied.
+	// +optional
+	VerifyKey string `json:"verifyKey,omitempty"`
 }
 
 // SwiftImagePublishStatus reports the publish.

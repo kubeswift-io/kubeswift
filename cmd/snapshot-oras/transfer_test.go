@@ -118,6 +118,8 @@ func TestValidate(t *testing.T) {
 	}{
 		{"upload ok", runArgs{mode: "upload", dir: "/snap", repository: "r/x", tag: "t"}, true},
 		{"download ok", runArgs{mode: "download", dir: "/snap", repository: "r/x", tag: "t"}, true},
+		{"copy ok", runArgs{mode: "copy-image", repository: "r/x", tag: "t", fromRepository: "r/y", fromDigest: "sha256:abc"}, true},
+		{"copy needs a source digest", runArgs{mode: "copy-image", repository: "r/x", tag: "t", fromRepository: "r/y"}, false},
 		{"delete needs no dir", runArgs{mode: "delete", repository: "r/x", digest: "sha256:abc"}, true},
 		{"delete needs a digest, not a tag", runArgs{mode: "delete", repository: "r/x", tag: "t"}, false},
 		{"upload needs dir", runArgs{mode: "upload", repository: "r/x", tag: "t"}, false},

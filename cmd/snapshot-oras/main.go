@@ -17,6 +17,7 @@
 // blocks):
 //
 //	snapshot-oras --mode=upload-image   --file=/data/image.raw --repository=REPO --tag=TAG [--chunk-size-mib=64] [--os-type=linux] [--annotation=k=v ...] [--immutable-tag] [--insecure]
+//	snapshot-oras --mode=copy-image     --from-repository=SRC --from-digest=sha256:... [--from-insecure] [--from-docker-config=PATH] --repository=REPO --tag=TAG [--annotation=k=v ...] [--immutable-tag] [--insecure]
 //	snapshot-oras --mode=download-image --file=/data/image.raw --repository=REPO --tag=TAG [--digest=sha256:...] [--insecure]
 //
 // Registry credentials come from a Docker config (DOCKER_CONFIG points at the
@@ -30,6 +31,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"oras.land/oras-go/v2/registry/remote"
@@ -73,6 +75,10 @@ func main() {
 	format := flag.String("format", "raw", "disk format recorded in the golden-image config (upload-image only)")
 	var annotations annotationFlag
 	flag.Var(&annotations, "annotation", "key=value recorded on the image manifest and, with --sign-key, signed into the signature as a claim; repeatable (upload-image only)")
+	fromRepository := flag.String("from-repository", "", "source repository of a golden image (copy-image only)")
+	fromDigest := flag.String("from-digest", "", "source manifest digest (copy-image only)")
+	fromInsecure := flag.Bool("from-insecure", false, "the source registry is plaintext http (copy-image only)")
+	fromDockerConfig := flag.String("from-docker-config", "", "Docker config.json with the source registry's credentials (copy-image only; DOCKER_CONFIG is the destination's)")
 	immutableTag := flag.Bool("immutable-tag", false, "fail with \"tag in use\" instead of moving a tag that names a different manifest (upload-image only)")
 	flag.Parse()
 
@@ -97,6 +103,7 @@ func main() {
 		insecure: *insecure, snapName: *snapName, includeMemory: *includeMemory, signKey: *signKey,
 		verifyKey: *verifyKey, file: *file, chunkSizeMiB: *chunkSizeMiB, osType: *osType, format: *format,
 		annotations: annotations.m, immutableTag: *immutableTag,
+		fromRepository: *fromRepository, fromDigest: *fromDigest, fromInsecure: *fromInsecure, fromDockerConfig: *fromDockerConfig,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "snapshot-oras:", err)
 		if errors.Is(err, oci.ErrTagInUse) {
@@ -116,6 +123,8 @@ type runArgs struct {
 	chunkSizeMiB                                          int
 	insecure, includeMemory, immutableTag                 bool
 	annotations                                           map[string]string
+	fromRepository, fromDigest, fromDockerConfig          string
+	fromInsecure                                          bool
 }
 
 // annotationFlag collects repeated --annotation key=value flags.
@@ -160,6 +169,13 @@ func (a runArgs) validate() error {
 		if a.chunkSizeMiB <= 0 {
 			return fmt.Errorf("--chunk-size-mib must be positive")
 		}
+	case "copy-image":
+		if a.fromRepository == "" || a.fromDigest == "" {
+			return fmt.Errorf("--from-repository and --from-digest are required for copy-image")
+		}
+		if a.tag == "" {
+			return fmt.Errorf("--tag is required")
+		}
 	case "download-image":
 		if a.file == "" {
 			return fmt.Errorf("--file is required for download-image")
@@ -174,7 +190,7 @@ func (a runArgs) validate() error {
 			return fmt.Errorf("--digest is required for delete")
 		}
 	default:
-		return fmt.Errorf("--mode must be \"upload\", \"download\", \"upload-image\", \"download-image\", or \"delete\"")
+		return fmt.Errorf("--mode must be \"upload\", \"download\", \"upload-image\", \"copy-image\", \"download-image\", or \"delete\"")
 	}
 	return nil
 }
@@ -250,6 +266,38 @@ func run(a runArgs) error {
 			stats.Signed = true
 		}
 		reportTransfer(stats)
+	case "copy-image":
+		src, err := oci.NewRepositoryWithConfig(a.fromRepository, a.fromInsecure, a.fromDockerConfig)
+		if err != nil {
+			return err
+		}
+		if a.verifyKey != "" {
+			if err := a.verifySource(ctx); err != nil {
+				return err
+			}
+		}
+		opts := []oci.PushOption{oci.WithManifestAnnotations(a.annotations)}
+		if a.immutableTag {
+			opts = append(opts, oci.WithImmutableTag())
+		}
+		_, r, err := oci.CopyImage(ctx, src, a.fromDigest, repo, a.tag, opts...)
+		if err != nil {
+			return err
+		}
+		stats := transferStats{
+			TransferredBytes: r.TransferredBytes,
+			SkippedBytes:     r.SkippedBytes,
+			TotalBytes:       r.TotalBytes,
+			Reference:        ref,
+			ManifestDigest:   r.ManifestDigest,
+		}
+		if a.signKey != "" {
+			if err := oci.SignAnnotated(ctx, a.repository, r.ManifestDigest, a.signKey, a.insecure, a.annotations); err != nil {
+				return err
+			}
+			stats.Signed = true
+		}
+		reportTransfer(stats)
 	case "download-image":
 		pullRef := a.tag
 		if a.digest != "" {
@@ -292,6 +340,26 @@ func writeVerifyKey(pem string) (string, error) {
 // trusting any bytes: resolve the ref to a digest, cosign-verify that digest,
 // then pull by the SAME digest, so a tag cannot be swapped between the verify
 // and the pull. A failed verify returns an error and nothing is written.
+// verifySource cosign-verifies the copy source by digest, with the source's
+// credentials: cosign reads DOCKER_CONFIG, which is the destination's here.
+func (a runArgs) verifySource(ctx context.Context) error {
+	if a.fromInsecure {
+		return fmt.Errorf("signature verification needs a TLS registry: %s is plaintext (insecure)", a.fromRepository)
+	}
+	if a.fromDockerConfig != "" {
+		prev, had := os.LookupEnv("DOCKER_CONFIG")
+		_ = os.Setenv("DOCKER_CONFIG", filepath.Dir(a.fromDockerConfig))
+		defer func() {
+			if had {
+				_ = os.Setenv("DOCKER_CONFIG", prev)
+			} else {
+				_ = os.Unsetenv("DOCKER_CONFIG")
+			}
+		}()
+	}
+	return oci.Verify(ctx, a.fromRepository, a.fromDigest, a.verifyKey)
+}
+
 func (a runArgs) verified(ctx context.Context, repo *remote.Repository, pullRef string) (string, error) {
 	if a.verifyKey == "" {
 		return pullRef, nil
