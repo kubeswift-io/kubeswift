@@ -1,6 +1,6 @@
 # CRD Reference
 
-All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **21 CRDs across 10 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, sandbox, fleet, and storage-location CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
+All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **22 CRDs across 10 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, sandbox, fleet, and storage-location CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
 
 | CRD | Short | API group | Scope | Reference |
 |-----|-------|-----------|-------|-----------|
@@ -9,6 +9,7 @@ All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **21 CRDs across 10 API group
 | SwiftGuestPool | `sgpool` | `swift.kubeswift.io` | Namespaced | [below](#swiftguestpool) |
 | SwiftVolumeAttachment | `sva` | `swift.kubeswift.io` | Namespaced | [below](#swiftvolumeattachment) |
 | SwiftImage | `si` | `image.kubeswift.io` | Namespaced | [below](#swiftimage) |
+| SwiftImagePublish | `sip` | `image.kubeswift.io` | Namespaced | [below](#swiftimagepublish) |
 | SwiftSeedProfile | `ssp` | `seed.kubeswift.io` | Namespaced | [below](#swiftseedprofile) |
 | SwiftKernel | `sk` | `kernel.kubeswift.io` | Namespaced | [below](#swiftkernel) |
 | SwiftGPUProfile | `sgp` | `gpu.kubeswift.io` | Namespaced | [below](#swiftgpuprofile) |
@@ -212,6 +213,25 @@ spec:
 **Note:** Ubuntu Noble (24.04) is the primary guest OS. All modern Linux distributions are supported thanks to CLOUDHV.fd UEFI firmware.
 
 ---
+
+## SwiftImagePublish
+
+**Group:** `image.kubeswift.io/v1alpha1`
+**Scope:** Namespaced
+**Short name:** `sip`
+**Subresource:** status
+
+Publishes a disk in the cluster as a golden image in an OCI registry, signed when the destination has a signing key. One-shot: the spec is immutable, and deleting the request never deletes the image.
+
+| Field | Description |
+|-------|-------------|
+| `source.snapshotRef` | A Ready `csi-volume-snapshot` SwiftSnapshot; its root disk is published. |
+| `destination` | `image` + `tag` under a storage location (`locationRef`, else the defaults), or an explicit `repository` + `tag` with `insecure`, `caBundle`, `credentialsSecretRef`, `signingKeySecretRef`, `verifyKeySecretRef`. `overwriteTag` allows moving a tag that names another image. |
+| `osType`, `storageClassName` | Override what is taken from the source guest. |
+| `createImage.name` | Also create a SwiftImage pinned to the pushed digest. |
+| `status` | `phase` (Pending, Publishing, Ready, Failed), `destination`, `source`, `reference`, `digest`, `sizeBytes`, `signed`, `image`. |
+
+See [golden images](registry/golden-images.md#publish-from-the-cluster--swiftimagepublish).
 
 ## SwiftSeedProfile
 

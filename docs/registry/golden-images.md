@@ -86,6 +86,77 @@ before publishing. An anonymous push is used if no credentials are present
 | `--sign-key` | — | Path to a cosign private key; cosign-sign the pushed artifact |
 | `--keep-converted` | `false` | Keep the temp raw produced from a qcow2 input |
 
+## Publish from the cluster — `SwiftImagePublish`
+
+A `SwiftImagePublish` publishes a disk that is already in the cluster, in the
+same format `swiftctl image publish` writes. For now the source is a Ready
+`csi-volume-snapshot` SwiftSnapshot: its root disk is restored into a
+temporary PVC, pushed, and the PVC deleted. The guest can keep running; the
+image is crash-consistent, as the snapshot is.
+
+```yaml
+apiVersion: image.kubeswift.io/v1alpha1
+kind: SwiftImagePublish
+metadata:
+  name: web-2026-10
+  namespace: team-a
+spec:
+  source:
+    snapshotRef: {name: web-snap}
+  destination:
+    image: web              # -> <location repository>/team-a/images/web
+    tag: "2026.10"
+  createImage:              # optional: a SwiftImage pinned to the pushed digest
+    name: web-2026-10
+```
+
+- **Destination.** By default the image goes to a storage location
+  (`destination.locationRef`, else the namespace's default SwiftStorageLocation,
+  else the cluster's default SwiftClusterStorageLocation): a cluster
+  location's repository plus `<namespace>/images/<image>`, a namespace
+  location's plus `images/<image>`. The location gives the credentials, CA
+  bundle and signing key; Secrets are only read in the request's namespace.
+  Or set `destination.repository` (the full repository) with its own
+  `insecure`, `caBundle`, `credentialsSecretRef`, `signingKeySecretRef` and
+  `verifyKeySecretRef`. `status.destination` records what was used, resolved
+  once.
+- **Signing.** When the destination has a signing key the image is signed,
+  and the request fails if it is not. The manifest always carries provenance
+  annotations, signed into the signature too: `io.kubeswift.source.kind`,
+  `.name`, `.uid`, `.volumesnapshot`, `io.kubeswift.publish.name`,
+  `.namespace`, `.uid` and `io.kubeswift.version`. A
+  SwiftArtifactVerificationPolicy can require them as claims.
+- **Tags do not move.** A tag that already names a different image fails the
+  request with `TagInUse` and stays as it was. Publishing the same image again
+  is fine. `destination.overwriteTag: true` moves the tag.
+- **`createImage`** creates a SwiftImage that pulls the pushed digest (not the
+  tag) with the destination's connection settings and verify key, with
+  `rootDisk.size` at least the disk's size, and `osType` from the source. It
+  has no owner. A SwiftImage of that name that this request did not create
+  fails it with `ImageExists`; the image is still in the registry
+  (`status.reference`, `status.digest`).
+- **The request is one-shot.** Its spec cannot change; create a new one to
+  publish again. Deleting it never deletes the published image.
+- **What it records.** `osType` comes from `spec.osType`, else the source
+  guest's SwiftImage, else `linux`. The temporary PVC uses
+  `spec.storageClassName`, else the source guest's root disk class; when that
+  guest is gone and no class is set, the request waits with
+  `StorageClassRequired`. A snapshot of a kernel-boot guest is refused.
+- **The Job** runs `snapshot-oras --mode=upload-image` without node access:
+  non-root, no capabilities, read-only root filesystem, no service account
+  token, the disk mounted read-only, a 6 h deadline. At most two publish Jobs
+  run at once in the cluster (controller flag
+  `--max-concurrent-image-publishes`); the rest wait with `Queued`.
+
+`kubectl get sip` lists requests with their phase and reference. The Ready
+condition's reason says what a Pending one waits for (`SourceNotReady`,
+`RegistryCredentialsMissing`, `Queued`, ...).
+
+Before publishing a guest's disk as a template, clean it inside the guest
+before the snapshot: `cloud-init clean --logs --seed`, empty
+`/etc/machine-id`, remove `/etc/ssh/ssh_host_*`, clear shell history (Sysprep on
+Windows). KubeSwift does not change the disk.
+
 ## Consume a golden image — `SwiftImage.spec.source.oci`
 
 ```yaml

@@ -36,6 +36,7 @@ import (
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguestpool"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftimage"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftimagepublish"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftkernel"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftmigration"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftrestore"
@@ -126,6 +127,8 @@ func main() {
 		"Fraction of --artifact-authorization-ttl after which a lookup answered from the cache also "+
 			"asks the registry again in the background, so a reference in use is renewed before it "+
 			"expires and no checkout waits for the registry. 0 disables renewal. At least 0, below 1.")
+	maxConcurrentPublishes := flag.Int("max-concurrent-image-publishes", swiftimagepublish.DefaultMaxConcurrent,
+		"SwiftImagePublish Jobs running at once, cluster-wide.")
 	maxConcurrentExports := flag.Int("max-concurrent-exports", swiftsandbox.DefaultMaxConcurrentExports,
 		"Export Jobs (SwiftSandbox spec.outputs) running at once, cluster-wide.")
 	if v := os.Getenv("KUBESWIFT_SANDBOX_CONSOLE"); v != "" {
@@ -317,6 +320,15 @@ func main() {
 		SnapshotORASImage:     swiftsnapshot.SnapshotORASImage(),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftImage controller")
+		os.Exit(1)
+	}
+	if err = (&swiftimagepublish.Reconciler{
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		SnapshotORASImage: swiftsnapshot.SnapshotORASImage(),
+		MaxConcurrent:     *maxConcurrentPublishes,
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftImagePublish controller")
 		os.Exit(1)
 	}
 

@@ -23,7 +23,7 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # SwiftImage
   - apiGroups: ["image.kubeswift.io"]
-    resources: ["swiftimages", "swiftimages/status"]
+    resources: ["swiftimages", "swiftimages/status", "swiftimagepublishes", "swiftimagepublishes/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # SwiftSeedProfile
   # SwiftKernel
