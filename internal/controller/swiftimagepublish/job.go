@@ -3,7 +3,9 @@ package swiftimagepublish
 import (
 	"sort"
 	"strconv"
+	"time"
 
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,6 +47,10 @@ const (
 	AnnotationSourceUID      = "io.kubeswift.source.uid"
 	AnnotationVolumeSnapshot = "io.kubeswift.source.volumesnapshot"
 	AnnotationVersion        = "io.kubeswift.version"
+	// AnnotationCreated is set to the request's creation time. Left unset,
+	// oras stamps the current time, and a Job retried after the tag was
+	// pushed would push a different digest and fail with TagInUse.
+	AnnotationCreated = ocispec.AnnotationCreated
 )
 
 func labels(pub *imagev1alpha1.SwiftImagePublish) map[string]string {
@@ -69,6 +75,7 @@ func provenance(pub *imagev1alpha1.SwiftImagePublish, src *imagev1alpha1.ImagePu
 		AnnotationSourceKind: src.Kind,
 		AnnotationSourceName: src.Name,
 		AnnotationVersion:    version.Version,
+		AnnotationCreated:    pub.CreationTimestamp.UTC().Format(time.RFC3339),
 	}
 	if src.UID != "" {
 		a[AnnotationSourceUID] = src.UID

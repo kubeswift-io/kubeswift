@@ -69,7 +69,8 @@ var ErrTagInUse = errors.New("tag in use")
 
 // WithManifestAnnotations records annotations on the image manifest (for
 // example provenance). They change the manifest digest, so a caller that
-// re-runs a push must pass the same ones to get the same digest.
+// re-runs a push must pass the same ones to get the same digest, including
+// org.opencontainers.image.created: left unset, oras stamps the current time.
 func WithManifestAnnotations(a map[string]string) PushOption {
 	return func(o *pushOpts) { o.annotations = a }
 }

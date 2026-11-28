@@ -229,6 +229,7 @@ func TestPublish_CSISnapshotToClusterLocation(t *testing.T) {
 		"--tag=2026.10", "--chunk-size-mib=128", "--os-type=windows", "--immutable-tag", "--sign-key=",
 		"--annotation=io.kubeswift.source.kind=SwiftSnapshot", "--annotation=io.kubeswift.source.uid=snap-uid",
 		"--annotation=io.kubeswift.publish.namespace=team-a",
+		"--annotation=org.opencontainers.image.created=",
 	} {
 		if !strings.Contains(args, want) {
 			t.Errorf("args missing %q: %s", want, args)

@@ -304,7 +304,9 @@ func TestChunkAndPush_ImmutableTagAndAnnotations(t *testing.T) {
 	srcB := filepath.Join(dir, "b.raw")
 	writeDisk(t, srcA, [][]byte{a})
 	writeDisk(t, srcB, [][]byte{b})
-	ann := map[string]string{"io.kubeswift.source.kind": "SwiftSnapshot"}
+	// created is fixed: without it oras stamps the time and a re-push would
+	// only match within the same second.
+	ann := map[string]string{"io.kubeswift.source.kind": "SwiftSnapshot", "org.opencontainers.image.created": "2026-11-28T00:00:00Z"}
 	store := memory.New()
 
 	first, _, err := ChunkAndPush(ctx, srcA, store, "v1", testChunk, "raw", "linux",
