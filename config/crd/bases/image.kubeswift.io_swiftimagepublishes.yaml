@@ -203,6 +203,26 @@ spec:
               source:
                 description: Source is the disk to publish.
                 properties:
+                  guestRef:
+                    description: |-
+                      GuestRef names a SwiftGuest in this namespace whose root disk is
+                      published as it is. The request waits until the guest is Stopped
+                      (status.phase), then holds it: the guest is not started again until
+                      the disk has been read, whatever its runPolicy says. Nothing stops
+                      the guest for you, and no snapshot is taken. Not for kernel-boot or
+                      shared-base guests.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
                   snapshotRef:
                     description: |-
                       SnapshotRef names a Ready SwiftSnapshot in this namespace whose backend
@@ -226,15 +246,16 @@ spec:
                 description: |-
                   StorageClassName is the class of the temporary PVC a snapshot is
                   restored into. Unset: the source guest's root disk class, which works
-                  while that guest exists.
+                  while that guest exists. Not used with guestRef.
                 type: string
             required:
             - destination
             - source
             type: object
             x-kubernetes-validations:
-            - message: source must set snapshotRef
-              rule: has(self.source.snapshotRef)
+            - message: source must set exactly one of snapshotRef and guestRef
+              rule: '[has(self.source.snapshotRef), has(self.source.guestRef)].filter(x,
+                x).size() == 1'
           status:
             description: SwiftImagePublishStatus reports the publish.
             properties:

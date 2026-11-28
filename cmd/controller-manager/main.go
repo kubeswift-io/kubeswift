@@ -327,6 +327,7 @@ func main() {
 		Scheme:            mgr.GetScheme(),
 		SnapshotORASImage: swiftsnapshot.SnapshotORASImage(),
 		MaxConcurrent:     *maxConcurrentPublishes,
+		APIReader:         mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftImagePublish controller")
 		os.Exit(1)

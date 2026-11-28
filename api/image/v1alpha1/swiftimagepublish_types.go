@@ -33,7 +33,25 @@ type ImagePublishSource struct {
 	// running or gone; the disk is crash-consistent.
 	// +optional
 	SnapshotRef *corev1.LocalObjectReference `json:"snapshotRef,omitempty"`
+
+	// GuestRef names a SwiftGuest in this namespace whose root disk is
+	// published as it is. The request waits until the guest is Stopped
+	// (status.phase), then holds it: the guest is not started again until
+	// the disk has been read, whatever its runPolicy says. Nothing stops
+	// the guest for you, and no snapshot is taken. Not for kernel-boot or
+	// shared-base guests.
+	// +optional
+	GuestRef *corev1.LocalObjectReference `json:"guestRef,omitempty"`
 }
+
+// AnnotationPublishHold is set on a SwiftGuest by a SwiftImagePublish that
+// reads its root disk (source.guestRef). While that request exists and is
+// not Ready or Failed, no launcher is created for the guest.
+const AnnotationPublishHold = "image.kubeswift.io/publish-hold"
+
+// FinalizerPublish keeps a SwiftImagePublish that holds a guest until its
+// Job's pods are gone and the hold is released.
+const FinalizerPublish = "image.kubeswift.io/publish"
 
 // ImagePublishDestination is where the image is pushed. Either a storage
 // location (locationRef, or the namespace's or cluster's default) plus
@@ -113,7 +131,7 @@ type ImagePublishCreateImage struct {
 
 // SwiftImagePublishSpec is a one-shot request: it cannot change once
 // created. Deleting it never deletes the published image.
-// +kubebuilder:validation:XValidation:rule="has(self.source.snapshotRef)",message="source must set snapshotRef"
+// +kubebuilder:validation:XValidation:rule="[has(self.source.snapshotRef), has(self.source.guestRef)].filter(x, x).size() == 1",message="source must set exactly one of snapshotRef and guestRef"
 type SwiftImagePublishSpec struct {
 	// Source is the disk to publish.
 	Source ImagePublishSource `json:"source"`
@@ -129,7 +147,7 @@ type SwiftImagePublishSpec struct {
 
 	// StorageClassName is the class of the temporary PVC a snapshot is
 	// restored into. Unset: the source guest's root disk class, which works
-	// while that guest exists.
+	// while that guest exists. Not used with guestRef.
 	// +optional
 	StorageClassName string `json:"storageClassName,omitempty"`
 

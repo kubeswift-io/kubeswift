@@ -8,7 +8,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
+	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
@@ -181,6 +183,34 @@ func (r *SwiftGuestReconciler) diskRestoreHold(ctx context.Context, live *swiftv
 	}
 	switch rst.Status.Phase {
 	case snapshotv1alpha1.SwiftRestorePhaseReady, snapshotv1alpha1.SwiftRestorePhaseFailed:
+		return "", nil
+	}
+	return name, nil
+}
+
+// imagePublishHold returns the SwiftImagePublish reading the guest's root
+// disk (source.guestRef), or "". It stamped AnnotationPublishHold once the
+// guest was Stopped; until it is Ready or Failed and has let go, no launcher
+// may write that disk. A stamp whose request is gone, finished and released,
+// or about some other guest holds nothing. live is read uncached.
+func (r *SwiftGuestReconciler) imagePublishHold(ctx context.Context, live *swiftv1alpha1.SwiftGuest) (string, error) {
+	name := live.Annotations[imagev1alpha1.AnnotationPublishHold]
+	if name == "" {
+		return "", nil
+	}
+	var reader client.Reader = r.Client
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
+	var pub imagev1alpha1.SwiftImagePublish
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: live.Namespace, Name: name}, &pub); err != nil {
+		return "", client.IgnoreNotFound(err)
+	}
+	if pub.Spec.Source.GuestRef == nil || pub.Spec.Source.GuestRef.Name != live.Name {
+		return "", nil
+	}
+	finished := pub.Status.Phase == imagev1alpha1.SwiftImagePublishReady || pub.Status.Phase == imagev1alpha1.SwiftImagePublishFailed
+	if finished && !controllerutil.ContainsFinalizer(&pub, imagev1alpha1.FinalizerPublish) {
 		return "", nil
 	}
 	return name, nil

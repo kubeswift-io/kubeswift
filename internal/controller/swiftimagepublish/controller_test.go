@@ -428,3 +428,161 @@ func TestPublish_Queued(t *testing.T) {
 		t.Fatalf("not started with a free slot: %s", reason(p))
 	}
 }
+
+func guestSourceFixtures(phase swiftv1alpha1.SwiftGuestPhase) []client.Object {
+	objs := guestFixtures()
+	g := objs[0].(*swiftv1alpha1.SwiftGuest)
+	g.Status.Phase = phase
+	g.Spec.GuestClassRef = corev1.LocalObjectReference{Name: "plain"}
+	pvc := objs[2].(*corev1.PersistentVolumeClaim)
+	pvc.Spec.VolumeMode = ptr.To(corev1.PersistentVolumeFilesystem)
+	pvc.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("20Gi")}
+	return append(objs, &swiftv1alpha1.SwiftGuestClass{ObjectMeta: metav1.ObjectMeta{Name: "plain"}})
+}
+
+func guestPublish(name string) *imagev1alpha1.SwiftImagePublish {
+	return newPublish(func(p *imagev1alpha1.SwiftImagePublish) {
+		p.Name = name
+		p.UID = types.UID(name + "-uid")
+		p.Spec.Source = imagev1alpha1.ImagePublishSource{GuestRef: &corev1.LocalObjectReference{Name: "web"}}
+		p.Spec.Destination.Tag = name
+	})
+}
+
+func holdOf(t *testing.T, c client.Client) string {
+	t.Helper()
+	var g swiftv1alpha1.SwiftGuest
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "web"}, &g); err != nil {
+		t.Fatal(err)
+	}
+	return g.Annotations[imagev1alpha1.AnnotationPublishHold]
+}
+
+func TestPublish_GuestWaitsUntilStopped(t *testing.T) {
+	objs := append(guestSourceFixtures(swiftv1alpha1.SwiftGuestPhaseRunning), secrets()...)
+	r, c := setup(t, append(objs, clusterLocation(), guestPublish("g1"))...)
+	reconcileOnce(t, r, "g1") // finalizer
+	p := reconcileOnce(t, r, "g1")
+	if p.Status.Phase != imagev1alpha1.SwiftImagePublishPending || reason(p) != ReasonGuestNotStopped {
+		t.Fatalf("phase %s reason %s", p.Status.Phase, reason(p))
+	}
+	if h := holdOf(t, c); h != "" {
+		t.Fatalf("a running guest was held: %q", h)
+	}
+}
+
+func TestPublish_GuestHeldReadAndReleased(t *testing.T) {
+	objs := append(guestSourceFixtures(swiftv1alpha1.SwiftGuestPhaseStopped), secrets()...)
+	r, c := setup(t, append(objs, clusterLocation(), guestPublish("g1"))...)
+	ctx := context.Background()
+	reconcileOnce(t, r, "g1") // finalizer
+	p := reconcileOnce(t, r, "g1")
+	if p.Status.Phase != imagev1alpha1.SwiftImagePublishPublishing {
+		t.Fatalf("phase %s reason %s", p.Status.Phase, reason(p))
+	}
+	if h := holdOf(t, c); h != "g1" {
+		t.Fatalf("hold = %q", h)
+	}
+	if !hasFinalizer(p) {
+		t.Fatal("no finalizer while holding a guest")
+	}
+	s := p.Status.Source
+	if s.Kind != "SwiftGuest" || s.PVCName != "swiftguest-root-web" || s.SizeBytes != 20<<30 || s.OSType != imagev1alpha1.OSTypeWindows {
+		t.Fatalf("source %+v", s)
+	}
+	var job batchv1.Job
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: jobName(p)}, &job); err != nil {
+		t.Fatal(err)
+	}
+	if claim := job.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim; claim.ClaimName != "swiftguest-root-web" || !claim.ReadOnly {
+		t.Fatalf("job reads %+v", claim)
+	}
+	var tmp corev1.PersistentVolumeClaim
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: diskPVCName(p)}, &tmp); !apierrors.IsNotFound(err) {
+		t.Fatalf("a temporary PVC was made for a guest source: %v", err)
+	}
+
+	// A second request for the same guest waits for the first.
+	if err := c.Create(ctx, guestPublish("g2")); err != nil {
+		t.Fatal(err)
+	}
+	reconcileOnce(t, r, "g2") // finalizer
+	if p2 := reconcileOnce(t, r, "g2"); reason(p2) != ReasonGuestHeld {
+		t.Fatalf("second request: %s %s", p2.Status.Phase, reason(p2))
+	}
+
+	rep, _ := json.Marshal(clonecommon.TransferReport{ManifestDigest: "sha256:g", TotalBytes: 20 << 30, Signed: true})
+	finishJob(t, c, p, false, string(rep))
+	p = reconcileOnce(t, r, "g1")
+	if p.Status.Phase != imagev1alpha1.SwiftImagePublishReady {
+		t.Fatalf("phase %s reason %s", p.Status.Phase, reason(p))
+	}
+	if h := holdOf(t, c); h != "" {
+		t.Fatalf("hold not released: %q", h)
+	}
+	if hasFinalizer(p) {
+		t.Fatal("finalizer not removed")
+	}
+	if p2 := reconcileOnce(t, r, "g2"); p2.Status.Phase != imagev1alpha1.SwiftImagePublishPublishing || holdOf(t, c) != "g2" {
+		t.Fatalf("second request did not take over: %s %s", p2.Status.Phase, reason(p2))
+	}
+}
+
+func TestPublish_DeletedWhileReading(t *testing.T) {
+	objs := append(guestSourceFixtures(swiftv1alpha1.SwiftGuestPhaseStopped), secrets()...)
+	r, c := setup(t, append(objs, clusterLocation(), guestPublish("g1"))...)
+	ctx := context.Background()
+	reconcileOnce(t, r, "g1") // finalizer
+	p := reconcileOnce(t, r, "g1")
+	var job batchv1.Job
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: jobName(p)}, &job); err != nil {
+		t.Fatal(err)
+	}
+	running := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "reader", Labels: map[string]string{"job-name": job.Name}},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	if err := c.Create(ctx, running); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	reconcileOnce(t, r, "g1")
+	if h := holdOf(t, c); h != "g1" {
+		t.Fatalf("hold released while a Job pod still reads the disk: %q", h)
+	}
+	running.Status.Phase = corev1.PodFailed
+	if err := c.Status().Update(ctx, running); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "g1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if h := holdOf(t, c); h != "" {
+		t.Fatalf("hold kept after the Job pods ended: %q", h)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(p), p); !apierrors.IsNotFound(err) {
+		t.Fatalf("request not gone: %v", err)
+	}
+}
+
+func TestPublish_GuestRefusals(t *testing.T) {
+	shared := guestSourceFixtures(swiftv1alpha1.SwiftGuestPhaseStopped)
+	shared[3].(*swiftv1alpha1.SwiftGuestClass).Spec.SharedBaseDisk = true
+	kernel := guestSourceFixtures(swiftv1alpha1.SwiftGuestPhaseStopped)
+	kernel[0].(*swiftv1alpha1.SwiftGuest).Spec.KernelRef = &corev1.LocalObjectReference{Name: "k"}
+	for name, objs := range map[string][]client.Object{"shared base": shared, "kernel boot": kernel} {
+		t.Run(name, func(t *testing.T) {
+			r, c := setup(t, append(append(objs, secrets()...), clusterLocation(), guestPublish("g1"))...)
+			reconcileOnce(t, r, "g1") // finalizer
+			p := reconcileOnce(t, r, "g1")
+			if p.Status.Phase != imagev1alpha1.SwiftImagePublishFailed || reason(p) != ReasonSourceUnsupported {
+				t.Fatalf("phase %s reason %s", p.Status.Phase, reason(p))
+			}
+			if h := holdOf(t, c); h != "" {
+				t.Fatalf("refused guest was held: %q", h)
+			}
+		})
+	}
+}
