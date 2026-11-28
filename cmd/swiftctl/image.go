@@ -46,8 +46,8 @@ SwiftImage can consume via spec.source.oci.`,
 }
 
 var imagePublishCmd = &cobra.Command{
-	Use:          "publish [disk]",
-	Short:        "Chunk a local raw/qcow2 golden disk and push it to an OCI registry",
+	Use:          "publish [disk | --from-snapshot NAME | --from-guest NAME | --from-image NAME]",
+	Short:        "Push a golden disk to an OCI registry: a local raw/qcow2 file, or a disk in the cluster",
 	SilenceUsage: true,
 	Long: `Chunk a local golden VM disk (raw or qcow2) and push it to an OCI registry as
 a sparse, content-addressed artifact.
@@ -62,6 +62,12 @@ Credentials come from your Docker config (run "docker login <registry>" first);
 the push is anonymous if none are present. --sign-key cosign-signs the pushed
 artifact (COSIGN_PASSWORD from the environment) so a consumer can verify it.
 
+With --from-snapshot, --from-guest or --from-image the disk is already in the
+cluster: swiftctl creates a SwiftImagePublish in the namespace and the
+controller publishes it (to a storage location, or --to with its own
+connection flags). --tag is required, tags do not move unless
+--overwrite-tag, and --wait follows it to the end.
+
 Consume the result from a SwiftImage:
 
   spec:
@@ -72,13 +78,28 @@ Consume the result from a SwiftImage:
 	Example: `  swiftctl image publish ubuntu-noble.qcow2 --to ghcr.io/acme/vm-images --tag noble-24.04
   swiftctl image publish golden.raw --to zot.registry.svc:5000/vm-images --tag base --insecure
   COSIGN_PASSWORD=... swiftctl image publish golden.raw \
-    --to ghcr.io/acme/vm-images --tag base --sign-key cosign.key`,
-	Args: cobra.ExactArgs(1),
-	RunE: runImagePublish,
+    --to ghcr.io/acme/vm-images --tag base --sign-key cosign.key
+  swiftctl image publish --from-snapshot web-snap --image web --tag 2026.10 --create-image web-2026-10 --wait
+  swiftctl image publish --from-guest web-template --image web --tag 2026.11 --location cluster/registry`,
+	Args: func(cmd *cobra.Command, args []string) error {
+		if _, _, n := clusterSource(); n > 0 {
+			return cobra.NoArgs(cmd, args)
+		}
+		return cobra.ExactArgs(1)(cmd, args)
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if _, _, n := clusterSource(); n > 0 {
+			return runClusterPublish(cmd)
+		}
+		if publishTo == "" {
+			return fmt.Errorf("--to is required for a local disk")
+		}
+		return runImagePublish(cmd, args)
+	},
 }
 
 func init() {
-	imagePublishCmd.Flags().StringVar(&publishTo, "to", "", "Target OCI repository WITHOUT a tag, e.g. ghcr.io/acme/vm-images (required)")
+	imagePublishCmd.Flags().StringVar(&publishTo, "to", "", "Target OCI repository WITHOUT a tag, e.g. ghcr.io/acme/vm-images (required for a local disk; with --from-*, an explicit repository instead of a storage location)")
 	imagePublishCmd.Flags().StringVar(&publishTag, "tag", "latest", "Artifact tag")
 	// 0 means "choose from the disk size" — see chunkSizeFor. A fixed 64 MiB
 	// default is right for a small image and wrong for a 30 GiB one, where it
@@ -90,7 +111,6 @@ func init() {
 	imagePublishCmd.Flags().BoolVar(&publishInsecure, "insecure", false, "Allow a plaintext (http) registry — UNSAFE; in-cluster / test registry only")
 	imagePublishCmd.Flags().StringVar(&publishSignKey, "sign-key", "", "Path to a cosign private key; when set, cosign-sign the pushed artifact (COSIGN_PASSWORD from env)")
 	imagePublishCmd.Flags().BoolVar(&publishKeepInput, "keep-converted", false, "Keep the temporary raw file produced from a qcow2 input (default: delete it)")
-	_ = imagePublishCmd.MarkFlagRequired("to")
 	imageCmd.AddCommand(imagePublishCmd)
 }
 

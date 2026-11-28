@@ -178,6 +178,25 @@ spec:
   run at once in the cluster (controller flag
   `--max-concurrent-image-publishes`); the rest wait with `Queued`.
 
+From the command line, `swiftctl image publish` creates the request when given
+an in-cluster source:
+
+```bash
+swiftctl -n team-a image publish --from-snapshot web-snap --image web --tag 2026.10 \
+  --create-image web-2026-10 --wait
+swiftctl -n team-a image publish --from-guest web-template --image web --tag 2026.11 \
+  --location cluster/registry
+swiftctl -n team-a image publish --from-image noble --to reg.example.com/golden/noble \
+  --tag 24.04 --credentials-secret regcreds --signing-key-secret cosign
+```
+
+`--tag` is required there. `--to` names an explicit repository, with
+`--insecure`, `--credentials-secret`, `--signing-key-secret` and
+`--verify-key-secret`. Otherwise `--image` goes under the storage location
+(`--location`, else the defaults). `--overwrite-tag` and `--name` set the
+fields of the same name, and `--wait` follows the request until it is Ready or
+Failed. The gateway lists requests as `swiftimagepublishes`.
+
 `kubectl get sip` lists requests with their phase and reference. The Ready
 condition's reason says what a Pending one waits for (`SourceNotReady`,
 `RegistryCredentialsMissing`, `Queued`, ...).

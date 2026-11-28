@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,5 +75,19 @@ func TestResourceCatalog_KubeSwiftScopesMatchCRDs(t *testing.T) {
 		if k.namespaced != crd.namespaced {
 			t.Errorf("catalog entry %q has namespaced=%v, but its CRD is namespaced=%v", k.key, k.namespaced, crd.namespaced)
 		}
+	}
+}
+
+func TestImagePublishProject(t *testing.T) {
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"spec":   map[string]any{"source": map[string]any{"guestRef": map[string]any{"name": "tmpl"}}},
+		"status": map[string]any{"phase": "Ready", "reference": "r/x:v1", "signed": true},
+	}}
+	got := imagePublishProject(u)
+	if got["source"] != "guest/tmpl" || got["phase"] != "Ready" || got["reference"] != "r/x:v1" || got["signed"] != "true" {
+		t.Fatalf("projection %v", got)
+	}
+	if k := lookupKind("swiftimagepublishes"); k == nil || !k.namespaced {
+		t.Fatal("swiftimagepublishes missing from the catalog or not namespaced")
 	}
 }
