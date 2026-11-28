@@ -16,7 +16,7 @@ func TestSignArgs(t *testing.T) {
 		key    = "/oras-signing-key/cosign.key"
 	)
 
-	secure := SignArgs(repo, digest, key, false, "")
+	secure := SignArgs(repo, digest, key, false, "", nil)
 	joined := strings.Join(secure, " ")
 	for _, want := range []string{
 		"sign",
@@ -42,7 +42,7 @@ func TestSignArgs(t *testing.T) {
 		t.Errorf("digest ref must be the final arg; got %q", secure[len(secure)-1])
 	}
 
-	insecure := SignArgs(repo, digest, key, true, "")
+	insecure := SignArgs(repo, digest, key, true, "", nil)
 	if !strings.Contains(strings.Join(insecure, " "), "--allow-http-registry") {
 		t.Errorf("insecure args must carry --allow-http-registry; got: %v", insecure)
 	}
@@ -68,7 +68,7 @@ func TestSignArgs_OfflineIsAlwaysExpressed(t *testing.T) {
 		{"cosign 3.x: a no-tlog signing-config", "/tmp/sc.json", "--signing-config /tmp/sc.json", "--tlog-upload"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := strings.Join(SignArgs(repo, digest, key, false, tc.signingConfig), " ")
+			got := strings.Join(SignArgs(repo, digest, key, false, tc.signingConfig, nil), " ")
 			if !strings.Contains(got, tc.want) {
 				t.Errorf("missing %q; got: %s", tc.want, got)
 			}
@@ -296,5 +296,12 @@ func TestVerify_InvokesCosignAndPropagatesFailure(t *testing.T) {
 	CosignRun = func(_ context.Context, _ []string) error { return fmt.Errorf("no matching signatures") }
 	if err := Verify(context.Background(), "ghcr.io/org/s", "sha256:d", key); err == nil {
 		t.Fatal("a cosign verify failure must propagate")
+	}
+}
+
+func TestSignArgs_AnnotationsSorted(t *testing.T) {
+	got := strings.Join(SignArgs("r/x", "sha256:abc", "/k", false, "", map[string]string{"b": "2", "a": "1"}), " ")
+	if !strings.Contains(got, "-a a=1 -a b=2") {
+		t.Fatalf("annotations not signed in key order: %s", got)
 	}
 }

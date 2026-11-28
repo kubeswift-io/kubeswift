@@ -28,7 +28,8 @@ func init() {
 	Scheme.AddKnownTypes(gvSwift, &swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{}, &swiftv1alpha1.SwiftGuestClass{}, &swiftv1alpha1.SwiftGuestClassList{}, &swiftv1alpha1.SwiftGuestPool{}, &swiftv1alpha1.SwiftGuestPoolList{}, &swiftv1alpha1.SwiftVolumeAttachment{}, &swiftv1alpha1.SwiftVolumeAttachmentList{})
 	metav1.AddToGroupVersion(Scheme, gvSwift)
 	gvImage := schema.GroupVersion{Group: "image.kubeswift.io", Version: "v1alpha1"}
-	Scheme.AddKnownTypes(gvImage, &imagev1alpha1.SwiftImage{}, &imagev1alpha1.SwiftImageList{})
+	Scheme.AddKnownTypes(gvImage, &imagev1alpha1.SwiftImage{}, &imagev1alpha1.SwiftImageList{},
+		&imagev1alpha1.SwiftImagePublish{}, &imagev1alpha1.SwiftImagePublishList{})
 	metav1.AddToGroupVersion(Scheme, gvImage)
 	gvSeed := schema.GroupVersion{Group: "seed.kubeswift.io", Version: "v1alpha1"}
 	Scheme.AddKnownTypes(gvSeed, &seedv1alpha1.SwiftSeedProfile{}, &seedv1alpha1.SwiftSeedProfileList{})

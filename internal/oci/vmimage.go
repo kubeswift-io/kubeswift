@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -15,6 +16,7 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content"
+	"oras.land/oras-go/v2/errdef"
 )
 
 // Golden-image (P3) artifact types. A golden VM disk is stored CHUNKED so
@@ -55,13 +57,51 @@ type PushResult struct {
 type PushOption func(*pushOpts)
 
 type pushOpts struct {
-	notify RetryNotifyFunc
+	notify       RetryNotifyFunc
+	annotations  map[string]string
+	immutableTag bool
+}
+
+// ErrTagInUse is returned by ChunkAndPush with WithImmutableTag when the tag
+// already names a different manifest. Nothing was tagged; the chunks and
+// manifest pushed are unreferenced and left to the registry's GC.
+var ErrTagInUse = errors.New("tag in use")
+
+// WithManifestAnnotations records annotations on the image manifest (for
+// example provenance). They change the manifest digest, so a caller that
+// re-runs a push must pass the same ones to get the same digest, including
+// org.opencontainers.image.created: left unset, oras stamps the current time.
+func WithManifestAnnotations(a map[string]string) PushOption {
+	return func(o *pushOpts) { o.annotations = a }
+}
+
+// WithImmutableTag refuses to move a tag: when the tag already names a
+// different manifest, ChunkAndPush returns ErrTagInUse instead of tagging.
+// The same manifest (a re-run of the same push) is not a conflict.
+func WithImmutableTag() PushOption {
+	return func(o *pushOpts) { o.immutableTag = true }
 }
 
 // WithRetryNotify reports each rate-limit backoff. A publish that pauses for a
 // minute with no output looks hung, so anything with a terminal should set it.
 func WithRetryNotify(f RetryNotifyFunc) PushOption {
 	return func(o *pushOpts) { o.notify = f }
+}
+
+// DefaultChunkSizeMiB is the chunk size for a disk of size bytes: 64 MiB, or
+// 128 MiB from 8 GiB and 256 MiB from 24 GiB. Small chunks dedup better
+// between versions, but each chunk is a HEAD and a PUT and registries limit
+// the request rate, so a large disk takes larger chunks (#452).
+func DefaultChunkSizeMiB(size int64) int {
+	const gib = int64(1) << 30
+	switch {
+	case size >= 24*gib:
+		return 256
+	case size >= 8*gib:
+		return 128
+	default:
+		return 64
+	}
 }
 
 // ChunkAndPush streams filePath in chunkSize windows, SKIPS all-zero windows
@@ -181,10 +221,27 @@ func ChunkAndPush(ctx context.Context, filePath string, dst oras.Target, tag str
 	if err := withRateLimitRetry(ctx, o.notify, rnd, func() error {
 		var e error
 		manifestDesc, e = oras.PackManifest(ctx, dst, oras.PackManifestVersion1_1, VMImageArtifactType,
-			oras.PackManifestOptions{Layers: layers, ConfigDescriptor: &cfgDesc})
+			oras.PackManifestOptions{Layers: layers, ConfigDescriptor: &cfgDesc, ManifestAnnotations: o.annotations})
 		return e
 	}); err != nil {
 		return zero, PushResult{}, fmt.Errorf("pack manifest: %w", err)
+	}
+	if o.immutableTag {
+		var existing ocispec.Descriptor
+		rerr := withRateLimitRetry(ctx, o.notify, rnd, func() error {
+			var e error
+			existing, e = dst.Resolve(ctx, tag)
+			if errors.Is(e, errdef.ErrNotFound) {
+				return nil
+			}
+			return e
+		})
+		if rerr != nil {
+			return zero, PushResult{}, fmt.Errorf("resolve tag %s: %w", tag, rerr)
+		}
+		if existing.Digest != "" && existing.Digest != manifestDesc.Digest {
+			return zero, PushResult{}, fmt.Errorf("%w: %s names %s, not %s", ErrTagInUse, tag, existing.Digest, manifestDesc.Digest)
+		}
 	}
 	if err := withRateLimitRetry(ctx, o.notify, rnd, func() error {
 		return dst.Tag(ctx, manifestDesc, tag)

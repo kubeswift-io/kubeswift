@@ -3,6 +3,8 @@ package oci
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -288,5 +290,63 @@ func TestWriteSparseAt_BoundaryCases_ByteIdentical(t *testing.T) {
 				t.Errorf("bytes before the offset were touched")
 			}
 		})
+	}
+}
+
+// An immutable tag is never moved to another manifest; the same manifest (a
+// re-run of the same push, same annotations) is not a conflict. Annotations
+// land on the manifest.
+func TestChunkAndPush_ImmutableTagAndAnnotations(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	a, b, _, _ := mkWindows()
+	srcA := filepath.Join(dir, "a.raw")
+	srcB := filepath.Join(dir, "b.raw")
+	writeDisk(t, srcA, [][]byte{a})
+	writeDisk(t, srcB, [][]byte{b})
+	// created is fixed: without it oras stamps the time and a re-push would
+	// only match within the same second.
+	ann := map[string]string{"io.kubeswift.source.kind": "SwiftSnapshot", "org.opencontainers.image.created": "2026-11-28T00:00:00Z"}
+	store := memory.New()
+
+	first, _, err := ChunkAndPush(ctx, srcA, store, "v1", testChunk, "raw", "linux",
+		WithManifestAnnotations(ann), WithImmutableTag())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc, err := store.Fetch(ctx, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		Annotations map[string]string `json:"annotations"`
+	}
+	if err := json.NewDecoder(rc).Decode(&m); err != nil {
+		t.Fatal(err)
+	}
+	rc.Close()
+	if m.Annotations["io.kubeswift.source.kind"] != "SwiftSnapshot" {
+		t.Fatalf("manifest annotations = %v", m.Annotations)
+	}
+
+	if _, _, err := ChunkAndPush(ctx, srcA, store, "v1", testChunk, "raw", "linux",
+		WithManifestAnnotations(ann), WithImmutableTag()); err != nil {
+		t.Fatalf("re-push of the same manifest: %v", err)
+	}
+	_, _, err = ChunkAndPush(ctx, srcB, store, "v1", testChunk, "raw", "linux",
+		WithManifestAnnotations(ann), WithImmutableTag())
+	if !errors.Is(err, ErrTagInUse) {
+		t.Fatalf("other manifest on an immutable tag: err = %v, want ErrTagInUse", err)
+	}
+	got, err := store.Resolve(ctx, "v1")
+	if err != nil || got.Digest != first.Digest {
+		t.Fatalf("tag moved: %v %v", got.Digest, err)
+	}
+	// Without the guard the tag moves, as before.
+	if _, _, err := ChunkAndPush(ctx, srcB, store, "v1", testChunk, "raw", "linux"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.Resolve(ctx, "v1"); got.Digest == first.Digest {
+		t.Fatal("tag did not move without WithImmutableTag")
 	}
 }

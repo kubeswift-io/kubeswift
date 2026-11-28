@@ -1,0 +1,407 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: swiftimagepublishes.image.kubeswift.io
+spec:
+  group: image.kubeswift.io
+  names:
+    kind: SwiftImagePublish
+    listKind: SwiftImagePublishList
+    plural: swiftimagepublishes
+    shortNames:
+    - sip
+    singular: swiftimagepublish
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.reference
+      name: Reference
+      type: string
+    - jsonPath: .status.signed
+      name: Signed
+      priority: 1
+      type: boolean
+    - jsonPath: .status.image
+      name: Image
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: SwiftImagePublish publishes a disk as a golden image in an OCI
+          registry.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SwiftImagePublishSpec is a one-shot request: it cannot change once
+              created. Deleting it never deletes the published image.
+            properties:
+              createImage:
+                description: CreateImage, when set, creates a SwiftImage of the published
+                  image.
+                properties:
+                  name:
+                    description: |-
+                      Name of the SwiftImage, created in this namespace. It pulls the pushed
+                      digest (not the tag) with the destination's connection settings and
+                      verify key. Publishing fails if a SwiftImage of that name exists and was
+                      not created by this request.
+                    maxLength: 253
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
+                required:
+                - name
+                type: object
+              destination:
+                description: Destination is where to push it.
+                properties:
+                  caBundle:
+                    description: |-
+                      CABundle is a PEM bundle trusted for the registry, on top of the system
+                      roots. Explicit repository only.
+                    type: string
+                  credentialsSecretRef:
+                    description: |-
+                      CredentialsSecretRef names a kubernetes.io/dockerconfigjson Secret in
+                      this namespace. Explicit repository only.
+                    properties:
+                      name:
+                        description: Name of the Secret.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  image:
+                    description: |-
+                      Image is the image's name under the location's repository: lower-case
+                      path components.
+                    maxLength: 128
+                    pattern: ^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*$
+                    type: string
+                  insecure:
+                    description: Insecure allows a plaintext (http) registry. Explicit
+                      repository only.
+                    type: boolean
+                  locationRef:
+                    description: |-
+                      LocationRef names the storage location to publish to. Unset: the
+                      namespace's default SwiftStorageLocation, else the cluster's default
+                      SwiftClusterStorageLocation. The image goes to the location's
+                      repository plus <namespace>/images/<image> (a cluster location) or
+                      images/<image> (a namespace location).
+                    properties:
+                      kind:
+                        default: SwiftStorageLocation
+                        description: |-
+                          Kind is SwiftStorageLocation (the default) or
+                          SwiftClusterStorageLocation.
+                        enum:
+                        - SwiftStorageLocation
+                        - SwiftClusterStorageLocation
+                        type: string
+                      name:
+                        description: Name is the location's name.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  overwriteTag:
+                    description: |-
+                      OverwriteTag allows moving Tag when it already names a different image.
+                      By default such a publish fails with TagInUse and the tag is left
+                      alone; publishing the same image again is never a conflict.
+                    type: boolean
+                  repository:
+                    description: |-
+                      Repository is the full repository to push to (no tag), instead of a
+                      storage location. Its connection settings are the fields below.
+                    maxLength: 255
+                    pattern: ^[a-zA-Z0-9.-]+(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+$
+                    type: string
+                  signingKeySecretRef:
+                    description: |-
+                      SigningKeySecretRef names a Secret in this namespace holding cosign.key
+                      (and cosign.password). When set, the image is signed. Explicit
+                      repository only; a location signs with its own signing key.
+                    properties:
+                      name:
+                        description: Name of the Secret.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  tag:
+                    description: Tag is the tag the image is pushed under.
+                    pattern: ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$
+                    type: string
+                  verifyKeySecretRef:
+                    description: |-
+                      VerifyKeySecretRef names a Secret in this namespace holding cosign.pub,
+                      given to the SwiftImage createImage makes. Explicit repository only.
+                    properties:
+                      name:
+                        description: Name of the Secret.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                required:
+                - tag
+                type: object
+                x-kubernetes-validations:
+                - message: locationRef and repository are mutually exclusive
+                  rule: '!(has(self.locationRef) && has(self.repository))'
+                - message: set image (with a storage location) or repository (explicit),
+                    not both
+                  rule: has(self.repository) != has(self.image)
+                - message: insecure, caBundle, credentialsSecretRef, signingKeySecretRef
+                    and verifyKeySecretRef go with an explicit repository; a storage
+                    location carries its own
+                  rule: has(self.repository) || !((has(self.insecure) && self.insecure)
+                    || has(self.caBundle) || has(self.credentialsSecretRef) || has(self.signingKeySecretRef)
+                    || has(self.verifyKeySecretRef))
+              osType:
+                allOf:
+                - enum:
+                  - linux
+                  - windows
+                - enum:
+                  - linux
+                  - windows
+                description: |-
+                  OSType is recorded in the image's config: linux or windows. Unset: the
+                  source guest's image's osType when the guest still exists, else linux.
+                type: string
+              source:
+                description: Source is the disk to publish.
+                properties:
+                  snapshotRef:
+                    description: |-
+                      SnapshotRef names a Ready SwiftSnapshot in this namespace whose backend
+                      is csi-volume-snapshot. The root disk's VolumeSnapshot is restored into
+                      a temporary PVC, published, and the PVC deleted. The source guest may be
+                      running or gone; the disk is crash-consistent.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
+              storageClassName:
+                description: |-
+                  StorageClassName is the class of the temporary PVC a snapshot is
+                  restored into. Unset: the source guest's root disk class, which works
+                  while that guest exists.
+                type: string
+            required:
+            - destination
+            - source
+            type: object
+            x-kubernetes-validations:
+            - message: source must set snapshotRef
+              rule: has(self.source.snapshotRef)
+          status:
+            description: SwiftImagePublishStatus reports the publish.
+            properties:
+              completionTime:
+                description: CompletionTime is when the request became Ready or Failed.
+                format: date-time
+                type: string
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              destination:
+                description: Destination as resolved when the request started.
+                properties:
+                  caBundle:
+                    type: string
+                  credentialsSecretName:
+                    type: string
+                  insecure:
+                    type: boolean
+                  location:
+                    description: Location is "Explicit" or <Kind>/<name> of the storage
+                      location used.
+                    type: string
+                  repository:
+                    description: Repository is the repository pushed to (no tag).
+                    type: string
+                  signingKeySecretName:
+                    type: string
+                  verifyKey:
+                    description: VerifyKey is the location's inline cosign public
+                      key, when it has one.
+                    type: string
+                  verifyKeySecretName:
+                    type: string
+                required:
+                - location
+                - repository
+                type: object
+              digest:
+                description: Digest is the pushed manifest's digest.
+                type: string
+              image:
+                description: Image is the SwiftImage createImage made.
+                type: string
+              phase:
+                description: SwiftImagePublishPhase is where a publish request is.
+                enum:
+                - Pending
+                - Publishing
+                - Ready
+                - Failed
+                type: string
+              reference:
+                description: Reference is <repository>:<tag>.
+                type: string
+              signed:
+                description: Signed is true when the image was signed.
+                type: boolean
+              sizeBytes:
+                description: SizeBytes is the image's disk size (its totalSize).
+                format: int64
+                type: integer
+              source:
+                description: Source as resolved.
+                properties:
+                  block:
+                    description: Block is true when that volume is a raw block device.
+                    type: boolean
+                  kind:
+                    description: Kind and Name of the source object; UID ties the
+                      provenance to it.
+                    type: string
+                  name:
+                    type: string
+                  osType:
+                    description: OSType recorded in the image's config.
+                    enum:
+                    - linux
+                    - windows
+                    type: string
+                  pvcName:
+                    description: PVCName is the volume the publish Job read.
+                    type: string
+                  sizeBytes:
+                    description: SizeBytes is the disk's size.
+                    format: int64
+                    type: integer
+                  uid:
+                    type: string
+                  volumeSnapshot:
+                    description: VolumeSnapshot restored, for a snapshot source.
+                    type: string
+                required:
+                - kind
+                - name
+                type: object
+              startTime:
+                description: StartTime is when the publish Job was created.
+                format: date-time
+                type: string
+              transferredBytes:
+                description: |-
+                  TransferredBytes is what was uploaded; chunks the registry already had,
+                  and all-zero chunks, are not.
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: spec is immutable; create a new SwiftImagePublish
+          rule: self.spec == oldSelf.spec
+    served: true
+    storage: true
+    subresources:
+      status: {}

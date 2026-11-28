@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strconv"
 )
 
@@ -79,11 +80,22 @@ func cosignMajor(out string) (int, error) {
 //
 // insecure adds --allow-http-registry for a plaintext registry (the sig still
 // lands; cosign VERIFY over plaintext is unsupported).
-func SignArgs(repository, digest, keyPath string, insecure bool, signingConfigPath string) []string {
+//
+// annotations are signed into the payload (cosign sign -a key=value), sorted
+// by key: they are the signed claims a SwiftArtifactVerificationPolicy reads.
+func SignArgs(repository, digest, keyPath string, insecure bool, signingConfigPath string, annotations map[string]string) []string {
 	args := []string{
 		"sign",
 		"--key", keyPath,
 		"--yes",
+	}
+	keys := make([]string, 0, len(annotations))
+	for k := range annotations {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		args = append(args, "-a", k+"="+annotations[k])
 	}
 	if signingConfigPath != "" {
 		args = append(args, "--signing-config", signingConfigPath)
@@ -101,6 +113,12 @@ func SignArgs(repository, digest, keyPath string, insecure bool, signingConfigPa
 // artifact left marked signed, and never a signature that quietly went to a
 // public transparency log.
 func Sign(ctx context.Context, repository, digest, keyPath string, insecure bool) error {
+	return SignAnnotated(ctx, repository, digest, keyPath, insecure, nil)
+}
+
+// SignAnnotated is Sign with annotations signed into the payload (see
+// SignArgs).
+func SignAnnotated(ctx context.Context, repository, digest, keyPath string, insecure bool, annotations map[string]string) error {
 	if _, err := os.Stat(keyPath); err != nil {
 		return fmt.Errorf("signing key %q not readable: %w", keyPath, err)
 	}
@@ -133,7 +151,7 @@ func Sign(ctx context.Context, repository, digest, keyPath string, insecure bool
 		signingConfig = path
 	}
 
-	if err := CosignRun(ctx, SignArgs(repository, digest, keyPath, insecure, signingConfig)); err != nil {
+	if err := CosignRun(ctx, SignArgs(repository, digest, keyPath, insecure, signingConfig, annotations)); err != nil {
 		return fmt.Errorf("cosign sign %s@%s: %w", repository, digest, err)
 	}
 	return nil

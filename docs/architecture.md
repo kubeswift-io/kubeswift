@@ -306,7 +306,7 @@ Key facts:
 | Group | CRDs | Notes |
 |-------|------|-------|
 | `swift.kubeswift.io/v1alpha1` | SwiftGuest, SwiftGuestClass, SwiftGuestPool, SwiftVolumeAttachment | Core VM types, fleet management, hot-plugged volumes |
-| `image.kubeswift.io/v1alpha1` | SwiftImage | Disk image lifecycle |
+| `image.kubeswift.io/v1alpha1` | SwiftImage, SwiftImagePublish | Disk image lifecycle |
 | `seed.kubeswift.io/v1alpha1` | SwiftSeedProfile | cloud-init NoCloud |
 | `kernel.kubeswift.io/v1alpha1` | SwiftKernel | Direct kernel boot artifacts |
 | `gpu.kubeswift.io/v1alpha1` | SwiftGPUProfile, SwiftGPUNode | GPU passthrough |
@@ -316,7 +316,7 @@ Key facts:
 | `fleet.kubeswift.io/v1alpha1` | Cluster | Member cluster federated by the gateway hub |
 | `storage.kubeswift.io/v1alpha1` | SwiftClusterStorageLocation, SwiftStorageLocation | Where pushed artifacts are kept: the cluster's registry and a namespace's own |
 
-21 CRDs across 10 API groups, all `v1alpha1`.
+22 CRDs across 10 API groups, all `v1alpha1`.
 
 ## Design principles
 

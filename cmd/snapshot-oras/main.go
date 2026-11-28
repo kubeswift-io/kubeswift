@@ -16,7 +16,7 @@
 // content-addressed chunks that dedup zero regions + unchanged cross-version
 // blocks):
 //
-//	snapshot-oras --mode=upload-image   --file=/data/image.raw --repository=REPO --tag=TAG [--chunk-size-mib=64] [--os-type=linux] [--insecure]
+//	snapshot-oras --mode=upload-image   --file=/data/image.raw --repository=REPO --tag=TAG [--chunk-size-mib=64] [--os-type=linux] [--annotation=k=v ...] [--immutable-tag] [--insecure]
 //	snapshot-oras --mode=download-image --file=/data/image.raw --repository=REPO --tag=TAG [--digest=sha256:...] [--insecure]
 //
 // Registry credentials come from a Docker config (DOCKER_CONFIG points at the
@@ -26,9 +26,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"oras.land/oras-go/v2/registry/remote"
 
@@ -69,6 +71,9 @@ func main() {
 	chunkSizeMiB := flag.Int("chunk-size-mib", 64, "chunk size in MiB for golden-image chunking (upload-image only)")
 	osType := flag.String("os-type", "linux", "os family recorded in the golden-image config: linux | windows (upload-image only)")
 	format := flag.String("format", "raw", "disk format recorded in the golden-image config (upload-image only)")
+	var annotations annotationFlag
+	flag.Var(&annotations, "annotation", "key=value recorded on the image manifest and, with --sign-key, signed into the signature as a claim; repeatable (upload-image only)")
+	immutableTag := flag.Bool("immutable-tag", false, "fail with \"tag in use\" instead of moving a tag that names a different manifest (upload-image only)")
 	flag.Parse()
 
 	// A registry behind a private CA: the controller passes the bundle the
@@ -91,17 +96,46 @@ func main() {
 		mode: *mode, dir: *dir, repository: *repository, tag: *tag, digest: *digest,
 		insecure: *insecure, snapName: *snapName, includeMemory: *includeMemory, signKey: *signKey,
 		verifyKey: *verifyKey, file: *file, chunkSizeMiB: *chunkSizeMiB, osType: *osType, format: *format,
+		annotations: annotations.m, immutableTag: *immutableTag,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "snapshot-oras:", err)
+		if errors.Is(err, oci.ErrTagInUse) {
+			// Retrying cannot help: a Job fails at once on this code.
+			os.Exit(exitTagInUse)
+		}
 		os.Exit(1)
 	}
 }
+
+// exitTagInUse is the exit code for --immutable-tag refusing to move a tag.
+const exitTagInUse = 3
 
 type runArgs struct {
 	mode, dir, repository, tag, digest, snapName, signKey string
 	verifyKey, file, osType, format                       string
 	chunkSizeMiB                                          int
-	insecure, includeMemory                               bool
+	insecure, includeMemory, immutableTag                 bool
+	annotations                                           map[string]string
+}
+
+// annotationFlag collects repeated --annotation key=value flags.
+type annotationFlag struct{ m map[string]string }
+
+func (f *annotationFlag) String() string { return fmt.Sprint(f.m) }
+
+func (f *annotationFlag) Set(v string) error {
+	k, val, ok := strings.Cut(v, "=")
+	if !ok || k == "" {
+		return fmt.Errorf("--annotation %q: want key=value", v)
+	}
+	if f.m == nil {
+		f.m = map[string]string{}
+	}
+	if _, dup := f.m[k]; dup {
+		return fmt.Errorf("--annotation %q given twice", k)
+	}
+	f.m[k] = val
+	return nil
 }
 
 func (a runArgs) validate() error {
@@ -193,7 +227,11 @@ func run(a runArgs) error {
 		if format == "" {
 			format = "raw"
 		}
-		_, r, err := oci.ChunkAndPush(ctx, a.file, repo, a.tag, int64(a.chunkSizeMiB)*1024*1024, format, a.osType)
+		opts := []oci.PushOption{oci.WithManifestAnnotations(a.annotations)}
+		if a.immutableTag {
+			opts = append(opts, oci.WithImmutableTag())
+		}
+		_, r, err := oci.ChunkAndPush(ctx, a.file, repo, a.tag, int64(a.chunkSizeMiB)*1024*1024, format, a.osType, opts...)
 		if err != nil {
 			return err
 		}
@@ -206,7 +244,7 @@ func run(a runArgs) error {
 		}
 		if a.signKey != "" {
 			// Strict, as for upload: never report an unsigned disk as signed.
-			if err := oci.Sign(ctx, a.repository, r.ManifestDigest, a.signKey, a.insecure); err != nil {
+			if err := oci.SignAnnotated(ctx, a.repository, r.ManifestDigest, a.signKey, a.insecure, a.annotations); err != nil {
 				return err
 			}
 			stats.Signed = true

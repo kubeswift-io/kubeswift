@@ -110,29 +110,13 @@ func init() {
 //
 // An explicit --chunk-size-mib always wins — this is only the default.
 func chunkSizeFor(path string) int {
-	const (
-		gib     = int64(1) << 30
-		small   = 64
-		medium  = 128
-		large   = 256
-		mediumF = 8 * gib
-		largeF  = 24 * gib
-	)
 	fi, err := os.Stat(path)
 	if err != nil {
 		// Sizing is an optimisation; a stat failure here is not worth failing
 		// the publish over, and the real open happens moments later anyway.
-		return small
+		return oci.DefaultChunkSizeMiB(0)
 	}
-	size := fi.Size()
-	switch {
-	case size >= largeF:
-		return large
-	case size >= mediumF:
-		return medium
-	default:
-		return small
-	}
+	return oci.DefaultChunkSizeMiB(fi.Size())
 }
 
 func runImagePublish(cmd *cobra.Command, args []string) error {
