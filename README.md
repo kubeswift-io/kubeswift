@@ -12,7 +12,7 @@ KubeSwift runs lightweight virtual machines as native Kubernetes workloads using
 
 ```bash
 helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
-  --version 0.27.0 \
+  --version 0.28.0 \
   -n kubeswift-system \
   --create-namespace
 ```

@@ -6,6 +6,21 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+## [v0.28.0] — 2026-11-28
+
+SwiftSandbox suspend and resume (`spec.operatingMode: Suspended`): a sandbox's microVM is paused, saved on its node and stopped, then restored on the same node with its memory, files and processes. In pod mode, an agent-sandbox Sandbox set to `operatingMode: Suspended` keeps its microVM the same way. Also: in-place disk rollback from a CSI snapshot (#711), a sandbox policy pack (ValidatingAdmissionPolicies, off by default), storage-location connection settings and `caBundle` for golden images and OCI snapshots (#703 phase 2), and `swiftctl volume` commands with metrics for volume hotplug.
+
+### Upgrade
+
+- **CRDs changed: apply `crds/` before `helm upgrade`.** Additive only: `swiftsandboxes` (`spec.operatingMode`, phases `Suspending`/`Suspended`/`Resuming`, `status.suspendedState`), `swiftrestores` (`status.rootDisk`), `swiftimages` (`source.oci.locationRef`, `source.oci.caBundle`, `status.source`, and a rule refusing `locationRef` together with explicit connection fields), `swiftsnapshots` and `swiftsnapshotschedules` (`backend.oci.caBundle`).
+- **New chart values, off by default:** `sandboxPolicy` (`enabled`, `allowedNetworkModes`, `forbidGuestSecrets`, `requireNestedDisabled`, `allowedProxyImages`, `validationActions`). With it disabled the rendered chart is unchanged apart from image tags. With pod mode enabled, the chart adds a ClusterRole and binding `kubeswift-pod-mode-agent-sandbox` (`get` on `agents.x-k8s.io` `sandboxes`).
+- **Behaviour change: an in-place CSI restore now runs.** A `csi-volume-snapshot` SwiftRestore onto the snapshot's own guest with `targetGuest.overwriteExisting: true` used to fail with `OverwriteUnsupported`; it now stops the guest and rolls its root disk back. After that, the guest's root disk is `swiftguest-root-<guest>-g<n>`, not `swiftguest-root-<guest>`. Tooling that finds a guest's root disk by the fixed name should select by the labels `swift.kubeswift.io/guest` and `swift.kubeswift.io/role=root-disk` instead.
+- **Suspend needs new kernels:** `kernels/sandbox:6.6.25` / `kernels/gpu-sandbox:6.6.15` (bridge feature `resume-sync`). Suspend is refused on an older kernel. For pod mode, move the pod-mode namespace's SwiftKernel `sandbox` to 6.6.25 (and delete its pull Jobs: a tag change pulls nothing by itself).
+- **Pod mode:** stand-ins created after the upgrade carry the label `podmode.kubeswift.io/sandbox`, and their SwiftSandbox's ingress selects by it. Pod-mode SwiftSandboxes created before keep selecting by UID; on an agent-sandbox suspend they are deleted (a cold boot on resume), as before.
+- New sandbox launchers mount `/var/lib/kubeswift/sandbox-suspend` from the node and present a `br0` MAC derived from the sandbox's namespace and name. Running sandboxes and warm slots keep their launcher.
+- Chart default `ui.image.tag` stays `v0.14.0`. Images: the same eleven.
+- No launcher restarts: running guests, sandboxes and warm slots keep their launcher.
+
 ### Added
 
 - SwiftSandbox suspend and resume, `spec.operatingMode: Running|Suspended`. Suspended on a running sandbox pauses its microVM, writes its memory and device state to `/var/lib/kubeswift/sandbox-suspend/<sandbox uid>/` on its node (swiftletd action `suspend`), and stops the launcher pod; the sandbox keeps its NetworkPolicy, ServiceAccount, Role, address and MAC. `Running` again restores it on the same node with the launcher image and rootfs digest it was suspended with, sets its clock and adds host entropy (guest agent `resume-sync`), and removes the saved state. New phases `Suspending`, `Suspended`, `Resuming`, condition `Suspended`, `status.suspendedState`; `spec.timeout` counts running time only. Refused at admission (and by the controller when webhooks are off) for a sandbox with a GPU, `spec.outputs`, `spec.poolRef` or `network.egress.credentials`, and on a kernel without bridge feature `resume-sync`. A lost node, a rebuilt rootfs, or a model or artifact that resolves elsewhere fails the resume with `SnapshotLost`. Deleting a suspended sandbox removes its state through a Job on that node. Every sandbox launcher mounts `/var/lib/kubeswift/sandbox-suspend`. Guide: [docs/sandbox/suspend.md](docs/sandbox/suspend.md); test: `make sandbox-suspend-test`.
