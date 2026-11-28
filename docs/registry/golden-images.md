@@ -89,10 +89,20 @@ before publishing. An anonymous push is used if no credentials are present
 ## Publish from the cluster — `SwiftImagePublish`
 
 A `SwiftImagePublish` publishes a disk that is already in the cluster, in the
-same format `swiftctl image publish` writes. For now the source is a Ready
-`csi-volume-snapshot` SwiftSnapshot: its root disk is restored into a
-temporary PVC, pushed, and the PVC deleted. The guest can keep running; the
-image is crash-consistent, as the snapshot is.
+same format `swiftctl image publish` writes. The source is one of:
+
+- **`snapshotRef`**: a Ready `csi-volume-snapshot` SwiftSnapshot. Its root
+  disk is restored into a temporary PVC, pushed, and the PVC deleted. The guest
+  can keep running; the image is crash-consistent, as the snapshot is.
+- **`guestRef`**: a stopped SwiftGuest's root disk, read as it is. Stop the
+  guest first (`runPolicy: Stopped`); the request waits with
+  `GuestNotStopped` until `status.phase` is `Stopped`. It then holds the guest
+  (annotation `image.kubeswift.io/publish-hold`): no launcher is created for
+  it, whatever its runPolicy, until the disk has been read and the request is
+  Ready or Failed, or deleted and its Job gone. The guest controller records
+  `LauncherHeldByImagePublish` events meanwhile. Nothing stops the guest for
+  you and no snapshot is taken. Kernel-boot and shared-base guests are
+  refused. A second request for the same guest waits (`GuestHeld`).
 
 ```yaml
 apiVersion: image.kubeswift.io/v1alpha1
@@ -141,7 +151,9 @@ spec:
   guest's SwiftImage, else `linux`. The temporary PVC uses
   `spec.storageClassName`, else the source guest's root disk class; when that
   guest is gone and no class is set, the request waits with
-  `StorageClassRequired`. A snapshot of a kernel-boot guest is refused.
+  `StorageClassRequired`. A snapshot of a kernel-boot guest is refused. A
+  guest source is read in place, with no temporary PVC; its image's size is
+  the whole root disk.
 - **The Job** runs `snapshot-oras --mode=upload-image` without node access:
   non-root, no capabilities, read-only root filesystem, no service account
   token, the disk mounted read-only, a 6 h deadline. At most two publish Jobs

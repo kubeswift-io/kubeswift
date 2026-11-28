@@ -819,6 +819,16 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 				"not starting a launcher: SwiftRestore %s is swapping the guest's root disk", rst)
 			return ctrl.Result{RequeueAfter: offlineMigrationHoldRetry}, nil
 		}
+		// A SwiftImagePublish reading the stopped guest's root disk holds it
+		// until the disk has been read (#703).
+		if pub, err := r.imagePublishHold(ctx, live); err != nil {
+			return ctrl.Result{}, err
+		} else if pub != "" {
+			logger.Info("an image publish holds the guest; not creating a launcher", "swiftImagePublish", pub)
+			r.event(&guest, corev1.EventTypeNormal, "LauncherHeldByImagePublish",
+				"not starting a launcher: SwiftImagePublish %s is reading the guest's root disk", pub)
+			return ctrl.Result{RequeueAfter: offlineMigrationHoldRetry}, nil
+		}
 		// The root disk this pod mounts was resolved from the cache. A swap
 		// that the cache has not seen yet would boot the replaced disk, so
 		// check it uncached at the moment of creation.

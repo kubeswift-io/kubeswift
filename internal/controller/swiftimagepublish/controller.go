@@ -6,6 +6,7 @@ package swiftimagepublish
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -17,8 +18,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
@@ -55,6 +58,16 @@ type Reconciler struct {
 	// MaxConcurrent caps publish Jobs running at once, cluster-wide;
 	// DefaultMaxConcurrent when 0.
 	MaxConcurrent int
+	// APIReader reads uncached where a stale read could let a guest start
+	// while its disk is read. The cached client when nil (tests).
+	APIReader client.Reader
+}
+
+func (r *Reconciler) reader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 func (r *Reconciler) maxConcurrent() int {
@@ -70,9 +83,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.Get(ctx, req.NamespacedName, &pub); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	switch pub.Status.Phase {
-	case imagev1alpha1.SwiftImagePublishReady, imagev1alpha1.SwiftImagePublishFailed:
-		return ctrl.Result{}, nil // terminal
+	if pub.DeletionTimestamp != nil {
+		return r.finalize(ctx, &pub)
+	}
+	if terminal(&pub) {
+		// Finish a cleanup an earlier pass could not.
+		if hasFinalizer(&pub) {
+			return r.cleanup(ctx, &pub)
+		}
+		return ctrl.Result{}, nil
+	}
+	// A request that may hold a guest gets its finalizer before anything
+	// else, in a pass of its own.
+	if pub.Spec.Source.GuestRef != nil && !hasFinalizer(&pub) {
+		return ctrl.Result{Requeue: true}, r.ensureFinalizer(ctx, &pub)
 	}
 	orig := pub.DeepCopy()
 	res, err := r.reconcile(ctx, &pub)
@@ -84,7 +108,29 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, perr
 		}
 	}
+	// Cleanup runs once the end is recorded: the temporary disk goes, and a
+	// held guest is released only after the Job (finished by now) let go.
+	if err == nil && terminal(&pub) {
+		return r.cleanup(ctx, &pub)
+	}
 	return res, err
+}
+
+func terminal(pub *imagev1alpha1.SwiftImagePublish) bool {
+	return pub.Status.Phase == imagev1alpha1.SwiftImagePublishReady || pub.Status.Phase == imagev1alpha1.SwiftImagePublishFailed
+}
+
+// finalize handles a request deleted while it may hold a guest: its Job is
+// deleted, and the hold released once no Job pod is left running.
+func (r *Reconciler) finalize(ctx context.Context, pub *imagev1alpha1.SwiftImagePublish) (ctrl.Result, error) {
+	if !hasFinalizer(pub) {
+		return ctrl.Result{}, nil
+	}
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: pub.Namespace, Name: jobName(pub)}}
+	if err := r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, err
+	}
+	return r.cleanup(ctx, pub)
 }
 
 func (r *Reconciler) reconcile(ctx context.Context, pub *imagev1alpha1.SwiftImagePublish) (ctrl.Result, error) {
@@ -108,7 +154,7 @@ func (r *Reconciler) reconcile(ctx context.Context, pub *imagev1alpha1.SwiftImag
 		// The Job is gone while publishing (deleted by hand): say so rather
 		// than pushing a second time.
 		r.fail(pub, ReasonPublishFailed, "publish Job "+jobName(pub)+" disappeared before it finished")
-		return ctrl.Result{}, r.cleanup(ctx, pub)
+		return ctrl.Result{}, nil
 	}
 
 	// Destination: resolved once and kept, so a changed default moves no
@@ -133,13 +179,18 @@ func (r *Reconciler) reconcile(ctx context.Context, pub *imagev1alpha1.SwiftImag
 	}
 
 	// Source: looked at on every pass until the Job starts.
-	src, err := resolveSnapshotSource(ctx, r.Client, pub)
+	var src sourceResult
+	if pub.Spec.Source.GuestRef != nil {
+		src, err = r.resolveGuestSource(ctx, pub)
+	} else {
+		src, err = resolveSnapshotSource(ctx, r.Client, pub)
+	}
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if src.fail != nil {
 		r.fail(pub, src.fail.reason, src.fail.message)
-		return ctrl.Result{}, r.cleanup(ctx, pub)
+		return ctrl.Result{}, nil
 	}
 	if src.wait != nil {
 		r.wait(pub, src.wait.reason, src.wait.message)
@@ -155,12 +206,14 @@ func (r *Reconciler) reconcile(ctx context.Context, pub *imagev1alpha1.SwiftImag
 		return ctrl.Result{RequeueAfter: waitRequeue}, nil
 	}
 
-	pvc := diskPVC(pub, src.status, src.storageClass)
-	if err := ctrl.SetControllerReference(pub, pvc, r.Scheme); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.Create(ctx, pvc); err != nil && !apierrors.IsAlreadyExists(err) {
-		return ctrl.Result{}, fmt.Errorf("create disk PVC: %w", err)
+	if src.status.VolumeSnapshot != "" {
+		pvc := diskPVC(pub, src.status, src.storageClass)
+		if err := ctrl.SetControllerReference(pub, pvc, r.Scheme); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.Create(ctx, pvc); err != nil && !apierrors.IsAlreadyExists(err) {
+			return ctrl.Result{}, fmt.Errorf("create disk PVC: %w", err)
+		}
 	}
 	j := buildJob(pub, r.SnapshotORASImage)
 	if err := ctrl.SetControllerReference(pub, j, r.Scheme); err != nil {
@@ -197,7 +250,7 @@ func (r *Reconciler) watchJob(ctx context.Context, pub *imagev1alpha1.SwiftImage
 				msg += " (set destination.overwriteTag to move the tag, or publish under another tag)"
 			}
 			r.fail(pub, reason, "publish Job failed: "+msg)
-			return ctrl.Result{}, r.cleanup(ctx, pub)
+			return ctrl.Result{}, nil
 		}
 	}
 	return ctrl.Result{}, nil
@@ -213,7 +266,7 @@ func (r *Reconciler) complete(ctx context.Context, pub *imagev1alpha1.SwiftImage
 		}
 		if !ok || rep.ManifestDigest == "" {
 			r.fail(pub, ReasonPublishFailed, "publish Job completed without reporting a digest")
-			return ctrl.Result{}, r.cleanup(ctx, pub)
+			return ctrl.Result{}, nil
 		}
 		pub.Status.Digest = rep.ManifestDigest
 		pub.Status.SizeBytes = rep.TotalBytes
@@ -221,7 +274,7 @@ func (r *Reconciler) complete(ctx context.Context, pub *imagev1alpha1.SwiftImage
 		pub.Status.Signed = rep.Signed
 		if pub.Status.Destination.SigningKeySecretName != "" && !rep.Signed {
 			r.fail(pub, ReasonPublishFailed, "the destination has a signing key but the image was not signed")
-			return ctrl.Result{}, r.cleanup(ctx, pub)
+			return ctrl.Result{}, nil
 		}
 	}
 	if pub.Spec.CreateImage != nil {
@@ -231,7 +284,7 @@ func (r *Reconciler) complete(ctx context.Context, pub *imagev1alpha1.SwiftImage
 		}
 		if cond != nil {
 			r.fail(pub, cond.reason, cond.message)
-			return ctrl.Result{}, r.cleanup(ctx, pub)
+			return ctrl.Result{}, nil
 		}
 		pub.Status.Image = pub.Spec.CreateImage.Name
 	}
@@ -239,7 +292,7 @@ func (r *Reconciler) complete(ctx context.Context, pub *imagev1alpha1.SwiftImage
 	pub.Status.CompletionTime = &now
 	pub.Status.Phase = imagev1alpha1.SwiftImagePublishReady
 	r.setReady(pub, metav1.ConditionTrue, ReasonPublished, "published "+pub.Status.Reference+"@"+pub.Status.Digest)
-	return ctrl.Result{}, r.cleanup(ctx, pub)
+	return ctrl.Result{}, nil
 }
 
 // slotsFull reports whether MaxConcurrent other requests are publishing.
@@ -258,14 +311,63 @@ func (r *Reconciler) slotsFull(ctx context.Context, pub *imagev1alpha1.SwiftImag
 	return n >= r.maxConcurrent(), nil
 }
 
-// cleanup deletes the temporary disk PVC, if any. The Job is left for its
-// logs; its TTL removes it.
-func (r *Reconciler) cleanup(ctx context.Context, pub *imagev1alpha1.SwiftImagePublish) error {
+// cleanup releases what an ended (or deleted) request holds: once no Job
+// pod is still running, it deletes the temporary disk PVC, releases a held
+// guest and drops the finalizer. Until then it asks to be called again. The
+// Job is left for its logs; its TTL removes it.
+func (r *Reconciler) cleanup(ctx context.Context, pub *imagev1alpha1.SwiftImagePublish) (ctrl.Result, error) {
+	var pods corev1.PodList
+	if err := r.reader().List(ctx, &pods, client.InNamespace(pub.Namespace), client.MatchingLabels{"job-name": jobName(pub)}); err != nil {
+		return ctrl.Result{}, err
+	}
+	for i := range pods.Items {
+		if p := pods.Items[i].Status.Phase; p != corev1.PodSucceeded && p != corev1.PodFailed {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+	}
 	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: pub.Namespace, Name: diskPVCName(pub)}}
 	if err := r.Delete(ctx, pvc); err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, err
+	}
+	if err := r.releaseHold(ctx, pub); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, r.removeFinalizer(ctx, pub)
+}
+
+func hasFinalizer(pub *imagev1alpha1.SwiftImagePublish) bool {
+	return controllerutil.ContainsFinalizer(pub, imagev1alpha1.FinalizerPublish)
+}
+
+func (r *Reconciler) ensureFinalizer(ctx context.Context, pub *imagev1alpha1.SwiftImagePublish) error {
+	if hasFinalizer(pub) {
+		return nil
+	}
+	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{
+		"resourceVersion": pub.ResourceVersion,
+		"finalizers":      append(append([]string(nil), pub.Finalizers...), imagev1alpha1.FinalizerPublish),
+	}})
+	if err := r.Patch(ctx, pub, client.RawPatch(types.MergePatchType, patch)); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (r *Reconciler) removeFinalizer(ctx context.Context, pub *imagev1alpha1.SwiftImagePublish) error {
+	if !hasFinalizer(pub) {
+		return nil
+	}
+	var keep []string
+	for _, f := range pub.Finalizers {
+		if f != imagev1alpha1.FinalizerPublish {
+			keep = append(keep, f)
+		}
+	}
+	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{
+		"resourceVersion": pub.ResourceVersion,
+		"finalizers":      keep,
+	}})
+	return client.IgnoreNotFound(r.Patch(ctx, pub, client.RawPatch(types.MergePatchType, patch)))
 }
 
 func (r *Reconciler) wait(pub *imagev1alpha1.SwiftImagePublish, reason, msg string) {
