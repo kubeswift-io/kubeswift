@@ -60,6 +60,21 @@ type pushOpts struct {
 	notify       RetryNotifyFunc
 	annotations  map[string]string
 	immutableTag bool
+	mountFrom    string
+}
+
+// WithMountFrom makes CopyImage ask the destination registry to mount each
+// blob from repository path from (on the same registry) instead of
+// streaming it through this process. A registry that cannot mount, or will
+// not for these credentials, gets the blob streamed as before.
+func WithMountFrom(from string) PushOption {
+	return func(o *pushOpts) { o.mountFrom = from }
+}
+
+// blobMounter is the part of a remote repository that mounts a blob from
+// another repository of the same registry.
+type blobMounter interface {
+	Mount(ctx context.Context, desc ocispec.Descriptor, fromRepo string, getContent func() (io.ReadCloser, error)) error
 }
 
 // ErrTagInUse is returned by ChunkAndPush with WithImmutableTag when the tag
@@ -226,27 +241,8 @@ func ChunkAndPush(ctx context.Context, filePath string, dst oras.Target, tag str
 	}); err != nil {
 		return zero, PushResult{}, fmt.Errorf("pack manifest: %w", err)
 	}
-	if o.immutableTag {
-		var existing ocispec.Descriptor
-		rerr := withRateLimitRetry(ctx, o.notify, rnd, func() error {
-			var e error
-			existing, e = dst.Resolve(ctx, tag)
-			if errors.Is(e, errdef.ErrNotFound) {
-				return nil
-			}
-			return e
-		})
-		if rerr != nil {
-			return zero, PushResult{}, fmt.Errorf("resolve tag %s: %w", tag, rerr)
-		}
-		if existing.Digest != "" && existing.Digest != manifestDesc.Digest {
-			return zero, PushResult{}, fmt.Errorf("%w: %s names %s, not %s", ErrTagInUse, tag, existing.Digest, manifestDesc.Digest)
-		}
-	}
-	if err := withRateLimitRetry(ctx, o.notify, rnd, func() error {
-		return dst.Tag(ctx, manifestDesc, tag)
-	}); err != nil {
-		return zero, PushResult{}, fmt.Errorf("tag: %w", err)
+	if err := tagGuarded(ctx, dst, manifestDesc, tag, o, rnd); err != nil {
+		return zero, PushResult{}, err
 	}
 	return manifestDesc, PushResult{
 		ManifestDigest:   manifestDesc.Digest.String(),
@@ -414,4 +410,129 @@ func writeSparseAt(f *os.File, r io.Reader, off int64) error {
 			return rerr
 		}
 	}
+}
+
+// tagGuarded tags desc, refusing (ErrTagInUse) to move an immutable tag that
+// names another manifest.
+func tagGuarded(ctx context.Context, dst oras.Target, desc ocispec.Descriptor, tag string, o pushOpts, rnd *rand.Rand) error {
+	if o.immutableTag {
+		var existing ocispec.Descriptor
+		rerr := withRateLimitRetry(ctx, o.notify, rnd, func() error {
+			var e error
+			existing, e = dst.Resolve(ctx, tag)
+			if errors.Is(e, errdef.ErrNotFound) {
+				return nil
+			}
+			return e
+		})
+		if rerr != nil {
+			return fmt.Errorf("resolve tag %s: %w", tag, rerr)
+		}
+		if existing.Digest != "" && existing.Digest != desc.Digest {
+			return fmt.Errorf("%w: %s names %s, not %s", ErrTagInUse, tag, existing.Digest, desc.Digest)
+		}
+	}
+	if err := withRateLimitRetry(ctx, o.notify, rnd, func() error {
+		return dst.Tag(ctx, desc, tag)
+	}); err != nil {
+		return fmt.Errorf("tag: %w", err)
+	}
+	return nil
+}
+
+// CopyImage copies the golden image srcRef (a tag or digest) from src to dst
+// under tag, with the push options' manifest annotations, and returns the new
+// manifest. The config and chunk blobs are copied as they are (only the ones
+// dst lacks; mounted rather than streamed with WithMountFrom), so the disk is
+// byte-identical; the manifest is new because its annotations are, and so is
+// its digest. TransferredBytes counts what was streamed. Nothing is written to
+// disk.
+func CopyImage(ctx context.Context, src oras.ReadOnlyTarget, srcRef string, dst oras.Target, tag string, opts ...PushOption) (ocispec.Descriptor, PushResult, error) {
+	var o pushOpts
+	for _, fn := range opts {
+		fn(&o)
+	}
+	rnd := rand.New(rand.NewSource(time.Now().UnixNano())) //nolint:gosec // jitter, not crypto
+	var zero ocispec.Descriptor
+	srcDesc, err := src.Resolve(ctx, srcRef)
+	if err != nil {
+		return zero, PushResult{}, fmt.Errorf("resolve %s: %w", srcRef, err)
+	}
+	manifestBytes, err := content.FetchAll(ctx, src, srcDesc)
+	if err != nil {
+		return zero, PushResult{}, fmt.Errorf("fetch manifest: %w", err)
+	}
+	var manifest ocispec.Manifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		return zero, PushResult{}, fmt.Errorf("parse manifest: %w", err)
+	}
+	if manifest.ArtifactType != VMImageArtifactType && manifest.Config.MediaType != VMImageConfigType {
+		return zero, PushResult{}, fmt.Errorf("not a kubeswift golden image (artifactType %q)", manifest.ArtifactType)
+	}
+	cfgBytes, err := content.FetchAll(ctx, src, manifest.Config)
+	if err != nil {
+		return zero, PushResult{}, fmt.Errorf("fetch config: %w", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
+		return zero, PushResult{}, fmt.Errorf("parse config: %w", err)
+	}
+
+	var transferred, skipped int64
+	for _, desc := range append([]ocispec.Descriptor{manifest.Config}, manifest.Layers...) {
+		var exists bool
+		if err := withRateLimitRetry(ctx, o.notify, rnd, func() error {
+			var e error
+			exists, e = dst.Exists(ctx, desc)
+			return e
+		}); err != nil {
+			return zero, PushResult{}, fmt.Errorf("exists check %s: %w", desc.Digest, err)
+		}
+		if exists {
+			skipped += desc.Size
+			continue
+		}
+		streamed := true
+		if err := withRateLimitRetry(ctx, o.notify, rnd, func() error {
+			if m, ok := dst.(blobMounter); ok && o.mountFrom != "" {
+				streamed = false
+				return m.Mount(ctx, desc, o.mountFrom, func() (io.ReadCloser, error) {
+					streamed = true // the registry did not mount it
+					return src.Fetch(ctx, desc)
+				})
+			}
+			rc, e := src.Fetch(ctx, desc)
+			if e != nil {
+				return e
+			}
+			defer rc.Close()
+			return dst.Push(ctx, desc, rc)
+		}); err != nil {
+			return zero, PushResult{}, fmt.Errorf("copy blob %s: %w", desc.Digest, err)
+		}
+		if streamed {
+			transferred += desc.Size
+		} else {
+			skipped += desc.Size
+		}
+	}
+
+	var manifestDesc ocispec.Descriptor
+	if err := withRateLimitRetry(ctx, o.notify, rnd, func() error {
+		var e error
+		manifestDesc, e = oras.PackManifest(ctx, dst, oras.PackManifestVersion1_1, VMImageArtifactType,
+			oras.PackManifestOptions{Layers: manifest.Layers, ConfigDescriptor: &manifest.Config, ManifestAnnotations: o.annotations})
+		return e
+	}); err != nil {
+		return zero, PushResult{}, fmt.Errorf("pack manifest: %w", err)
+	}
+	if err := tagGuarded(ctx, dst, manifestDesc, tag, o, rnd); err != nil {
+		return zero, PushResult{}, err
+	}
+	return manifestDesc, PushResult{
+		ManifestDigest:   manifestDesc.Digest.String(),
+		TransferredBytes: transferred,
+		SkippedBytes:     skipped,
+		TotalBytes:       cfg.TotalSize,
+	}, nil
 }

@@ -25,6 +25,7 @@ const (
 	diskMount      = "/disk"
 	diskDevice     = "/dev/kubeswift-disk"
 	authMount      = "/oras-auth"
+	srcAuthMount   = "/oras-auth-source"
 	signKeyMount   = "/oras-signing-key"
 	cosignHome     = "/tmp"
 	publishUID     = int64(65532)
@@ -49,6 +50,7 @@ const (
 	AnnotationSourceName     = "io.kubeswift.source.name"
 	AnnotationSourceUID      = "io.kubeswift.source.uid"
 	AnnotationVolumeSnapshot = "io.kubeswift.source.volumesnapshot"
+	AnnotationSourceDigest   = "io.kubeswift.source.digest"
 	AnnotationVersion        = "io.kubeswift.version"
 	// AnnotationCreated is set to the request's creation time. Left unset,
 	// oras stamps the current time, and a Job retried after the tag was
@@ -86,6 +88,9 @@ func provenance(pub *imagev1alpha1.SwiftImagePublish, src *imagev1alpha1.ImagePu
 	if src.VolumeSnapshot != "" {
 		a[AnnotationVolumeSnapshot] = src.VolumeSnapshot
 	}
+	if src.CopyFrom != nil {
+		a[AnnotationSourceDigest] = src.CopyFrom.Repository + "@" + src.CopyFrom.Digest
+	}
 	return a
 }
 
@@ -97,17 +102,34 @@ func provenance(pub *imagev1alpha1.SwiftImagePublish, src *imagev1alpha1.ImagePu
 func buildJob(pub *imagev1alpha1.SwiftImagePublish, image string) *batchv1.Job {
 	dst := pub.Status.Destination
 	src := pub.Status.Source
-	file := diskMount + "/image.raw"
-	if src.Block {
-		file = diskDevice
-	}
-	args := []string{
-		"--mode=upload-image",
-		"--file=" + file,
-		"--repository=" + dst.Repository,
-		"--tag=" + pub.Spec.Destination.Tag,
-		"--chunk-size-mib=" + strconv.Itoa(oci.DefaultChunkSizeMiB(src.SizeBytes)),
-		"--os-type=" + string(src.OSType),
+	var args []string
+	if cp := src.CopyFrom; cp != nil {
+		args = []string{
+			"--mode=copy-image",
+			"--from-repository=" + cp.Repository,
+			"--from-digest=" + cp.Digest,
+			"--repository=" + dst.Repository,
+			"--tag=" + pub.Spec.Destination.Tag,
+		}
+		if cp.Insecure {
+			args = append(args, "--from-insecure")
+		}
+		if cp.CredentialsSecretName != "" {
+			args = append(args, "--from-docker-config="+srcAuthMount+"/config.json")
+		}
+	} else {
+		file := diskMount + "/image.raw"
+		if src.Block {
+			file = diskDevice
+		}
+		args = []string{
+			"--mode=upload-image",
+			"--file=" + file,
+			"--repository=" + dst.Repository,
+			"--tag=" + pub.Spec.Destination.Tag,
+			"--chunk-size-mib=" + strconv.Itoa(oci.DefaultChunkSizeMiB(src.SizeBytes)),
+			"--os-type=" + string(src.OSType),
+		}
 	}
 	if !pub.Spec.Destination.OverwriteTag {
 		args = append(args, "--immutable-tag")
@@ -131,7 +153,7 @@ func buildJob(pub *imagev1alpha1.SwiftImagePublish, image string) *batchv1.Job {
 		Args:  args,
 		// The root filesystem is read-only: cosign and the registry CA bundle
 		// write their temporary files to an emptyDir.
-		Env: append(clonecommon.RegistryCAEnvVars(dst.CABundle),
+		Env: append(clonecommon.RegistryCAEnvVars(caBundles(dst, src)),
 			corev1.EnvVar{Name: "HOME", Value: cosignHome},
 			corev1.EnvVar{Name: "TMPDIR", Value: cosignHome}),
 		VolumeMounts:             []corev1.VolumeMount{{Name: "tmp", MountPath: cosignHome}},
@@ -157,24 +179,39 @@ func buildJob(pub *imagev1alpha1.SwiftImagePublish, image string) *batchv1.Job {
 		},
 	}
 	vols := []corev1.Volume{
-		{
+		{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+	}
+	if src.CopyFrom == nil {
+		vols = append(vols, corev1.Volume{
 			Name: "disk",
 			VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 				ClaimName: src.PVCName, ReadOnly: true,
 			}},
-		},
-		{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		})
 	}
 	podSC := &corev1.PodSecurityContext{
 		RunAsNonRoot:   ptr.To(true),
 		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 	}
-	if src.Block {
+	switch {
+	case src.CopyFrom != nil:
+		// A registry-side copy reads no volume.
+		if cp := src.CopyFrom; cp.CredentialsSecretName != "" {
+			c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "source-auth", MountPath: srcAuthMount, ReadOnly: true})
+			vols = append(vols, corev1.Volume{Name: "source-auth", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName: cp.CredentialsSecretName,
+				Items:      []corev1.KeyToPath{{Key: corev1.DockerConfigJsonKey, Path: "config.json"}},
+			}}})
+		}
+		if src.CopyFrom.VerifyKey != "" {
+			c.Env = append(c.Env, corev1.EnvVar{Name: clonecommon.VerifyKeyEnvName, Value: src.CopyFrom.VerifyKey})
+		}
+	case src.Block:
 		c.VolumeDevices = []corev1.VolumeDevice{{Name: "disk", DevicePath: diskDevice}}
 		// A block device node is root:disk 0660; reading it needs the group,
 		// not root.
 		podSC.SupplementalGroups = []int64{diskGroup}
-	} else {
+	default:
 		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "disk", MountPath: diskMount, ReadOnly: true})
 	}
 	if dst.CredentialsSecretName != "" {
@@ -234,4 +271,17 @@ func buildJob(pub *imagev1alpha1.SwiftImagePublish, image string) *batchv1.Job {
 			},
 		},
 	}
+}
+
+// caBundles is the PEM trusted for the destination and, for a copy, the
+// source registry.
+func caBundles(dst *imagev1alpha1.ImagePublishDestinationStatus, src *imagev1alpha1.ImagePublishSourceStatus) string {
+	b := dst.CABundle
+	if src.CopyFrom != nil && src.CopyFrom.CABundle != "" && src.CopyFrom.CABundle != b {
+		if b != "" && b[len(b)-1] != '\n' {
+			b += "\n"
+		}
+		b += src.CopyFrom.CABundle
+	}
+	return b
 }

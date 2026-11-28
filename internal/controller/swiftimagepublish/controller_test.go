@@ -494,7 +494,13 @@ func TestPublish_GuestHeldReadAndReleased(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: jobName(p)}, &job); err != nil {
 		t.Fatal(err)
 	}
-	if claim := job.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim; claim.ClaimName != "swiftguest-root-web" || !claim.ReadOnly {
+	var claim *corev1.PersistentVolumeClaimVolumeSource
+	for _, v := range job.Spec.Template.Spec.Volumes {
+		if v.Name == "disk" {
+			claim = v.PersistentVolumeClaim
+		}
+	}
+	if claim == nil || claim.ClaimName != "swiftguest-root-web" || !claim.ReadOnly {
 		t.Fatalf("job reads %+v", claim)
 	}
 	var tmp corev1.PersistentVolumeClaim
@@ -584,5 +590,86 @@ func TestPublish_GuestRefusals(t *testing.T) {
 				t.Fatalf("refused guest was held: %q", h)
 			}
 		})
+	}
+}
+
+func ociSnapshot(withDisk bool) *snapshotv1alpha1.SwiftSnapshot {
+	s := &snapshotv1alpha1.SwiftSnapshot{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "full", UID: "full-uid"},
+		Spec: snapshotv1alpha1.SwiftSnapshotSpec{
+			GuestRef: snapshotv1alpha1.SwiftSnapshotGuestRef{Name: "gone"},
+			Backend:  snapshotv1alpha1.SwiftSnapshotBackend{Type: snapshotv1alpha1.SnapshotBackendOCI},
+		},
+		Status: snapshotv1alpha1.SwiftSnapshotStatus{
+			Phase:     snapshotv1alpha1.SwiftSnapshotPhaseReady,
+			Location:  &snapshotv1alpha1.SnapshotLocation{Source: "SwiftClusterStorageLocation/registry", Repository: "snaps.example.com/kubeswift/team-a/snapshots", CredentialsSecretName: "snap-creds", CABundle: "SNAPCA", VerifyKey: "SNAPKEY"},
+			GuestSpec: &snapshotv1alpha1.CapturedGuestSpec{OSType: "windows"},
+			OCI:       &snapshotv1alpha1.OCISnapshotStatus{ManifestDigest: "sha256:mem"},
+		},
+	}
+	if withDisk {
+		s.Status.OCI.Disk = &snapshotv1alpha1.OCIDiskArtifact{Reference: "snaps.example.com/kubeswift/team-a/snapshots:full-disk", ManifestDigest: "sha256:disk", PushedBytes: 5 << 30}
+	}
+	return s
+}
+
+func TestPublish_FullStateOCISnapshotIsCopied(t *testing.T) {
+	snapCreds := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "snap-creds"},
+		Data: map[string][]byte{corev1.DockerConfigJsonKey: []byte("{}")}}
+	objs := append(secrets(), clusterLocation(), snapCreds, ociSnapshot(true), newPublish(func(p *imagev1alpha1.SwiftImagePublish) {
+		p.Spec.Source.SnapshotRef.Name = "full"
+	}))
+	r, c := setup(t, objs...)
+	ctx := context.Background()
+	p := reconcileOnce(t, r, "web-2026")
+	if p.Status.Phase != imagev1alpha1.SwiftImagePublishPublishing {
+		t.Fatalf("phase %s reason %s", p.Status.Phase, reason(p))
+	}
+	cp := p.Status.Source.CopyFrom
+	if cp == nil || cp.Repository != "snaps.example.com/kubeswift/team-a/snapshots" || cp.Digest != "sha256:disk" || p.Status.Source.OSType != imagev1alpha1.OSTypeWindows {
+		t.Fatalf("source %+v", p.Status.Source)
+	}
+	var job batchv1.Job
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: jobName(p)}, &job); err != nil {
+		t.Fatal(err)
+	}
+	ctr := job.Spec.Template.Spec.Containers[0]
+	args := strings.Join(ctr.Args, " ")
+	for _, want := range []string{"--mode=copy-image", "--from-repository=snaps.example.com/kubeswift/team-a/snapshots", "--from-digest=sha256:disk",
+		"--from-docker-config=" + srcAuthMount + "/config.json", "--sign-key=", "--immutable-tag",
+		"--annotation=io.kubeswift.source.digest=snaps.example.com/kubeswift/team-a/snapshots@sha256:disk"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("args missing %q: %s", want, args)
+		}
+	}
+	if strings.Contains(args, "--file=") {
+		t.Errorf("a copy reads a file: %s", args)
+	}
+	env := map[string]string{}
+	for _, e := range ctr.Env {
+		env[e.Name] = e.Value
+	}
+	if env[clonecommon.VerifyKeyEnvName] != "SNAPKEY" || !strings.Contains(env["KUBESWIFT_REGISTRY_CA_BUNDLE"], "SNAPCA") {
+		t.Errorf("env %v", env)
+	}
+	for _, v := range job.Spec.Template.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil {
+			t.Errorf("a copy mounts a volume: %s", v.Name)
+		}
+	}
+	var pvcs corev1.PersistentVolumeClaimList
+	_ = c.List(ctx, &pvcs)
+	if len(pvcs.Items) != 0 {
+		t.Errorf("a copy made a PVC")
+	}
+}
+
+func TestPublish_MemoryOnlyOCISnapshotRefused(t *testing.T) {
+	r, _ := setup(t, append(secrets(), clusterLocation(), ociSnapshot(false), newPublish(func(p *imagev1alpha1.SwiftImagePublish) {
+		p.Spec.Source.SnapshotRef.Name = "full"
+	}))...)
+	p := reconcileOnce(t, r, "web-2026")
+	if p.Status.Phase != imagev1alpha1.SwiftImagePublishFailed || reason(p) != ReasonSourceUnsupported {
+		t.Fatalf("phase %s reason %s", p.Status.Phase, reason(p))
 	}
 }

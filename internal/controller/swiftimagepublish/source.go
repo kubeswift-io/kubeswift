@@ -18,6 +18,8 @@ import (
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/rootdisk"
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
+	"github.com/kubeswift-io/kubeswift/internal/storagelocation"
 )
 
 // Reasons a request waits on, or fails over, its source.
@@ -59,9 +61,11 @@ func resolveSnapshotSource(ctx context.Context, c client.Reader, pub *imagev1alp
 		}
 		return sourceResult{}, err
 	}
-	if snap.Spec.Backend.Type != snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot {
+	switch snap.Spec.Backend.Type {
+	case snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot, snapshotv1alpha1.SnapshotBackendOCI:
+	default:
 		return sourceResult{fail: &condition{ReasonSourceUnsupported, fmt.Sprintf(
-			"SwiftSnapshot %s has backend %s; only a csi-volume-snapshot snapshot can be published", name, snap.Spec.Backend.Type)}}, nil
+			"SwiftSnapshot %s has backend %s; only a csi-volume-snapshot snapshot or a full-state oci snapshot can be published", name, snap.Spec.Backend.Type)}}, nil
 	}
 	switch snap.Status.Phase {
 	case snapshotv1alpha1.SwiftSnapshotPhaseReady:
@@ -69,6 +73,9 @@ func resolveSnapshotSource(ctx context.Context, c client.Reader, pub *imagev1alp
 		return sourceResult{fail: &condition{ReasonSourceUnsupported, "SwiftSnapshot " + name + " failed"}}, nil
 	default:
 		return sourceResult{wait: &condition{ReasonSourceNotReady, "SwiftSnapshot " + name + " is not Ready yet"}}, nil
+	}
+	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendOCI {
+		return resolveOCISnapshotSource(ctx, c, pub, &snap)
 	}
 	var root *snapshotv1alpha1.SnapshotDiskRef
 	for i := range snap.Status.Disks {
@@ -209,4 +216,50 @@ func diskPVC(pub *imagev1alpha1.SwiftImagePublish, src *imagev1alpha1.ImagePubli
 			},
 		},
 	}
+}
+
+// resolveOCISnapshotSource takes a full-state oci snapshot's disk artifact,
+// already a golden image, as the source of a registry-side copy. It is
+// read with the snapshot's recorded connection: its CA, its credentials
+// Secret (in this namespace) and its verify key.
+func resolveOCISnapshotSource(ctx context.Context, c client.Reader, pub *imagev1alpha1.SwiftImagePublish, snap *snapshotv1alpha1.SwiftSnapshot) (sourceResult, error) {
+	if snap.Status.OCI == nil || snap.Status.OCI.Disk == nil || snap.Status.OCI.Disk.ManifestDigest == "" {
+		return sourceResult{fail: &condition{ReasonSourceUnsupported, "SwiftSnapshot " + snap.Name +
+			" has no disk artifact (a memory-only snapshot); take one with includeDisk: true, or use a csi-volume-snapshot snapshot"}}, nil
+	}
+	conn, ok := clonecommon.SnapshotOCI(snap)
+	if !ok {
+		return sourceResult{fail: &condition{ReasonSourceUnsupported, "SwiftSnapshot " + snap.Name + " records no registry"}}, nil
+	}
+	if conn.CredentialsSecretName != "" {
+		w, err := storagelocation.CheckSecrets(ctx, c, pub.Namespace, conn.CredentialsSecretName, "")
+		if err != nil {
+			return sourceResult{}, err
+		}
+		if w != nil {
+			return sourceResult{wait: &condition{w.Reason, "source " + w.Message}}, nil
+		}
+	}
+	osType := pub.Spec.OSType
+	if osType == "" && snap.Status.GuestSpec != nil && snap.Status.GuestSpec.OSType != "" {
+		osType = imagev1alpha1.OSType(snap.Status.GuestSpec.OSType)
+	}
+	if osType == "" {
+		osType = imagev1alpha1.OSTypeLinux
+	}
+	return sourceResult{status: &imagev1alpha1.ImagePublishSourceStatus{
+		Kind:      "SwiftSnapshot",
+		Name:      snap.Name,
+		UID:       string(snap.UID),
+		SizeBytes: snap.Status.OCI.Disk.PushedBytes,
+		OSType:    osType,
+		CopyFrom: &imagev1alpha1.ImagePublishCopySource{
+			Repository:            conn.Repository,
+			Digest:                snap.Status.OCI.Disk.ManifestDigest,
+			Insecure:              conn.Insecure,
+			CABundle:              conn.CABundle,
+			CredentialsSecretName: conn.CredentialsSecretName,
+			VerifyKey:             conn.VerifyKey,
+		},
+	}}, nil
 }

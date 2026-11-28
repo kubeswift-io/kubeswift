@@ -91,9 +91,21 @@ before publishing. An anonymous push is used if no credentials are present
 A `SwiftImagePublish` publishes a disk that is already in the cluster, in the
 same format `swiftctl image publish` writes. The source is one of:
 
-- **`snapshotRef`**: a Ready `csi-volume-snapshot` SwiftSnapshot. Its root
-  disk is restored into a temporary PVC, pushed, and the PVC deleted. The guest
-  can keep running; the image is crash-consistent, as the snapshot is.
+- **`snapshotRef`**: a Ready SwiftSnapshot with a root disk.
+  - `csi-volume-snapshot`: the root disk is restored into a temporary PVC,
+    pushed, and the PVC deleted. The guest can keep running; the image is
+    crash-consistent, as the snapshot is.
+  - `oci` with `includeDisk` (full-state): the snapshot's disk artifact is
+    already a golden image, so it is copied registry to registry under the
+    destination with new annotations (`snapshot-oras --mode=copy-image`). No
+    volume is read. Only the chunks the destination lacks are copied; on the
+    same registry they are mounted from the snapshot's repository, so no data
+    passes through the Job (a registry that refuses the mount gets them
+    streamed). The source is read with the snapshot's
+    recorded connection (CA, credentials Secret, verify key: when it has a
+    verify key the source is verified before it is copied). The copy does not
+    depend on the snapshot afterwards: deleting the snapshot deletes its
+    artifact, not the published image. A memory-only snapshot is refused.
 - **`guestRef`**: a stopped SwiftGuest's root disk, read as it is. Stop the
   guest first (`runPolicy: Stopped`); the request waits with
   `GuestNotStopped` until `status.phase` is `Stopped`. It then holds the guest
@@ -133,7 +145,7 @@ spec:
 - **Signing.** When the destination has a signing key the image is signed,
   and the request fails if it is not. The manifest always carries provenance
   annotations, signed into the signature too: `io.kubeswift.source.kind`,
-  `.name`, `.uid`, `.volumesnapshot`, `io.kubeswift.publish.name`,
+  `.name`, `.uid`, `.volumesnapshot`, `.digest` (a copy), `io.kubeswift.publish.name`,
   `.namespace`, `.uid` and `io.kubeswift.version`. A
   SwiftArtifactVerificationPolicy can require them as claims.
 - **Tags do not move.** A tag that already names a different image fails the

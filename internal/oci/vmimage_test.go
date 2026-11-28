@@ -350,3 +350,57 @@ func TestChunkAndPush_ImmutableTagAndAnnotations(t *testing.T) {
 		t.Fatal("tag did not move without WithImmutableTag")
 	}
 }
+
+// CopyImage re-publishes a golden image byte-identically under new
+// annotations, copying only the blobs the destination lacks.
+func TestCopyImage_ByteIdenticalWithNewAnnotations(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	a, b, short, zero := mkWindows()
+	src := filepath.Join(dir, "image.raw")
+	writeDisk(t, src, [][]byte{a, zero, b, short})
+	orig, _ := os.ReadFile(src)
+	from := memory.New()
+	srcDesc, _, err := ChunkAndPush(ctx, src, from, "snap-disk", testChunk, "raw", "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ann := map[string]string{"io.kubeswift.source.kind": "SwiftSnapshot", "org.opencontainers.image.created": "2026-11-28T00:00:00Z"}
+	to := memory.New()
+	desc, res, err := CopyImage(ctx, from, "snap-disk", to, "v1", WithManifestAnnotations(ann), WithImmutableTag())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if desc.Digest == srcDesc.Digest {
+		t.Fatal("copy kept the source manifest; its annotations were not applied")
+	}
+	if res.TotalBytes != int64(3*testChunk+100) || res.TransferredBytes == 0 || res.SkippedBytes != 0 {
+		t.Fatalf("result %+v", res)
+	}
+	out := filepath.Join(dir, "out.raw")
+	if _, err := PullAndReassemble(ctx, to, "v1", out); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(out); !bytes.Equal(got, orig) {
+		t.Fatal("copied disk differs from the original")
+	}
+	rc, _ := to.Fetch(ctx, desc)
+	var m struct {
+		Annotations map[string]string `json:"annotations"`
+	}
+	_ = json.NewDecoder(rc).Decode(&m)
+	rc.Close()
+	if m.Annotations["io.kubeswift.source.kind"] != "SwiftSnapshot" {
+		t.Fatalf("annotations %v", m.Annotations)
+	}
+
+	again, res2, err := CopyImage(ctx, from, "snap-disk", to, "v1", WithManifestAnnotations(ann), WithImmutableTag())
+	if err != nil || again.Digest != desc.Digest || res2.TransferredBytes != 0 {
+		t.Fatalf("re-copy: %v %s %+v", err, again.Digest, res2)
+	}
+	other := map[string]string{"io.kubeswift.source.kind": "SwiftImage", "org.opencontainers.image.created": "2026-11-28T00:00:00Z"}
+	if _, _, err := CopyImage(ctx, from, "snap-disk", to, "v1", WithManifestAnnotations(other), WithImmutableTag()); !errors.Is(err, ErrTagInUse) {
+		t.Fatalf("other manifest on an immutable tag: %v", err)
+	}
+}
