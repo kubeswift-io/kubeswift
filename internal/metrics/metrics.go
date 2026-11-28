@@ -505,6 +505,25 @@ var (
 	)
 )
 
+// volumeAttachObserved and volumeDetachObserved record attachments whose
+// attach or detach time was already observed: a reconcile from a cache older
+// than the finalizer removal runs the detach-finished path a second time.
+var volumeAttachObserved, volumeDetachObserved sync.Map
+
+// MarkVolumeAttachObserved returns true the first time uid is seen.
+func MarkVolumeAttachObserved(uid string) bool {
+	_, loaded := volumeAttachObserved.LoadOrStore(uid, struct{}{})
+	return !loaded
+}
+
+// MarkVolumeDetachObserved returns true the first time uid is seen; it also
+// forgets uid's attach mark, since the attachment is gone.
+func MarkVolumeDetachObserved(uid string) bool {
+	volumeAttachObserved.Delete(uid)
+	_, loaded := volumeDetachObserved.LoadOrStore(uid, struct{}{})
+	return !loaded
+}
+
 func init() {
 	metrics.Registry.MustRegister(
 		VolumeAttachSeconds,

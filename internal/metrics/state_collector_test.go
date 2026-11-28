@@ -231,3 +231,13 @@ kubeswift_volume_attachments{namespace="team-a",phase="Pending"} 1
 		t.Error(err)
 	}
 }
+
+// A detach-finished path run twice for one attachment observes once.
+func TestVolumeObservedMarks(t *testing.T) {
+	if !MarkVolumeAttachObserved("u1") || MarkVolumeAttachObserved("u1") {
+		t.Error("attach mark not once")
+	}
+	if !MarkVolumeDetachObserved("u1") || MarkVolumeDetachObserved("u1") {
+		t.Error("detach mark not once")
+	}
+}

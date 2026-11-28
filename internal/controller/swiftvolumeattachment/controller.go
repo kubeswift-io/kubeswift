@@ -170,7 +170,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 				return reconcile.Result{}, err
 			}
 			r.event(sva, corev1.EventTypeNormal, "VolumeDetached", "volume %s detached from SwiftGuest %s", sva.Spec.PVCRef.Name, sva.Spec.GuestRef.Name)
-			if sva.DeletionTimestamp != nil {
+			if sva.DeletionTimestamp != nil && metrics.MarkVolumeDetachObserved(string(sva.UID)) {
 				metrics.VolumeDetachSeconds.WithLabelValues(sva.Namespace).Observe(time.Since(sva.DeletionTimestamp.Time).Seconds())
 			}
 			continue
@@ -343,7 +343,9 @@ func (r *Reconciler) reconcileOne(
 		if sva.Status.Phase != swiftv1alpha1.VolumeAttachmentAttached {
 			r.event(sva, corev1.EventTypeNormal, "VolumeAttached", "volume %s attached to SwiftGuest %s as virtio serial %s",
 				sva.Spec.PVCRef.Name, sva.Spec.GuestRef.Name, st.Serial)
-			metrics.VolumeAttachSeconds.WithLabelValues(sva.Namespace).Observe(time.Since(sva.CreationTimestamp.Time).Seconds())
+			if metrics.MarkVolumeAttachObserved(string(sva.UID)) {
+				metrics.VolumeAttachSeconds.WithLabelValues(sva.Namespace).Observe(time.Since(sva.CreationTimestamp.Time).Seconds())
+			}
 		}
 		setPhase(sva, swiftv1alpha1.VolumeAttachmentAttached, swiftv1alpha1.VolumeAttachmentReasonAttached,
 			fmt.Sprintf("the guest sees the disk as /dev/disk/by-id/virtio-%s", st.Serial))
