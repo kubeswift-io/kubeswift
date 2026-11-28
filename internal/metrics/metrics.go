@@ -475,8 +475,60 @@ func MarkSandboxCheckoutObserved(uid string) bool {
 	return !loaded
 }
 
+// Volume hotplug (SwiftVolumeAttachment). Recorded once per attachment on the
+// transition into Attached / out of the guest, and per DetachBlocked event.
+var (
+	VolumeAttachSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "kubeswift_volume_attach_seconds",
+			Help:    "Time in seconds from SwiftVolumeAttachment creation to Attached",
+			Buckets: []float64{1, 2, 5, 10, 20, 30, 60, 120, 300},
+		},
+		[]string{"namespace"},
+	)
+	VolumeDetachSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "kubeswift_volume_detach_seconds",
+			Help:    "Time in seconds from SwiftVolumeAttachment deletion to the volume being released",
+			Buckets: []float64{1, 2, 5, 10, 20, 30, 60, 120, 300, 900},
+		},
+		[]string{"namespace"},
+	)
+	// VolumeDetachBlockedTotal counts detaches the guest blocked, by bounded
+	// reason (InUse: the guest still uses the disk).
+	VolumeDetachBlockedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_volume_detach_blocked_total",
+			Help: "SwiftVolumeAttachment detaches blocked by the guest, by reason",
+		},
+		[]string{"namespace", "reason"},
+	)
+)
+
+// volumeAttachObserved and volumeDetachObserved record attachments whose
+// attach or detach time was already observed: a reconcile from a cache older
+// than the finalizer removal runs the detach-finished path a second time.
+var volumeAttachObserved, volumeDetachObserved sync.Map
+
+// MarkVolumeAttachObserved returns true the first time uid is seen.
+func MarkVolumeAttachObserved(uid string) bool {
+	_, loaded := volumeAttachObserved.LoadOrStore(uid, struct{}{})
+	return !loaded
+}
+
+// MarkVolumeDetachObserved returns true the first time uid is seen; it also
+// forgets uid's attach mark, since the attachment is gone.
+func MarkVolumeDetachObserved(uid string) bool {
+	volumeAttachObserved.Delete(uid)
+	_, loaded := volumeDetachObserved.LoadOrStore(uid, struct{}{})
+	return !loaded
+}
+
 func init() {
 	metrics.Registry.MustRegister(
+		VolumeAttachSeconds,
+		VolumeDetachSeconds,
+		VolumeDetachBlockedTotal,
 		SandboxArtifactsTotal,
 		ArtifactPreparesTotal,
 		ArtifactPolicyDecisionsTotal,

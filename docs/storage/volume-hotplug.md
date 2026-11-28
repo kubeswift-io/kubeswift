@@ -77,6 +77,29 @@ disk under whatever was using it:
 kubectl annotate sva db-data kubeswift.io/force-detach=true
 ```
 
+## swiftctl
+
+`swiftctl volume` wraps the same objects:
+
+```bash
+swiftctl volume attach db-0 db-data --wait      # creates SwiftVolumeAttachment db-0-db-data, waits for Attached
+swiftctl volume list db-0                       # NAME GUEST PVC MODE PHASE SERIAL AGE
+swiftctl volume detach db-0 db-data --wait      # by PVC or attachment name
+swiftctl volume detach db-0 db-data --force     # sets kubeswift.io/force-detach first
+```
+
+`attach` takes `--name` (default `<guest>-<pvc>`) and `--read-only`; `--wait`
+prints the guest's `/dev/disk/by-id/virtio-<serial>` path.
+
+## Metrics
+
+| Metric | What |
+|---|---|
+| `kubeswift_volume_attachments{namespace,phase}` | Attachments by phase, from cluster state at scrape time |
+| `kubeswift_volume_attach_seconds{namespace}` | Creation to `Attached` |
+| `kubeswift_volume_detach_seconds{namespace}` | Deletion to the volume being released |
+| `kubeswift_volume_detach_blocked_total{namespace,reason}` | Detaches the guest blocked (`reason="InUse"`) |
+
 ## Lifecycle
 
 | Event | What happens |

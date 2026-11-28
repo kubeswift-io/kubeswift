@@ -123,6 +123,11 @@ var (
 		"kubeswift_sandbox_pool_warm_replicas",
 		"Ready, unclaimed warm slots per SwiftSandboxPool",
 		[]string{"namespace", "pool"}, nil)
+	volumeAttachmentsDesc = prometheus.NewDesc(
+		"kubeswift_volume_attachments",
+		"SwiftVolumeAttachments by namespace and phase",
+		[]string{"namespace", "phase"}, nil,
+	)
 	sandboxPoolClaimedDesc = prometheus.NewDesc(
 		"kubeswift_sandbox_pool_claimed_replicas",
 		"Slots currently checked out per SwiftSandboxPool",
@@ -194,6 +199,7 @@ func (c *StateCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- sandboxPoolsDesc
 	ch <- sandboxPoolWarmDesc
 	ch <- sandboxPoolClaimedDesc
+	ch <- volumeAttachmentsDesc
 }
 
 // Collect implements prometheus.Collector. Each type is collected
@@ -212,6 +218,38 @@ func (c *StateCollector) Collect(ch chan<- prometheus.Metric) {
 	c.collectGPUNodes(ctx, ch)
 	c.collectSchedules(ctx, ch)
 	c.collectSandboxes(ctx, ch)
+	c.collectVolumeAttachments(ctx, ch)
+}
+
+// volumeAttachmentPhases are zero-filled per namespace that has an attachment.
+var volumeAttachmentPhases = []swiftv1alpha1.VolumeAttachmentPhase{
+	swiftv1alpha1.VolumeAttachmentPending, swiftv1alpha1.VolumeAttachmentAttaching,
+	swiftv1alpha1.VolumeAttachmentAttached, swiftv1alpha1.VolumeAttachmentDetaching,
+	swiftv1alpha1.VolumeAttachmentFailed,
+}
+
+func (c *StateCollector) collectVolumeAttachments(ctx context.Context, ch chan<- prometheus.Metric) {
+	var list swiftv1alpha1.SwiftVolumeAttachmentList
+	if err := c.reader.List(ctx, &list); err != nil {
+		return
+	}
+	byNSPhase := map[string]map[swiftv1alpha1.VolumeAttachmentPhase]int{}
+	for i := range list.Items {
+		a := &list.Items[i]
+		if byNSPhase[a.Namespace] == nil {
+			byNSPhase[a.Namespace] = map[swiftv1alpha1.VolumeAttachmentPhase]int{}
+		}
+		ph := a.Status.Phase
+		if ph == "" {
+			ph = swiftv1alpha1.VolumeAttachmentPending
+		}
+		byNSPhase[a.Namespace][ph]++
+	}
+	for ns, phases := range byNSPhase {
+		for _, ph := range volumeAttachmentPhases {
+			gauge(ch, volumeAttachmentsDesc, float64(phases[ph]), ns, string(ph))
+		}
+	}
 }
 
 func (c *StateCollector) collectSandboxes(ctx context.Context, ch chan<- prometheus.Metric) {

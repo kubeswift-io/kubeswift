@@ -50,6 +50,7 @@ func init() {
 	rootCmd.AddCommand(guestCmd)
 	rootCmd.AddCommand(imageCmd)
 	rootCmd.AddCommand(sandboxCmd)
+	rootCmd.AddCommand(volumeCmd)
 }
 
 // newDynamicClient builds a dynamic client from the resolved kubeconfig. The

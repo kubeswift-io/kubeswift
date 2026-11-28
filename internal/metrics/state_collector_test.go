@@ -206,3 +206,38 @@ func TestStateCollector_Lint(t *testing.T) {
 		t.Errorf("lint: %s: %s", p.Metric, p.Text)
 	}
 }
+
+// Hotplug attachments are counted by phase at scrape time, zero-filled per
+// namespace; an attachment with no phase yet counts as Pending.
+func TestStateCollector_VolumeAttachments(t *testing.T) {
+	sva := func(name string, phase swiftv1alpha1.VolumeAttachmentPhase) *swiftv1alpha1.SwiftVolumeAttachment {
+		return &swiftv1alpha1.SwiftVolumeAttachment{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a"},
+			Status:     swiftv1alpha1.SwiftVolumeAttachmentStatus{Phase: phase},
+		}
+	}
+	c := NewStateCollector(newStateReader(t, sva("a", swiftv1alpha1.VolumeAttachmentAttached),
+		sva("b", swiftv1alpha1.VolumeAttachmentAttached), sva("c", "")))
+	expected := `
+# HELP kubeswift_volume_attachments SwiftVolumeAttachments by namespace and phase
+# TYPE kubeswift_volume_attachments gauge
+kubeswift_volume_attachments{namespace="team-a",phase="Attached"} 2
+kubeswift_volume_attachments{namespace="team-a",phase="Attaching"} 0
+kubeswift_volume_attachments{namespace="team-a",phase="Detaching"} 0
+kubeswift_volume_attachments{namespace="team-a",phase="Failed"} 0
+kubeswift_volume_attachments{namespace="team-a",phase="Pending"} 1
+`
+	if err := testutil.CollectAndCompare(c, strings.NewReader(expected), "kubeswift_volume_attachments"); err != nil {
+		t.Error(err)
+	}
+}
+
+// A detach-finished path run twice for one attachment observes once.
+func TestVolumeObservedMarks(t *testing.T) {
+	if !MarkVolumeAttachObserved("u1") || MarkVolumeAttachObserved("u1") {
+		t.Error("attach mark not once")
+	}
+	if !MarkVolumeDetachObserved("u1") || MarkVolumeDetachObserved("u1") {
+		t.Error("detach mark not once")
+	}
+}
