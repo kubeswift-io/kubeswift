@@ -98,8 +98,10 @@ same format `swiftctl image publish` writes. The source is one of:
   - `oci` with `includeDisk` (full-state): the snapshot's disk artifact is
     already a golden image, so it is copied registry to registry under the
     destination with new annotations (`snapshot-oras --mode=copy-image`). No
-    volume is read and no data passes through a node; only the chunks the
-    destination lacks are copied. The source is read with the snapshot's
+    volume is read. Only the chunks the destination lacks are copied; on the
+    same registry they are mounted from the snapshot's repository, so no data
+    passes through the Job (a registry that refuses the mount gets them
+    streamed). The source is read with the snapshot's
     recorded connection (CA, credentials Secret, verify key: when it has a
     verify key the source is verified before it is copied). The copy does not
     depend on the snapshot afterwards: deleting the snapshot deletes its

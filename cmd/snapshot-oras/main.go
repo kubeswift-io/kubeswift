@@ -280,6 +280,10 @@ func run(a runArgs) error {
 		if a.immutableTag {
 			opts = append(opts, oci.WithImmutableTag())
 		}
+		if src.Reference.Registry == repo.Reference.Registry {
+			// Same registry: mount the blobs instead of streaming them.
+			opts = append(opts, oci.WithMountFrom(src.Reference.Repository))
+		}
 		_, r, err := oci.CopyImage(ctx, src, a.fromDigest, repo, a.tag, opts...)
 		if err != nil {
 			return err

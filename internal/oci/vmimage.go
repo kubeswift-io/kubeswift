@@ -60,6 +60,21 @@ type pushOpts struct {
 	notify       RetryNotifyFunc
 	annotations  map[string]string
 	immutableTag bool
+	mountFrom    string
+}
+
+// WithMountFrom makes CopyImage ask the destination registry to mount each
+// blob from repository path from (on the same registry) instead of
+// streaming it through this process. A registry that cannot mount, or will
+// not for these credentials, gets the blob streamed as before.
+func WithMountFrom(from string) PushOption {
+	return func(o *pushOpts) { o.mountFrom = from }
+}
+
+// blobMounter is the part of a remote repository that mounts a blob from
+// another repository of the same registry.
+type blobMounter interface {
+	Mount(ctx context.Context, desc ocispec.Descriptor, fromRepo string, getContent func() (io.ReadCloser, error)) error
 }
 
 // ErrTagInUse is returned by ChunkAndPush with WithImmutableTag when the tag
@@ -428,8 +443,10 @@ func tagGuarded(ctx context.Context, dst oras.Target, desc ocispec.Descriptor, t
 // CopyImage copies the golden image srcRef (a tag or digest) from src to dst
 // under tag, with the push options' manifest annotations, and returns the new
 // manifest. The config and chunk blobs are copied as they are (only the ones
-// dst lacks), so the disk is byte-identical; the manifest is new because its
-// annotations are, and so is its digest. Nothing is written to disk.
+// dst lacks; mounted rather than streamed with WithMountFrom), so the disk is
+// byte-identical; the manifest is new because its annotations are, and so is
+// its digest. TransferredBytes counts what was streamed. Nothing is written to
+// disk.
 func CopyImage(ctx context.Context, src oras.ReadOnlyTarget, srcRef string, dst oras.Target, tag string, opts ...PushOption) (ocispec.Descriptor, PushResult, error) {
 	var o pushOpts
 	for _, fn := range opts {
@@ -475,7 +492,15 @@ func CopyImage(ctx context.Context, src oras.ReadOnlyTarget, srcRef string, dst 
 			skipped += desc.Size
 			continue
 		}
+		streamed := true
 		if err := withRateLimitRetry(ctx, o.notify, rnd, func() error {
+			if m, ok := dst.(blobMounter); ok && o.mountFrom != "" {
+				streamed = false
+				return m.Mount(ctx, desc, o.mountFrom, func() (io.ReadCloser, error) {
+					streamed = true // the registry did not mount it
+					return src.Fetch(ctx, desc)
+				})
+			}
 			rc, e := src.Fetch(ctx, desc)
 			if e != nil {
 				return e
@@ -485,7 +510,11 @@ func CopyImage(ctx context.Context, src oras.ReadOnlyTarget, srcRef string, dst 
 		}); err != nil {
 			return zero, PushResult{}, fmt.Errorf("copy blob %s: %w", desc.Digest, err)
 		}
-		transferred += desc.Size
+		if streamed {
+			transferred += desc.Size
+		} else {
+			skipped += desc.Size
+		}
 	}
 
 	var manifestDesc ocispec.Descriptor
