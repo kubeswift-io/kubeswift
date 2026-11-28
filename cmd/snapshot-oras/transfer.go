@@ -5,14 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content/file"
 	"oras.land/oras-go/v2/errdef"
+
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/nodefile"
 )
 
 // artifactType tags the snapshot as a KubeSwift VM snapshot so a registry
@@ -117,18 +121,47 @@ func packAndPush(ctx context.Context, dir string, dst oras.Target, tag, snapName
 // each layer to dir by its title annotation. ORAS verifies every blob's digest
 // against the manifest, so a corrupt artifact fails loudly rather than
 // materializing bad bytes onto the restore node.
-func pullAndMaterialize(ctx context.Context, src oras.ReadOnlyTarget, ref, dir string) (ocispec.Descriptor, error) {
+func pullAndMaterialize(ctx context.Context, src oras.ReadOnlyTarget, ref, dir string) (desc ocispec.Descriptor, err error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return ocispec.Descriptor{}, err
 	}
-	store, err := file.New(dir)
+	if err := nodefile.RemoveStaleParts(dir, time.Now()); err != nil {
+		return ocispec.Descriptor{}, fmt.Errorf("remove stale part files: %w", err)
+	}
+	// Pull into a part directory beside the final files, then rename each
+	// file into place: an existing file is replaced, never truncated and
+	// rewritten, because a clone restored copyonwrite may be mapping it (see
+	// internal/snapshot/nodefile). The file store writes with O_TRUNC.
+	part, err := os.MkdirTemp(dir, nodefile.PartPrefix+"pull-")
 	if err != nil {
 		return ocispec.Descriptor{}, err
 	}
-	defer store.Close()
-	desc, err := oras.Copy(ctx, src, ref, store, ref, oras.DefaultCopyOptions)
+	defer func() { _ = os.RemoveAll(part) }()
+	store, err := file.New(part)
+	if err != nil {
+		return ocispec.Descriptor{}, err
+	}
+	desc, err = oras.Copy(ctx, src, ref, store, ref, oras.DefaultCopyOptions)
+	cerr := store.Close()
 	if err != nil {
 		return ocispec.Descriptor{}, fmt.Errorf("pull: %w", err)
+	}
+	if cerr != nil {
+		return ocispec.Descriptor{}, cerr
+	}
+	entries, err := os.ReadDir(part)
+	if err != nil {
+		return ocispec.Descriptor{}, err
+	}
+	for _, e := range entries {
+		// A snapshot artifact is flat regular files (packAndPush adds only
+		// those); anything else is not ours to install.
+		if !e.Type().IsRegular() {
+			return ocispec.Descriptor{}, fmt.Errorf("pull: unexpected non-regular entry %q in the artifact", e.Name())
+		}
+		if err := nodefile.Install(filepath.Join(part, e.Name()), filepath.Join(dir, e.Name())); err != nil {
+			return ocispec.Descriptor{}, fmt.Errorf("install %s: %w", e.Name(), err)
+		}
 	}
 	return desc, nil
 }
@@ -166,7 +199,7 @@ func regularFiles(dir string) ([]string, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		if e.Type().IsRegular() {
+		if e.Type().IsRegular() && !nodefile.IsPart(e.Name()) {
 			names = append(names, e.Name())
 		}
 	}

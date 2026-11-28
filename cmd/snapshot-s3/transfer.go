@@ -10,8 +10,11 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
+
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/nodefile"
 )
 
 // transferStats reports how many artifact bytes a transfer moved vs skipped
@@ -109,6 +112,9 @@ func runDownload(ctx context.Context, store objectStore, dstDir, keyPrefix strin
 	}
 	log.Printf("snapshot-s3 download: %d artifact(s), %d bytes total", len(m.Artifacts), m.TotalBytes)
 
+	if err := nodefile.RemoveStaleParts(dstDir, time.Now()); err != nil {
+		return transferStats{}, fmt.Errorf("remove stale part files: %w", err)
+	}
 	stats := transferStats{TotalBytes: m.TotalBytes}
 	for _, a := range m.Artifacts {
 		dst := filepath.Join(dstDir, filepath.FromSlash(a.Path))
@@ -120,11 +126,8 @@ func runDownload(ctx context.Context, store objectStore, dstDir, keyPrefix strin
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return transferStats{}, fmt.Errorf("mkdir for %q: %w", a.Path, err)
 		}
-		if err := downloadOne(ctx, store, path.Join(keyPrefix, objectKeyFor(a)), dst, a.Compression); err != nil {
+		if err := downloadOne(ctx, store, path.Join(keyPrefix, objectKeyFor(a)), dst, a); err != nil {
 			return transferStats{}, err
-		}
-		if err := verifyArtifact(dstDir, a); err != nil {
-			return transferStats{}, fmt.Errorf("downloaded artifact failed verification: %w", err)
 		}
 		log.Printf("  got %s (%d bytes, verified)", a.Path, a.Bytes)
 		stats.TransferredBytes += a.Bytes
@@ -166,21 +169,29 @@ func runDelete(ctx context.Context, store objectStore, keyPrefix string) error {
 }
 
 // downloadOne fetches key into dst, decompressing on the fly when the artifact
-// was stored with a codec. dst always receives the ORIGINAL (decompressed)
-// bytes, which the caller then verifies against the manifest's size + sha256.
-func downloadOne(ctx context.Context, store objectStore, key, dst, compression string) error {
+// was stored with a codec. The bytes go to a part file next to dst, which is
+// verified against the manifest's size + sha256 and only then renamed onto
+// dst: an existing dst is replaced, never rewritten in place, because a clone
+// restored copyonwrite may be mapping it (see internal/snapshot/nodefile).
+func downloadOne(ctx context.Context, store objectStore, key, dst string, a Artifact) (err error) {
 	rc, err := store.get(ctx, key)
 	if err != nil {
 		return fmt.Errorf("get %q: %w", key, err)
 	}
 	defer rc.Close()
-	f, err := os.Create(dst)
+	f, err := nodefile.Create(dst)
 	if err != nil {
-		return fmt.Errorf("create %q: %w", dst, err)
+		return fmt.Errorf("create part file for %q: %w", dst, err)
 	}
+	part := f.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(part)
+		}
+	}()
 	var src io.Reader = rc
 	var dec *zstd.Decoder
-	if compression == compressionZstd {
+	if a.Compression == compressionZstd {
 		dec, err = zstd.NewReader(rc)
 		if err != nil {
 			f.Close()
@@ -188,13 +199,22 @@ func downloadOne(ctx context.Context, store objectStore, key, dst, compression s
 		}
 		src = dec
 	}
-	_, err = io.Copy(f, src)
+	_, werr := io.Copy(f, src)
 	if dec != nil {
 		dec.Close()
 	}
 	cerr := f.Close()
-	if err != nil {
-		return fmt.Errorf("write %q: %w", dst, err)
+	if werr != nil {
+		return fmt.Errorf("write %q: %w", dst, werr)
 	}
-	return cerr
+	if cerr != nil {
+		return cerr
+	}
+	if err := verifyFile(part, a); err != nil {
+		return fmt.Errorf("downloaded artifact failed verification: %w", err)
+	}
+	if err := nodefile.Install(part, dst); err != nil {
+		return fmt.Errorf("install %q: %w", dst, err)
+	}
+	return nil
 }

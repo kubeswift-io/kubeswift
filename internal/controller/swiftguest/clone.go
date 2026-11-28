@@ -70,12 +70,6 @@ func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 		}
 	}
 
-	if src.MemoryRestoreMode == swiftv1alpha1.CloneMemoryCopyOnWrite && guest.Status.PodRef == nil {
-		if msg := copyOnWriteBackendRefusal(&snap); msg != "" {
-			return nil, nil, msg, false, nil
-		}
-	}
-
 	// Resolve the on-node snapshot directory + the node the clone runs on.
 	// Tier B (local): the snapshot already lives on its capture node. Tier C
 	// (s3): a download Job — shared per (node, snapshot) across all clones that
@@ -225,6 +219,12 @@ func (r *SwiftGuestReconciler) prepareSourceIndependentClone(
 		}
 		return nil, nil, "", false, err
 	}
+	// The clone's own class backs a source-independent clone's RAM.
+	if src := guest.Spec.CloneFromSnapshot; src != nil && src.MemoryRestoreMode == swiftv1alpha1.CloneMemoryCopyOnWrite && guest.Status.PodRef == nil {
+		if msg := copyOnWriteClassRefusal(&class); msg != "" {
+			return nil, nil, msg, false, nil
+		}
+	}
 
 	cpu, _ := strconv.Atoi(captured.CPU) // "" → 0; FromCapturedSpec output feeds pod limits only (CH --restore uses config.json)
 	in := resolved.CapturedInput{
@@ -367,18 +367,6 @@ func cloneMemoryMode(src *swiftv1alpha1.CloneFromSnapshotSource) string {
 	return string(swiftv1alpha1.CloneMemoryOnDemand)
 }
 
-// copyOnWriteBackendRefusal says why a snapshot cannot back a copyonwrite
-// clone, or "": only a local snapshot's memory file is written once and never
-// rewritten in place; a downloaded (s3/oci) snapshot's node cache can be, and
-// a mapped file must never change.
-func copyOnWriteBackendRefusal(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal {
-		return ""
-	}
-	return "cloneFromSnapshot.memoryRestoreMode copyonwrite needs a local snapshot; SwiftSnapshot " + snap.Name +
-		" is " + string(snap.Spec.Backend.Type)
-}
-
 // copyOnWriteRefusal says why the source's class cannot back a copyonwrite
 // clone, or "": hugepage-backed guest RAM cannot be a private mapping of a
 // file on an ordinary filesystem.
@@ -390,11 +378,18 @@ func (r *SwiftGuestReconciler) copyOnWriteRefusal(ctx context.Context, source *s
 		}
 		return "", err
 	}
+	return copyOnWriteClassRefusal(&class), nil
+}
+
+// copyOnWriteClassRefusal says why class cannot back a copyonwrite clone, or
+// "": hugepage-backed guest RAM cannot be a private mapping of a file on an
+// ordinary filesystem.
+func copyOnWriteClassRefusal(class *swiftv1alpha1.SwiftGuestClass) string {
 	if class.Spec.Hugepages != swiftv1alpha1.HugepagesNone {
 		return "cloneFromSnapshot.memoryRestoreMode copyonwrite cannot back guest RAM with hugepages; SwiftGuestClass " +
-			class.Name + " sets hugepages " + string(class.Spec.Hugepages), nil
+			class.Name + " sets hugepages " + string(class.Spec.Hugepages)
 	}
-	return "", nil
+	return ""
 }
 
 // cloneRegenIncludesNonMAC reports whether the clone requests regeneration of a

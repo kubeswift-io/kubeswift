@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/nodefile"
 )
 
 // manifestObjectName is the manifest's object key (relative to the snapshot
@@ -57,6 +59,9 @@ func buildManifest(dir string) (*Manifest, error) {
 		}
 		if d.IsDir() || !d.Type().IsRegular() {
 			return nil
+		}
+		if nodefile.IsPart(d.Name()) {
+			return nil // a download still writing, never an artifact
 		}
 		rel, err := filepath.Rel(dir, p)
 		if err != nil {
@@ -106,7 +111,11 @@ func sha256Hex(b []byte) string {
 // verifyArtifact checks a file under dir against its manifest entry (size +
 // sha256). Returns a descriptive error on any mismatch or read failure.
 func verifyArtifact(dir string, a Artifact) error {
-	path := filepath.Join(dir, filepath.FromSlash(a.Path))
+	return verifyFile(filepath.Join(dir, filepath.FromSlash(a.Path)), a)
+}
+
+// verifyFile checks the file at path against a's size and sha256.
+func verifyFile(path string, a Artifact) error {
 	sum, size, err := fileSHA256(path)
 	if err != nil {
 		return fmt.Errorf("verify %s: %w", a.Path, err)

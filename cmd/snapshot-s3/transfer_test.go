@@ -383,3 +383,61 @@ func TestUpload_CompressesArtifacts(t *testing.T) {
 		t.Fatalf("round-trip memory.img mismatch (err=%v, len=%d)", err, len(got))
 	}
 }
+
+// TestDownload_ReplacesNeverRewrites: a file the download replaces is a new
+// inode. A process holding the old file open (a clone restored copyonwrite
+// maps the memory file) keeps reading the old bytes, and no part file is left.
+func TestDownload_ReplacesNeverRewrites(t *testing.T) {
+	ctx := context.Background()
+	src, files := seedSnapshotDir(t)
+	store := newFakeStore()
+	if _, err := runUpload(ctx, store, src, "ns/snap", "ns/snap", true); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	dst := t.TempDir()
+	stale := bytes.Repeat([]byte("X"), 4096) // same size, wrong content
+	writeFile(t, dst, "memory.img", stale)
+	held, err := os.Open(filepath.Join(dst, "memory.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+
+	if _, err := runDownload(ctx, store, dst, "ns/snap"); err != nil {
+		t.Fatalf("download: %v", err)
+	}
+	got, err := io.ReadAll(held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, stale) {
+		t.Fatal("the open file changed: the download rewrote it in place")
+	}
+	now, err := os.ReadFile(filepath.Join(dst, "memory.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(now, files["memory.img"]) {
+		t.Fatal("memory.img does not hold the downloaded content")
+	}
+	entries, _ := os.ReadDir(dst)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".kubeswift-part-") {
+			t.Fatalf("part file left behind: %s", e.Name())
+		}
+	}
+}
+
+// TestUpload_SkipsPartFiles: a download still writing into the capture
+// directory is never uploaded as an artifact.
+func TestUpload_SkipsPartFiles(t *testing.T) {
+	dir, files := seedSnapshotDir(t)
+	writeFile(t, dir, ".kubeswift-part-memory.img-123", []byte("partial"))
+	m, err := buildManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Artifacts) != len(files) {
+		t.Fatalf("manifest has %d artifacts, want %d: %+v", len(m.Artifacts), len(files), m.Artifacts)
+	}
+}
